@@ -2,26 +2,15 @@
 // 依据 Claude Design 设计稿还原。当前为界面 + mock 交互；
 // 后续接入核心引擎（连服务端、Provider、computer-use）时，把 mock 数据换成真实数据源即可。
 
+import { chatConn, getServerUrl, setServerUrl, setToken, getToken, getDeviceName, setDeviceName } from "./server";
+import * as chat from "./chat";
+
 type Nav = "chat" | "tasks" | "abilities" | "realtime" | "logs" | "settings";
-type Confirm = "pending" | "approved" | "denied";
-
-interface DynMsg { role: "user" | "bot"; text: string; revealed: number }
-
-const HERO =
-  "好的，基本结构已经搭好了。现在帮你接上交互——添加任务、点击勾选完成、刷新后仍然保留。完成后会把文件放到你的「下载」目录，并在这里通知你。";
 
 const state = {
   nav: "chat" as Nav,
   dark: false,
-  heroShown: "",
-  heroStreaming: true,
-  heroStarted: false,
-  traceOpen: true,
-  confirm: "pending" as Confirm,
-  lightbox: false,
   taskOpen: false,
-  cleared: false,
-  dyn: [] as DynMsg[],
   rtRunning: true,
   cu: false,
   codingMode: 1,
@@ -77,11 +66,28 @@ function titlebar(): string {
     <span style="font-weight:600;font-size:13px;letter-spacing:.2px;">Umbra</span>
     <div style="flex:1;"></div>
     <button data-act="theme" title="切换深浅色" style="-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:center;width:28px;height:24px;border:1px solid var(--border);background:var(--card);border-radius:7px;color:var(--muted);cursor:pointer;">${themeIcon}</button>
-    <div style="display:flex;align-items:center;gap:7px;padding:3px 10px;border:1px solid var(--border);border-radius:999px;background:var(--card);">
-      <span style="width:8px;height:8px;border-radius:999px;background:var(--success);box-shadow:0 0 0 3px var(--success-soft);"></span>
-      <span style="font-size:11.5px;color:var(--muted);">已连接 · umbra.tingyusha.xyz</span>
-    </div>
+    ${connBadge()}
   </div>`;
+}
+
+function connBadge(): string {
+  const s = chatConn.status;
+  const color = s === "online" ? "var(--success)" : s === "connecting" ? "var(--warning)" : "var(--danger)";
+  const soft = s === "online" ? "var(--success-soft)" : s === "connecting" ? "var(--warning-soft)" : "var(--danger-soft)";
+  const label = s === "online" ? `已连接 · ${chat.serverLabel()}` : s === "connecting" ? "连接中…" : "未连接";
+  return `<div style="display:flex;align-items:center;gap:7px;padding:3px 10px;border:1px solid var(--border);border-radius:999px;background:var(--card);">
+      <span style="width:8px;height:8px;border-radius:999px;background:${color};box-shadow:0 0 0 3px ${soft};"></span>
+      <span style="font-size:11.5px;color:var(--muted);">${label}</span>
+    </div>`;
+}
+
+// 设置页里的内联连接状态。
+function connStatusInline(): string {
+  const s = chatConn.status;
+  const color = s === "online" ? "var(--success)" : s === "connecting" ? "var(--warning)" : "var(--danger)";
+  const soft = s === "online" ? "var(--success-soft)" : s === "connecting" ? "var(--warning-soft)" : "var(--danger-soft)";
+  const label = s === "online" ? "已连接" : s === "connecting" ? "连接中…" : "未连接";
+  return `<span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;"><span style="width:8px;height:8px;border-radius:999px;background:${color};box-shadow:0 0 0 3px ${soft};"></span>${label}</span>`;
 }
 
 function sidebar(): string {
@@ -106,92 +112,8 @@ function sidebar(): string {
 }
 
 function chatScreen(): string {
-  const dots = `<span style="display:inline-flex;gap:4px;align-items:center;"><span style="width:7px;height:7px;border-radius:999px;background:var(--muted);animation:umbob 1.2s infinite;"></span><span style="width:7px;height:7px;border-radius:999px;background:var(--muted);animation:umbob 1.2s infinite .2s;"></span><span style="width:7px;height:7px;border-radius:999px;background:var(--muted);animation:umbob 1.2s infinite .4s;"></span></span>`;
-
-  const confirmCard =
-    state.confirm === "pending"
-      ? `<div style="align-self:flex-start;max-width:80%;background:var(--orange-soft);border:1px solid var(--orange);border-radius:10px;padding:14px 15px;">
-          <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>执行前确认</div>
-          <div style="font-size:13px;line-height:1.55;color:var(--text);margin-bottom:12px;">将允许 Claude Code 进入执行模式（运行命令 / 装依赖 / 联网），是否允许？</div>
-          <div style="display:flex;gap:9px;">
-            <button data-act="approve" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">批准执行</button>
-            <button data-act="deny" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">拒绝</button>
-          </div>
-        </div>`
-      : state.confirm === "approved"
-      ? `<div style="align-self:flex-start;max-width:80%;font-size:12.5px;color:var(--success);display:flex;align-items:center;gap:7px;padding:4px 2px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>已批准执行，正在运行…</div>`
-      : `<div style="align-self:flex-start;max-width:80%;font-size:12.5px;color:var(--danger);display:flex;align-items:center;gap:7px;padding:4px 2px;">已拒绝，将仅生成代码、不执行。</div>`;
-
-  const convo = state.cleared
-    ? ""
-    : `<div style="display:flex;flex-direction:column;gap:16px;">
-      <div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;">帮我把上周的数据导出成 PDF，发到下载目录。</div>
-      <div style="align-self:flex-start;max-width:80%;width:100%;">
-        <div data-act="trace" style="display:flex;align-items:center;gap:7px;cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:6px;">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .15s;transform:rotate(${state.traceOpen ? 90 : 0}deg);"><path d="M9 6l6 6-6 6"></path></svg>
-          工具轨迹 · 3 步
-        </div>
-        ${state.traceOpen ? `<div style="background:var(--track);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.85;color:var(--muted);"><div>🔧 list_online_devices()</div><div style="color:var(--success);">↳ 返回 3 台设备</div><div>🔧 query_metrics(range="last_week")</div><div>🔧 export_pdf(target="~/Downloads/weekly.pdf")</div></div>` : ""}
-      </div>
-      <div style="align-self:flex-start;max-width:80%;background:var(--success-soft);border:1px solid var(--success);border-left:3px solid var(--success);border-radius:10px;padding:13px 15px;">
-        <div style="font-weight:600;color:var(--success);margin-bottom:7px;">🎉 任务完成：导出周报 PDF</div>
-        <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text);margin-bottom:5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg><a href="#" data-act="noop" style="color:var(--orange-text);text-decoration:none;font-weight:500;">weekly.pdf</a><span style="color:var(--muted);">· 248 KB</span></div>
-        <div style="font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11px;color:var(--muted);">~/Downloads/weekly.pdf</div>
-      </div>
-      <div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;">再帮我写一个待办小程序，能添加任务和勾选完成就行。</div>
-      <div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--orange);border-radius:10px;padding:13px 15px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;"><span style="font-weight:600;">写一个待办小程序</span><span style="font-size:12px;color:var(--orange-text);font-weight:600;">65%</span></div>
-        <div style="height:6px;border-radius:999px;background:var(--track);overflow:hidden;margin-bottom:8px;"><div style="height:100%;width:65%;background:var(--orange);border-radius:999px;"></div></div>
-        <div style="font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;"><span style="width:6px;height:6px;border-radius:999px;background:var(--orange);"></span>正在生成 index.html…</div>
-      </div>
-      ${confirmCard}
-      <div style="align-self:flex-start;max-width:80%;">
-        <div data-act="lightbox-open" style="cursor:zoom-in;width:236px;border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--card);">
-          <div style="height:36px;background:var(--orange-soft);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:5px;padding:0 11px;"><span style="width:9px;height:9px;border-radius:999px;background:var(--orange);"></span><span style="font-size:11px;color:var(--orange-text);font-weight:600;">我的待办</span></div>
-          <div style="padding:11px 12px;display:flex;flex-direction:column;gap:7px;">
-            <div style="display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--muted);"><span style="width:13px;height:13px;border:1.5px solid var(--orange);border-radius:4px;background:var(--orange);"></span><span style="text-decoration:line-through;">买牛奶</span></div>
-            <div style="display:flex;align-items:center;gap:8px;font-size:11.5px;"><span style="width:13px;height:13px;border:1.5px solid var(--muted);border-radius:4px;"></span>预订会议室</div>
-            <div style="display:flex;align-items:center;gap:8px;font-size:11.5px;"><span style="width:13px;height:13px;border:1.5px solid var(--muted);border-radius:4px;"></span>回复设计稿评论</div>
-          </div>
-        </div>
-        <div style="font-size:11.5px;color:var(--muted);margin-top:5px;">预览截图 · 点击放大</div>
-      </div>
-      <div style="align-self:flex-start;max-width:80%;background:var(--card);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.6;min-height:20px;">
-        ${state.heroShown.length === 0 ? dots : ""}<span id="hero">${esc(state.heroShown)}</span>${state.heroStreaming ? `<span id="herocaret" style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}
-      </div>
-    </div>`;
-
-  const dynHtml = state.dyn
-    .map((m, i) => {
-      if (m.role === "user")
-        return `<div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;">${esc(m.text)}</div>`;
-      const showDots = m.revealed === 0;
-      const streaming = m.revealed > 0 && m.revealed < m.text.length;
-      return `<div style="align-self:flex-start;max-width:80%;background:var(--card);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.6;min-height:20px;">${showDots ? dots : ""}<span id="dynbot-${i}">${esc(m.text.slice(0, m.revealed))}</span>${streaming ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
-    })
-    .join("");
-
-  const emptyState =
-    state.cleared && state.dyn.length === 0
-      ? `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;"><span style="width:46px;height:46px;border-radius:12px;background:var(--orange);color:#fff;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:.92;">U</span><span style="font-size:15px;">开始和 Umbra 聊天</span></div>`
-      : "";
-
-  return `
-  <div style="display:flex;flex-direction:column;height:100%;min-height:0;">
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--border);flex:none;">
-      <h1 style="margin:0;font-size:16px;font-weight:600;">聊天</h1>
-      <button data-act="new-session" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>新会话</button>
-    </div>
-    <div id="msgs" style="flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:16px;min-height:0;">
-      ${convo}${dynHtml}${emptyState}
-    </div>
-    <div style="flex:none;border-top:1px solid var(--border);background:var(--card);padding:12px 16px;">
-      <div style="display:flex;gap:10px;align-items:flex-end;">
-        <textarea id="draft" placeholder="输入消息，Enter 发送，Shift+Enter 换行" rows="2" style="flex:1;resize:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;padding:9px 12px;font-size:13.5px;line-height:1.5;font-family:inherit;outline:none;max-height:120px;"></textarea>
-        <button data-act="send" style="flex:none;display:flex;align-items:center;gap:6px;padding:9px 16px;height:40px;background:var(--orange);color:#fff;border:none;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;align-self:center;">发送<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
-      </div>
-    </div>
-  </div>`;
+  // 聊天屏由 chat 模块接管（实时连接 /ws/chat）；这里只放挂载容器。
+  return `<div id="chatroot" style="height:100%;min-height:0;"></div>`;
 }
 
 function badge(text: string, kind: "ok" | "run" | "wait" | "fail" | "off"): string {
@@ -330,13 +252,13 @@ function settingsScreen(): string {
     <h1 style="margin:0 0 16px;font-size:16px;font-weight:600;">设置</h1>
     <div style="display:flex;flex-direction:column;gap:14px;max-width:680px;">
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">连接</div><div style="display:flex;flex-direction:column;gap:13px;">
-        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">服务端地址</label><input value="https://umbra.tingyusha.xyz" style="${inputBase}font-family:ui-monospace,Menlo,monospace;"></div>
-        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">访问 Token</label><input value="••••••••••••••••" type="password" style="${inputBase}font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;"></div>
-        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">连接状态</label><span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;"><span style="width:8px;height:8px;border-radius:999px;background:var(--success);box-shadow:0 0 0 3px var(--success-soft);"></span>已连接</span><span style="flex:1;"></span><button style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">重连</button></div>
+        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">服务端地址</label><input id="set-server" value="${esc(getServerUrl())}" style="${inputBase}font-family:ui-monospace,Menlo,monospace;"></div>
+        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">访问 Token</label><input id="set-token" type="password" placeholder="${getToken() ? "（已保存，留空不变）" : "可选"}" style="${inputBase}font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;"></div>
+        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">连接状态</label>${connStatusInline()}<span style="flex:1;"></span><button data-act="reconnect" style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">保存并重连</button></div>
       </div></div>
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">设备</div><div style="display:flex;flex-direction:column;gap:13px;">
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">设备 ID</label><span style="font-size:13px;font-family:ui-monospace,Menlo,monospace;color:var(--text);">dev_8f3a-2c91-mbp2</span></div>
-        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">设备名</label><input value="MacBook-Pro-2.local" style="${inputBase}"></div>
+        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">设备名</label><input id="set-device" value="${esc(getDeviceName())}" style="${inputBase}"></div>
       </div></div>
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:5px;">权限 <span style="font-size:12px;color:var(--muted);font-weight:400;">macOS</span></div><div style="display:flex;flex-direction:column;">
         <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);"><div style="flex:1;"><div style="font-size:13.5px;">辅助功能</div><div style="font-size:11.5px;color:var(--muted);margin-top:1px;">允许控制其它应用（点击、输入）</div></div><span style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--success);font-weight:600;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>已授予</span></div>
@@ -363,24 +285,6 @@ function currentScreen(): string {
   }
 }
 
-function lightbox(): string {
-  if (!state.lightbox) return "";
-  return `<div data-act="lightbox-close" style="position:absolute;inset:0;background:rgba(0,0,0,.82);z-index:60;display:flex;align-items:center;justify-content:center;cursor:zoom-out;">
-    <div style="width:430px;background:var(--card);border-radius:14px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);">
-      <div style="height:52px;background:var(--orange-soft);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;padding:0 18px;"><span style="width:12px;height:12px;border-radius:999px;background:var(--orange);"></span><span style="font-size:15px;color:var(--orange-text);font-weight:600;">我的待办</span></div>
-      <div style="padding:22px;display:flex;flex-direction:column;gap:13px;">
-        <div style="display:flex;align-items:center;gap:12px;font-size:15px;color:var(--muted);"><span style="width:20px;height:20px;border:2px solid var(--orange);border-radius:6px;background:var(--orange);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;">✓</span><span style="text-decoration:line-through;">买牛奶</span></div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:15px;"><span style="width:20px;height:20px;border:2px solid var(--muted);border-radius:6px;"></span>预订会议室</div>
-        <div style="display:flex;align-items:center;gap:12px;font-size:15px;"><span style="width:20px;height:20px;border:2px solid var(--muted);border-radius:6px;"></span>回复设计稿评论</div>
-      </div>
-    </div>
-    <div style="position:absolute;top:20px;right:24px;color:rgba(255,255,255,.7);font-size:12.5px;">按 Esc 或点击空白处关闭</div>
-  </div>`;
-}
-
-let heroTimer: number | undefined;
-let dynTimer: number | undefined;
-
 function render(): void {
   const app = document.getElementById("app")!;
   app.innerHTML = `
@@ -390,55 +294,23 @@ function render(): void {
         ${sidebar()}
         <main style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);">${currentScreen()}</main>
       </div>
-      ${lightbox()}
     </div>`;
-  if (state.nav === "chat" && !state.cleared && !state.heroStarted) startHero();
-  const msgs = document.getElementById("msgs");
-  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+  if (state.nav === "chat") {
+    const root = document.getElementById("chatroot");
+    if (root) chat.mount(root);
+  }
 }
 
-function startHero(): void {
-  state.heroStarted = true;
-  let i = state.heroShown.length;
-  clearInterval(heroTimer);
-  heroTimer = window.setInterval(() => {
-    i++;
-    state.heroShown = HERO.slice(0, i);
-    const el = document.getElementById("hero");
-    if (el) el.textContent = state.heroShown;
-    const msgs = document.getElementById("msgs");
-    if (msgs) msgs.scrollTop = msgs.scrollHeight;
-    if (i >= HERO.length) {
-      clearInterval(heroTimer);
-      state.heroStreaming = false;
-      const caret = document.getElementById("herocaret");
-      if (caret) caret.remove();
-    }
-  }, 26);
-}
-
-function sendMessage(): void {
-  const ta = document.getElementById("draft") as HTMLTextAreaElement | null;
-  if (!ta) return;
-  const text = ta.value.trim();
-  if (!text) return;
-  const reply = "收到，我来处理这个请求。先在已连接的设备上查一下可用能力，再决定怎么执行。";
-  state.cleared = false;
-  state.dyn.push({ role: "user", text, revealed: text.length });
-  state.dyn.push({ role: "bot", text: reply, revealed: 0 });
-  const idx = state.dyn.length - 1;
+// 从设置表单读取并保存连接配置，然后重连。
+function saveAndReconnect(): void {
+  const server = (document.getElementById("set-server") as HTMLInputElement | null)?.value;
+  const token = (document.getElementById("set-token") as HTMLInputElement | null)?.value;
+  const device = (document.getElementById("set-device") as HTMLInputElement | null)?.value;
+  if (server) setServerUrl(server);
+  if (token) setToken(token);
+  if (device) setDeviceName(device);
+  chatConn.reconnect();
   render();
-  let j = 0;
-  clearInterval(dynTimer);
-  dynTimer = window.setInterval(() => {
-    j++;
-    state.dyn[idx].revealed = j;
-    const el = document.getElementById(`dynbot-${idx}`);
-    if (el) el.textContent = reply.slice(0, j);
-    const msgs = document.getElementById("msgs");
-    if (msgs) msgs.scrollTop = msgs.scrollHeight;
-    if (j >= reply.length) { clearInterval(dynTimer); render(); }
-  }, 24);
 }
 
 function onClick(e: MouseEvent): void {
@@ -449,13 +321,7 @@ function onClick(e: MouseEvent): void {
   if (act.startsWith("nav-")) { state.nav = act.slice(4) as Nav; render(); return; }
   switch (act) {
     case "theme": state.dark = !state.dark; render(); break;
-    case "trace": state.traceOpen = !state.traceOpen; render(); break;
-    case "approve": state.confirm = "approved"; render(); break;
-    case "deny": state.confirm = "denied"; render(); break;
-    case "new-session": state.cleared = true; state.dyn = []; render(); break;
-    case "send": sendMessage(); break;
-    case "lightbox-open": state.lightbox = true; render(); break;
-    case "lightbox-close": state.lightbox = false; render(); break;
+    case "reconnect": saveAndReconnect(); break;
     case "task-open": state.taskOpen = true; render(); break;
     case "task-close": state.taskOpen = false; render(); break;
     case "rt-toggle": state.rtRunning = !state.rtRunning; render(); break;
@@ -471,17 +337,10 @@ function onClick(e: MouseEvent): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === "Escape") {
-    if (state.lightbox || state.taskOpen) { state.lightbox = false; state.taskOpen = false; render(); }
-    return;
-  }
-  const ae = document.activeElement as HTMLElement | null;
-  if (e.key === "Enter" && !e.shiftKey && ae && ae.id === "draft") {
-    e.preventDefault();
-    sendMessage();
-  }
+  if (e.key === "Escape" && state.taskOpen) { state.taskOpen = false; render(); }
 }
 
+chat.setAppRerender(render);
 document.getElementById("app")!.addEventListener("click", onClick);
 window.addEventListener("keydown", onKeydown);
 render();
