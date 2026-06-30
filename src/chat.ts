@@ -7,6 +7,7 @@ type Block =
   | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number }
   | { kind: "job"; jobId: string; goal: string; pct: number; status: string; message: string; confirmTaskId?: string; results?: { title: string; url: string }[] }
   | { kind: "done"; goal: string; results: { title: string; url: string }[] }
+  | { kind: "confirm"; taskId: string; summary: string; detail?: unknown; resolved?: "approved" | "denied" }
   | { kind: "error"; text: string };
 
 let blocks: Block[] = [];
@@ -142,6 +143,14 @@ function onMessage(msg: any): void {
       break;
     }
     case "job_update": handleJob(msg); break;
+    case "confirm_request":
+      if (msg.task_id && !blocks.some((b) => b.kind === "confirm" && b.taskId === msg.task_id)) {
+        blocks.push({ kind: "confirm", taskId: msg.task_id, summary: msg.summary || "需要执行前确认", detail: msg.detail });
+      }
+      break;
+    case "confirm_resolved":
+      resolveConfirm(msg.task_id || "", Boolean(msg.approved));
+      break;
     case "chat_message":
       if (msg.role === "user") blocks.push({ kind: "user", text: msg.text || "", ts: Date.now() });
       else blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts: Date.now() });
@@ -240,6 +249,19 @@ function blockHtml(b: Block, i: number): string {
       })
       .join("");
     return `<div style="align-self:flex-start;max-width:80%;background:var(--success-soft);border:1px solid var(--success);border-left:3px solid var(--success);border-radius:10px;padding:13px 15px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;">🎉 任务完成：${esc(b.goal)}</div>${links}</div>`;
+  }
+
+  if (b.kind === "confirm") {
+    const detail = b.detail != null ? (typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail)) : "";
+    const foot = b.resolved
+      ? `<div style="font-size:12.5px;font-weight:600;margin-top:9px;color:${b.resolved === "approved" ? "var(--success)" : "var(--danger)"};">${b.resolved === "approved" ? "✅ 已批准执行" : "🚫 已拒绝"}</div>`
+      : `<div style="display:flex;gap:9px;margin-top:11px;"><button data-approve="${esc(b.taskId)}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">批准执行</button><button data-deny="${esc(b.taskId)}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">拒绝</button></div>`;
+    return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--orange-soft);border:1px solid var(--orange);border-radius:10px;padding:13px 15px;">
+        <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>执行前确认</div>
+        <div style="font-size:13px;line-height:1.55;color:var(--text);">${esc(b.summary)}</div>
+        ${detail ? `<div style="font-size:11.5px;color:var(--muted);margin-top:6px;font-family:ui-monospace,Menlo,monospace;word-break:break-all;">${esc(detail)}</div>` : ""}
+        ${foot}
+      </div>`;
   }
 
   return `<div style="align-self:flex-start;max-width:80%;border:1px solid rgba(180,35,24,.3);background:var(--danger-soft);color:var(--danger);padding:11px 14px;border-radius:10px;">${esc(b.text)}</div>`;
@@ -346,17 +368,21 @@ function onMsgsClick(e: Event): void {
     if (b && b.kind === "assistant") { b.traceOpen = !b.traceOpen; renderMessages(); }
   } else if (t.dataset.approve) {
     chatConn.sendConfirm(t.dataset.approve, true);
-    clearConfirm(t.dataset.approve);
+    resolveConfirm(t.dataset.approve, true);
   } else if (t.dataset.deny) {
     chatConn.sendConfirm(t.dataset.deny, false);
-    clearConfirm(t.dataset.deny);
+    resolveConfirm(t.dataset.deny, false);
   } else if (t.dataset.img) {
     openLightbox(t.dataset.img);
   }
 }
 
-function clearConfirm(taskId: string): void {
-  for (const b of blocks) if (b.kind === "job" && b.confirmTaskId === taskId) { b.confirmTaskId = undefined; b.message = "已提交，等待执行…"; }
+// 标记某个确认已被处理（Job 卡片 + 独立确认卡片都更新）。
+function resolveConfirm(taskId: string, approved: boolean): void {
+  for (const b of blocks) {
+    if (b.kind === "job" && b.confirmTaskId === taskId) { b.confirmTaskId = undefined; b.message = approved ? "已批准，执行中…" : "已拒绝"; }
+    if (b.kind === "confirm" && b.taskId === taskId) { b.resolved = approved ? "approved" : "denied"; }
+  }
   renderMessages();
 }
 

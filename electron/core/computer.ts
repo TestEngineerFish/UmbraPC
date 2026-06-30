@@ -80,16 +80,17 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
 
   if (skill === "open_app") {
     const app = String(params.app || "").trim();
+    const url = String(params.url || "").trim();
     if (!app) throw new Error("缺少 app");
     if (blacklisted(app, cfg.computerBlacklist)) throw new Error(`禁止打开黑名单应用：${app}`);
-    if (cfg.computerConfirm) {
-      const ok = await confirm(`允许打开/切换到应用「${app}」？`, { app });
-      if (!ok) throw new Error("用户拒绝");
+    if (cfg.computerConfirm && !(await confirm(`允许 Umbra 打开/切换到应用「${app}」${url ? `并访问 ${url}` : ""}？`, { app, url: url || undefined }))) {
+      throw new Error("用户拒绝");
     }
-    const res = await run("open", ["-a", app]);
+    const args = url ? ["-a", app, url] : ["-a", app];
+    const res = await run("open", args);
     if (res.code !== 0) throw new Error(`打开应用失败：${res.output.slice(-200)}`);
-    await report(`已打开 ${app}`, { progress: 1 });
-    return { opened: app };
+    await report(`已打开 ${app}${url ? ` · ${url}` : ""}`, { progress: 1 });
+    return { opened: app, url: url || undefined };
   }
 
   // 其余动作都作用于"当前前台应用"，先做黑名单校验。
@@ -118,9 +119,8 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
   if (skill === "type") {
     const text = String(params.text ?? "");
     if (!text) throw new Error("type 需要 text");
-    if (cfg.computerConfirm) {
-      const ok = await confirm(`允许在「${front || "当前应用"}」输入文本：「${text.slice(0, 40)}${text.length > 40 ? "…" : ""}」？`, {});
-      if (!ok) throw new Error("用户拒绝");
+    if (cfg.computerConfirm && !(await confirm(`允许在「${front || "当前应用"}」输入文本：「${text.slice(0, 40)}${text.length > 40 ? "…" : ""}」？`, {}))) {
+      throw new Error("用户拒绝");
     }
     await keyboard.type(text);
     await report(`输入文本（${text.length} 字）`, {});
@@ -132,9 +132,8 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     if (!keys.length) throw new Error("key 需要 keys 数组或 key");
     const mapped = keys.map((k) => Key[KEYMAP[k.toLowerCase()] || (k.length === 1 ? k.toUpperCase() : k)]).filter((v: unknown) => v !== undefined);
     if (!mapped.length) throw new Error(`无法识别按键：${keys.join("+")}`);
-    if (cfg.computerConfirm) {
-      const ok = await confirm(`允许按下组合键：${keys.join(" + ")}？`, {});
-      if (!ok) throw new Error("用户拒绝");
+    if (cfg.computerConfirm && !(await confirm(`允许按下组合键：${keys.join(" + ")}？`, {}))) {
+      throw new Error("用户拒绝");
     }
     await keyboard.pressKey(...mapped);
     await keyboard.releaseKey(...mapped);
@@ -158,7 +157,7 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
 
 const SKILLS: Manifest["skills"] = {
   operate: { description: "（v0 占位，未接决策引擎）给自然语言目标自主完成 GUI 操作", params: { goal: "目标描述", app: "可选，限定应用" } },
-  open_app: { description: "打开/切换到某应用", params: { app: "应用名，如 Keynote" } },
+  open_app: { description: "打开/切换到某应用（可选同时打开网址）", params: { app: "应用名，如 Safari", url: "可选，要打开的网址" } },
   screenshot: { description: "截屏并返回图片链接", params: {} },
   click: { description: "在坐标点击", params: { x: "横坐标", y: "纵坐标", button: "left/right/middle，默认 left" } },
   type: { description: "向当前焦点输入文本", params: { text: "要输入的文本" } },

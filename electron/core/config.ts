@@ -50,7 +50,7 @@ function defaults(configDir: string): UmbraConfig {
     codingBaseDir: process.env.UMBRA_CODING_BASE_DIR || "~/Umbra/projects",
     codingTimeout: Number(process.env.UMBRA_CODING_TIMEOUT || 600),
     codingAllowExec: (process.env.UMBRA_CODING_ALLOW_EXEC || "confirm").toLowerCase() as AllowExec,
-    confirmTimeout: Number(process.env.UMBRA_CONFIRM_TIMEOUT || 120),
+    confirmTimeout: Number(process.env.UMBRA_CONFIRM_TIMEOUT || 300),
     providersFile: process.env.UMBRA_PROVIDERS_FILE || path.join(configDir, "providers.json"),
     computerUseEnabled: envBool("UMBRA_COMPUTER_USE", false),
     computerConfirm: envBool("UMBRA_COMPUTER_CONFIRM", true),
