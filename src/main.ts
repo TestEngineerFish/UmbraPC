@@ -3,6 +3,7 @@
 // 后续接入核心引擎（连服务端、Provider、computer-use）时，把 mock 数据换成真实数据源即可。
 
 import { chatConn, getServerUrl, setServerUrl, setToken, getToken, getDeviceName, setDeviceName } from "./server";
+import { fetchJobs, fetchJobDetail, type Job, type JobDetail, type Subtask } from "./server";
 import * as chat from "./chat";
 import * as desktop from "./desktop";
 
@@ -11,11 +12,17 @@ type Nav = "chat" | "tasks" | "abilities" | "realtime" | "logs" | "settings";
 const state = {
   nav: "chat" as Nav,
   dark: false,
-  taskOpen: false,
   rtRunning: true,
   cu: false,
   codingMode: 1,
   logFilter: "all" as "all" | "jobs" | "conn" | "cap",
+  tasks: {
+    list: [] as Job[],
+    loading: false,
+    refreshing: false,
+    detailId: null as string | null,
+    detail: null as JobDetail | null,
+  },
 };
 
 const LOGS = [
@@ -160,40 +167,131 @@ function badge(text: string, kind: "ok" | "run" | "wait" | "fail" | "off"): stri
   return `<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 10px;border-radius:999px;font-size:11.5px;font-weight:600;${map[kind]}">${text}</span>`;
 }
 
+const isImageUrl = (u: string) => /\.(png|jpe?g|gif|webp|bmp)(\?|$)/i.test(u) || /(chatglm|bigmodel|cogview|aigc)/i.test(u) || /\/files\//.test(u);
+
+// 解析 SQLite UTC 时间戳 "YYYY-MM-DD HH:MM:SS" → Date。
+function parseTs(s?: string): Date | null {
+  if (!s) return null;
+  const d = new Date(s.includes("T") ? s : s.replace(" ", "T") + "Z");
+  return isNaN(d.getTime()) ? null : d;
+}
+// 时间戳 → 本地 HH:MM（详情时间线可带秒）。
+function fmtTime(s?: string, withSec = false): string {
+  const d = parseTs(s);
+  if (!d) return "";
+  return d.toLocaleTimeString([], withSec ? { hour: "2-digit", minute: "2-digit", second: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
+}
+// IM 风格相对时间：今天→HH:MM，昨天→昨天，今年→M月D日，更早→YYYY/M/D。
+function fmtListTime(s?: string): string {
+  const d = parseTs(s);
+  if (!d) return "";
+  const now = new Date();
+  const sod = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((sod(now) - sod(d)) / 86400000);
+  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (days <= 0) return hm;
+  if (days === 1) return "昨天";
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日`;
+  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function jobStatusBadge(status: string): string {
+  const map: Record<string, [string, "ok" | "run" | "wait" | "fail" | "off"]> = {
+    done: ["已完成", "ok"],
+    running: ["执行中", "run"],
+    pending: ["待执行", "wait"],
+    failed: ["失败", "fail"],
+    cancelled: ["已取消", "off"],
+  };
+  const [label, kind] = map[status] || [status, "wait"];
+  return badge(label, kind);
+}
+
 function tasksScreen(): string {
-  const drawer = state.taskOpen
-    ? `<div data-act="task-close" style="position:absolute;inset:0;background:rgba(0,0,0,.32);z-index:30;"></div>
-      <div style="position:absolute;top:0;right:0;bottom:0;width:420px;background:var(--card);border-left:1px solid var(--border);z-index:31;display:flex;flex-direction:column;">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 20px;border-bottom:1px solid var(--border);"><div><div style="font-weight:600;font-size:15px;">写一个待办小程序</div><div style="font-size:11.5px;color:var(--orange-text);margin-top:2px;">执行中 · Claude Code</div></div><button data-act="task-close" style="border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;">×</button></div>
-        <div style="flex:1;overflow-y:auto;padding:18px 20px;display:flex;flex-direction:column;gap:20px;">
-          <div><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:var(--muted);">总进度</span><span style="font-size:12px;color:var(--orange-text);font-weight:600;">65%</span></div><div style="height:6px;border-radius:999px;background:var(--track);overflow:hidden;"><div style="height:100%;width:65%;background:var(--orange);"></div></div></div>
-          <div><div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:10px;">步骤</div><div style="display:flex;flex-direction:column;gap:9px;">
-            <div style="display:flex;align-items:center;gap:9px;font-size:13px;"><span style="width:18px;height:18px;border-radius:999px;background:var(--success);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;">✓</span>拟定结构</div>
-            <div style="display:flex;align-items:center;gap:9px;font-size:13px;"><span style="width:18px;height:18px;border-radius:999px;border:2px solid var(--orange);"></span>生成 index.html</div>
-            <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:var(--muted);"><span style="width:18px;height:18px;border-radius:999px;border:2px solid var(--border);"></span>接入交互逻辑</div>
-            <div style="display:flex;align-items:center;gap:9px;font-size:13px;color:var(--muted);"><span style="width:18px;height:18px;border-radius:999px;border:2px solid var(--border);"></span>本地保存与通知</div>
-          </div></div>
-          <div><div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:10px;">事件时间线</div><div style="display:flex;flex-direction:column;border-left:2px solid var(--border);margin-left:4px;">
-            <div style="position:relative;padding:0 0 13px 16px;"><span style="position:absolute;left:-6px;top:3px;width:9px;height:9px;border-radius:999px;background:var(--orange);"></span><span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);">14:08</span><div style="font-size:12.5px;">创建任务</div></div>
-            <div style="position:relative;padding:0 0 13px 16px;"><span style="position:absolute;left:-6px;top:3px;width:9px;height:9px;border-radius:999px;background:var(--orange);"></span><span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);">14:08</span><div style="font-size:12.5px;">拟定结构 · 4 个步骤</div></div>
-            <div style="position:relative;padding:0 0 2px 16px;"><span style="position:absolute;left:-6px;top:3px;width:9px;height:9px;border-radius:999px;background:var(--orange);"></span><span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);">14:09</span><div style="font-size:12.5px;">生成 index.html…</div></div>
-          </div></div>
-          <div><div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:10px;">生成结果</div><div style="display:flex;align-items:center;gap:8px;font-size:13px;border:1px solid var(--border);border-radius:8px;padding:9px 11px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path></svg><a href="#" data-act="noop" style="color:var(--orange-text);text-decoration:none;font-weight:500;">index.html</a><span style="flex:1;"></span><span style="font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--muted);">~/Downloads/todo/</span></div></div>
-        </div>
-      </div>`
-    : "";
+  const t = state.tasks;
+  const rows = t.list.length
+    ? t.list
+        .map((j) => {
+          const failed = j.status === "failed";
+          const sub = j.result_summary ? esc(j.result_summary.slice(0, 70)) : j.channel ? `来自 ${esc(j.channel)}` : "";
+          const running = j.status === "running" || j.status === "pending";
+          return `<div data-act="task-open" data-id="${esc(j.id)}" style="background:var(--card);border:1px solid ${j.id === t.detailId ? "var(--orange)" : "var(--border)"};border-radius:12px;padding:13px 16px;cursor:pointer;">
+        <div style="display:flex;align-items:center;gap:14px;"><div style="flex:1;min-width:0;"><div style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(j.goal)}</div><div style="font-size:11.5px;color:${failed ? "var(--danger)" : "var(--muted)"};margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${sub || "&nbsp;"}</div></div>${jobStatusBadge(j.status)}<span title="${esc(j.updated_at || "")}" style="font-size:12px;color:var(--muted);white-space:nowrap;flex:none;">${fmtListTime(j.updated_at)}</span></div>
+        ${running ? `<div style="height:3px;border-radius:999px;background:var(--track);overflow:hidden;margin-top:9px;"><div style="height:100%;width:38%;background:var(--orange);border-radius:999px;animation:umbslide 1.4s ease-in-out infinite;"></div></div>` : ""}
+      </div>`;
+        })
+        .join("")
+    : `<div style="color:var(--muted);padding:40px;text-align:center;">${t.loading ? "加载任务中…" : "暂无任务"}</div>`;
 
   return `
-  <div style="height:100%;overflow-y:auto;padding:18px 22px;">
-    <h1 style="margin:0 0 16px;font-size:16px;font-weight:600;">任务</h1>
-    <div style="display:flex;flex-direction:column;gap:10px;">
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:14px;"><div style="flex:1;"><div style="font-weight:500;">导出周报 PDF</div><div style="font-size:11.5px;color:var(--muted);margin-top:2px;">本机 · MacBook-Pro-2</div></div>${badge("已完成", "ok")}<span style="font-size:12px;color:var(--muted);width:42px;text-align:right;">14:02</span></div>
-      <div data-act="task-open" style="background:var(--card);border:1px solid var(--orange);border-radius:12px;padding:13px 16px;cursor:pointer;"><div style="display:flex;align-items:center;gap:14px;margin-bottom:9px;"><div style="flex:1;"><div style="font-weight:500;">写一个待办小程序</div><div style="font-size:11.5px;color:var(--muted);margin-top:2px;">Claude Code · 执行模式</div></div>${badge("执行中", "run")}<span style="font-size:12px;color:var(--muted);width:42px;text-align:right;">14:09</span></div><div style="height:5px;border-radius:999px;background:var(--track);overflow:hidden;"><div style="height:100%;width:65%;background:var(--orange);"></div></div></div>
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:14px;"><div style="flex:1;"><div style="font-weight:500;">给落地页换主图</div><div style="font-size:11.5px;color:var(--muted);margin-top:2px;">排队中</div></div>${badge("待执行", "wait")}<span style="font-size:12px;color:var(--muted);width:42px;text-align:right;">14:11</span></div>
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:13px 16px;display:flex;align-items:center;gap:14px;"><div style="flex:1;"><div style="font-weight:500;">批量压缩视频</div><div style="font-size:11.5px;color:var(--danger);margin-top:2px;">FFmpeg 退出码 1 · 磁盘空间不足</div></div>${badge("失败", "fail")}<span style="font-size:12px;color:var(--muted);width:42px;text-align:right;">13:40</span></div>
-    </div>
+  <div style="height:100%;overflow-y:auto;padding:18px 22px;position:relative;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:0 0 16px;"><h1 style="margin:0;font-size:16px;font-weight:600;">任务</h1><button data-act="tasks-refresh" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="${t.refreshing ? "animation:umbspin .8s linear infinite;" : ""}"><path d="M21 12a9 9 0 1 1-2.6-6.4M21 4v5h-5"></path></svg>${t.refreshing ? "刷新中" : "刷新"}</button></div>
+    <div style="display:flex;flex-direction:column;gap:10px;">${rows}</div>
   </div>
-  ${drawer}`;
+  ${taskDrawer()}`;
+}
+
+// 解析子任务结果，渲染图片/文件链接/本机路径/变更清单。
+function taskResults(subs: Subtask[]): string {
+  const items: string[] = [];
+  for (const s of subs) {
+    if (!s.result_json) continue;
+    let r: any;
+    try {
+      r = JSON.parse(s.result_json);
+    } catch {
+      continue;
+    }
+    if (!r || typeof r !== "object") continue;
+    if (typeof r.url === "string") {
+      if (isImageUrl(r.url)) items.push(`<a href="${esc(r.url)}" target="_blank" rel="noopener"><img src="${esc(r.url)}" style="display:block;max-width:100%;border-radius:8px;border:1px solid var(--border);margin-bottom:6px;" onerror="this.remove()"></a>`);
+      items.push(`<div style="display:flex;align-items:center;gap:8px;font-size:13px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path></svg><a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--orange-text);text-decoration:none;font-weight:500;">${esc(r.filename || "下载结果")}</a></div>`);
+    }
+    if (typeof r.project_dir === "string") items.push(`<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);margin-top:3px;">${esc(r.project_dir)}</div>`);
+    if (typeof r.path === "string") items.push(`<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);margin-top:3px;">${esc(r.path)}</div>`);
+    if (Array.isArray(r.changed_files) && r.changed_files.length) items.push(`<div style="font-size:11.5px;color:var(--muted);margin-top:4px;">变更 ${r.changed_files.length} 个文件：${r.changed_files.slice(0, 8).map((x: string) => esc(x)).join("、")}${r.changed_files.length > 8 ? " …" : ""}</div>`);
+  }
+  if (!items.length) return "";
+  return `<div><div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:10px;">生成结果</div><div style="display:flex;flex-direction:column;gap:4px;">${items.join("")}</div></div>`;
+}
+
+function stepIcon(st: string): string {
+  if (st === "done") return `<span style="width:18px;height:18px;border-radius:999px;background:var(--success);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;flex:none;">✓</span>`;
+  if (st === "failed") return `<span style="width:18px;height:18px;border-radius:999px;background:var(--danger);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;flex:none;">✕</span>`;
+  if (st === "running" || st === "dispatched") return `<span style="width:18px;height:18px;border-radius:999px;border:2px solid var(--orange);flex:none;"></span>`;
+  return `<span style="width:18px;height:18px;border-radius:999px;border:2px solid var(--border);flex:none;"></span>`;
+}
+
+function taskDrawer(): string {
+  const t = state.tasks;
+  if (!t.detailId) return "";
+  const overlay = `<div data-act="task-close" style="position:absolute;inset:0;background:rgba(0,0,0,.32);z-index:30;"></div>`;
+  const d = t.detail;
+  if (!d || d.job.id !== t.detailId) {
+    return `${overlay}<div style="position:absolute;top:0;right:0;bottom:0;width:420px;background:var(--card);border-left:1px solid var(--border);z-index:31;display:flex;align-items:center;justify-content:center;color:var(--muted);">加载详情…</div>`;
+  }
+  const subs = [...d.subtasks].sort((a, b) => a.seq - b.seq);
+  const doneN = subs.filter((s) => s.status === "done").length;
+  const pct = subs.length ? Math.round((doneN / subs.length) * 100) : d.job.status === "done" ? 100 : 0;
+  const barColor = d.job.status === "failed" ? "var(--danger)" : d.job.status === "done" ? "var(--success)" : "var(--orange)";
+  const statusText = jobStatusBadge(d.job.status);
+  const steps = subs.length
+    ? subs.map((s) => `<div style="display:flex;align-items:center;gap:9px;font-size:13px;color:${s.status === "pending" ? "var(--muted)" : "var(--text)"};">${stepIcon(s.status)}<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.title || `${s.provider || ""}.${s.skill || ""}`)}</span></div>`).join("")
+    : `<div style="font-size:12.5px;color:var(--muted);">（无步骤）</div>`;
+  const timeline = d.events.length
+    ? d.events.map((e) => `<div style="position:relative;padding:0 0 13px 16px;"><span style="position:absolute;left:-6px;top:3px;width:9px;height:9px;border-radius:999px;background:var(--orange);"></span><span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);">${fmtTime(e.created_at, true)}</span><div style="font-size:12.5px;">${esc(e.message || e.type)}</div></div>`).join("")
+    : `<div style="font-size:12.5px;color:var(--muted);">（无事件）</div>`;
+  const results = taskResults(subs);
+  return `${overlay}
+    <div style="position:absolute;top:0;right:0;bottom:0;width:420px;background:var(--card);border-left:1px solid var(--border);z-index:31;display:flex;flex-direction:column;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:15px 20px;border-bottom:1px solid var(--border);"><div style="min-width:0;"><div style="font-weight:600;font-size:15px;">${esc(d.job.goal)}</div><div style="margin-top:5px;">${statusText}</div></div><button data-act="task-close" style="border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;flex:none;">×</button></div>
+      <div style="flex:1;overflow-y:auto;padding:18px 20px;display:flex;flex-direction:column;gap:20px;">
+        <div><div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;"><span style="font-size:12px;color:var(--muted);">总进度</span><span style="font-size:12px;color:var(--orange-text);font-weight:600;">${pct}%</span></div><div style="height:6px;border-radius:999px;background:var(--track);overflow:hidden;"><div style="height:100%;width:${pct}%;background:${barColor};"></div></div></div>
+        <div><div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:10px;">步骤</div><div style="display:flex;flex-direction:column;gap:9px;">${steps}</div></div>
+        <div><div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:10px;">事件时间线</div><div style="display:flex;flex-direction:column;border-left:2px solid var(--border);margin-left:4px;">${timeline}</div></div>
+        ${results}
+      </div>
+    </div>`;
 }
 
 function provCard(opts: { icon: string; name: string; sub: string; badge: string; skills: string[]; dim?: boolean; warn?: boolean; full?: boolean }): string {
@@ -314,6 +412,24 @@ function logsScreen(): string {
   </div>`;
 }
 
+// 单条权限行：已授予显示绿勾，否则显示"去授权"按钮。
+function permRow(title: string, desc: string, granted: boolean, actName: string): string {
+  const status = granted
+    ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--success);font-weight:600;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>已授予</span>`
+    : `<span style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--warning);font-weight:600;"><span style="width:7px;height:7px;border-radius:999px;background:var(--warning);"></span>未授予</span><button data-act="${actName}" style="padding:5px 12px;border:1px solid var(--warning);color:var(--warning);background:transparent;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;">去授权</button>`;
+  return `<div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);"><div style="flex:1;"><div style="font-size:13.5px;">${title}</div><div style="font-size:11.5px;color:var(--muted);margin-top:1px;">${desc}</div></div>${status}</div>`;
+}
+
+// 权限卡：桌面态读取真实授权状态（辅助功能 / 屏幕录制），按钮打开系统设置对应面板。
+function permissionsCard(cuTrack: string): string {
+  const p = desktop.getPermissions();
+  return `<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:5px;">权限 <span style="font-size:12px;color:var(--muted);font-weight:400;">macOS</span></div><div style="display:flex;flex-direction:column;">
+        ${permRow("辅助功能", "允许控制其它应用（点击、输入）", p.accessibility, "perm-accessibility")}
+        ${permRow("屏幕录制", "用于截图与 computer-use 监看", p.screen === "granted", "perm-screen")}
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 0;"><div style="flex:1;"><div style="font-size:13.5px;">computer-use 总开关</div><div style="font-size:11.5px;color:var(--muted);margin-top:1px;">允许 AI 像人一样操作本机软件（默认关）</div></div><button data-act="cu-toggle" style="${cuTrack}"><span style="width:18px;height:18px;border-radius:999px;background:#fff;display:block;box-shadow:0 1px 2px rgba(0,0,0,.25);"></span></button></div>
+      </div></div>`;
+}
+
 function settingsScreen(): string {
   const inputBase = "flex:1;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;padding:7px 11px;font-size:13px;outline:none;";
   const cuTrack = `width:38px;height:22px;border-radius:999px;border:none;cursor:pointer;padding:2px;display:flex;justify-content:${state.cu ? "flex-end" : "flex-start"};background:${state.cu ? "var(--orange)" : "var(--border)"};transition:background .15s;`;
@@ -331,11 +447,7 @@ function settingsScreen(): string {
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">设备 ID</label><span style="font-size:13px;font-family:ui-monospace,Menlo,monospace;color:var(--text);">${esc(deviceIdLabel())}</span></div>
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">设备名</label><input id="set-device" value="${esc(getDeviceName())}" style="${inputBase}"></div>
       </div></div>
-      <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:5px;">权限 <span style="font-size:12px;color:var(--muted);font-weight:400;">macOS</span></div><div style="display:flex;flex-direction:column;">
-        <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);"><div style="flex:1;"><div style="font-size:13.5px;">辅助功能</div><div style="font-size:11.5px;color:var(--muted);margin-top:1px;">允许控制其它应用（点击、输入）</div></div><span style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--success);font-weight:600;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"></path></svg>已授予</span></div>
-        <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--border);"><div style="flex:1;"><div style="font-size:13.5px;">屏幕录制</div><div style="font-size:11.5px;color:var(--muted);margin-top:1px;">用于截图与 computer-use 监看</div></div><span style="display:inline-flex;align-items:center;gap:5px;font-size:12.5px;color:var(--warning);font-weight:600;"><span style="width:7px;height:7px;border-radius:999px;background:var(--warning);"></span>未授予</span><button style="padding:5px 12px;border:1px solid var(--warning);color:var(--warning);background:transparent;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;">去授权</button></div>
-        <div style="display:flex;align-items:center;gap:12px;padding:12px 0;"><div style="flex:1;"><div style="font-size:13.5px;">computer-use 总开关</div><div style="font-size:11.5px;color:var(--muted);margin-top:1px;">允许 AI 像人一样操作本机软件（默认关）</div></div><button data-act="cu-toggle" style="${cuTrack}"><span style="width:18px;height:18px;border-radius:999px;background:#fff;display:block;box-shadow:0 1px 2px rgba(0,0,0,.25);"></span></button></div>
-      </div></div>
+      ${permissionsCard(cuTrack)}
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">能力配置</div>
         <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">providers.json</label><span style="flex:1;font-size:12px;font-family:ui-monospace,Menlo,monospace;color:var(--muted);">~/.umbra/providers.json</span><button style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">编辑</button></div>
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">coding 权限</label><div style="display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;"><button data-act="mode-0" style="${seg(state.codingMode === 0)}">只生成</button><button data-act="mode-1" style="${seg(state.codingMode === 1)}">执行前确认</button><button data-act="mode-2" style="${seg(state.codingMode === 2, true)}">直接执行</button></div></div>
@@ -363,7 +475,7 @@ function render(): void {
       ${titlebar()}
       <div style="flex:1;display:flex;min-height:0;">
         ${sidebar()}
-        <main style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);">${currentScreen()}</main>
+        <main style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);position:relative;">${currentScreen()}</main>
       </div>
     </div>`;
   if (state.nav === "chat") {
@@ -394,19 +506,81 @@ function setCodingMode(m: number): void {
   render();
 }
 
+// ── 任务页数据（/jobs）──────────────────────────────────────────────────────
+let tasksTimer: number | undefined;
+
+// 拉取任务列表；若详情抽屉打开则一并刷新详情。
+async function loadJobs(): Promise<void> {
+  if (state.tasks.list.length === 0) state.tasks.loading = true;
+  const [list, detail] = await Promise.all([
+    fetchJobs(30),
+    state.tasks.detailId ? fetchJobDetail(state.tasks.detailId) : Promise.resolve(null),
+  ]);
+  state.tasks.list = list;
+  state.tasks.loading = false;
+  if (state.tasks.detailId && detail) state.tasks.detail = detail;
+  if (state.nav === "tasks") render();
+}
+
+// 手动刷新：转圈动效 + 至少转满 500ms，给出明确反馈。
+async function manualRefresh(): Promise<void> {
+  state.tasks.refreshing = true;
+  render();
+  await Promise.all([loadJobs(), new Promise((r) => setTimeout(r, 500))]);
+  state.tasks.refreshing = false;
+  render();
+}
+
+function startTasksPolling(): void {
+  loadJobs();
+  if (tasksTimer) clearInterval(tasksTimer);
+  tasksTimer = window.setInterval(loadJobs, 3500);
+}
+function stopTasksPolling(): void {
+  if (tasksTimer) clearInterval(tasksTimer);
+  tasksTimer = undefined;
+}
+
+async function openJob(id: string): Promise<void> {
+  state.tasks.detailId = id;
+  state.tasks.detail = null;
+  render();
+  const d = await fetchJobDetail(id);
+  if (state.tasks.detailId === id) {
+    state.tasks.detail = d;
+    render();
+  }
+}
+function closeJob(): void {
+  state.tasks.detailId = null;
+  state.tasks.detail = null;
+  render();
+}
+
+// 切换页面：管理任务轮询的启停。
+function setNav(nav: Nav): void {
+  state.nav = nav;
+  if (nav === "tasks") startTasksPolling();
+  else stopTasksPolling();
+  render();
+}
+
 function onClick(e: MouseEvent): void {
   const target = (e.target as HTMLElement).closest("[data-act]") as HTMLElement | null;
   if (!target) return;
   const act = target.dataset.act!;
   if (act === "noop") { e.preventDefault(); return; }
-  if (act.startsWith("nav-")) { state.nav = act.slice(4) as Nav; render(); return; }
+  if (act.startsWith("nav-")) { setNav(act.slice(4) as Nav); return; }
   switch (act) {
     case "theme": state.dark = !state.dark; render(); break;
     case "reconnect": saveAndReconnect(); break;
-    case "task-open": state.taskOpen = true; render(); break;
-    case "task-close": state.taskOpen = false; render(); break;
+    case "task-open": if (target.dataset.id) openJob(target.dataset.id); break;
+    case "task-close": closeJob(); break;
+    case "tasks-refresh": manualRefresh(); break;
     case "rt-toggle": state.rtRunning = !state.rtRunning; render(); break;
     case "cu-toggle": state.cu = !state.cu; render(); break;
+    case "perm-screen": desktop.openPrivacy("screen"); break;
+    case "perm-accessibility": desktop.openPrivacy("accessibility"); break;
     case "mode-0": setCodingMode(0); break;
     case "mode-1": setCodingMode(1); break;
     case "mode-2": setCodingMode(2); break;
@@ -418,12 +592,16 @@ function onClick(e: MouseEvent): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === "Escape" && state.taskOpen) { state.taskOpen = false; render(); }
+  if (e.key === "Escape" && state.tasks.detailId) closeJob();
 }
 
 chat.setAppRerender(render);
 document.getElementById("app")!.addEventListener("click", onClick);
 window.addEventListener("keydown", onKeydown);
+// 窗口重新获得焦点时刷新权限状态（用户可能刚去系统设置授予了权限）。
+window.addEventListener("focus", () => {
+  if (desktop.isDesktop()) desktop.refreshPermissions().then(() => { if (state.nav === "settings") render(); });
+});
 render();
 // 桌面态：同步主进程配置并订阅设备引擎状态（浏览器预览下为 no-op）。
 // 聊天页从不被设备事件重渲染（自管子树）；日志只在日志页刷新；其它页仅 state 事件刷新。

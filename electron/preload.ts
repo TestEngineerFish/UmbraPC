@@ -15,6 +15,10 @@ contextBridge.exposeInMainWorld("umbra", {
     ipcRenderer.invoke("umbra:runTask", taskId, provider, skill, params),
   confirmResponse: (taskId: string, approved: boolean) => ipcRenderer.invoke("umbra:confirmResponse", taskId, approved),
 
+  // macOS 权限
+  getPermissions: () => ipcRenderer.invoke("umbra:getPermissions"),
+  openPrivacy: (target: string) => ipcRenderer.invoke("umbra:openPrivacy", target),
+
   // 主进程执行过程中回流的进度 / 确认请求
   onTaskProgress: (cb: (p: { taskId: string; message: string; extra: Record<string, unknown> }) => void) => {
     const l = (_e: unknown, p: any) => cb(p);

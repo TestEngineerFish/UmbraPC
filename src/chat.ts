@@ -3,8 +3,8 @@
 import { chatConn, fetchHistory, getServerUrl } from "./server";
 
 type Block =
-  | { kind: "user"; text: string }
-  | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean }
+  | { kind: "user"; text: string; ts?: string | number }
+  | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number }
   | { kind: "job"; jobId: string; goal: string; pct: number; status: string; message: string; confirmTaskId?: string; results?: { title: string; url: string }[] }
   | { kind: "done"; goal: string; results: { title: string; url: string }[] }
   | { kind: "error"; text: string };
@@ -26,10 +26,25 @@ let oldestId: number | null = null;
 let hasMore = false;
 let loadingOlder = false;
 
-function rowToBlock(m: { role: string; content: string }): Block {
+function rowToBlock(m: { role: string; content: string; created_at?: string }): Block {
   return m.role === "user"
-    ? { kind: "user", text: m.content }
-    : { kind: "assistant", thinking: false, streaming: false, text: m.content, trace: [], traceOpen: false };
+    ? { kind: "user", text: m.content, ts: m.created_at }
+    : { kind: "assistant", thinking: false, streaming: false, text: m.content, trace: [], traceOpen: false, ts: m.created_at };
+}
+
+// IM 风格消息时间：今天→HH:MM，昨天→昨天 HH:MM，今年→M月D日 HH:MM，更早→YYYY年M月D日 HH:MM。
+function fmtMsgTime(ts?: string | number): string {
+  if (ts == null) return "";
+  const d = typeof ts === "number" ? new Date(ts) : new Date(String(ts).includes("T") ? String(ts) : String(ts).replace(" ", "T") + "Z");
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const sod = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((sod(now) - sod(d)) / 86400000);
+  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (days <= 0) return hm;
+  if (days === 1) return `昨天 ${hm}`;
+  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
 }
 
 export function setAppRerender(cb: () => void): void {
@@ -128,8 +143,8 @@ function onMessage(msg: any): void {
     }
     case "job_update": handleJob(msg); break;
     case "chat_message":
-      if (msg.role === "user") blocks.push({ kind: "user", text: msg.text || "" });
-      else blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false });
+      if (msg.role === "user") blocks.push({ kind: "user", text: msg.text || "", ts: Date.now() });
+      else blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts: Date.now() });
       break;
     case "error":
       if (assistantIdx !== null) { const a = currentAssistant(); if (a) { a.thinking = false; a.streaming = false; } assistantIdx = null; }
@@ -184,9 +199,14 @@ function assistantBody(text: string): string {
 
 const dots = `<span style="display:inline-flex;gap:4px;align-items:center;"><span style="width:7px;height:7px;border-radius:999px;background:var(--muted);animation:umbob 1.2s infinite;"></span><span style="width:7px;height:7px;border-radius:999px;background:var(--muted);animation:umbob 1.2s infinite .2s;"></span><span style="width:7px;height:7px;border-radius:999px;background:var(--muted);animation:umbob 1.2s infinite .4s;"></span></span>`;
 
+const timeLine = (ts: string | number | undefined, align: "flex-start" | "flex-end") => {
+  const s = fmtMsgTime(ts);
+  return s ? `<div style="align-self:${align};font-size:10.5px;color:var(--muted);padding:0 4px;">${s}</div>` : "";
+};
+
 function blockHtml(b: Block, i: number): string {
   if (b.kind === "user")
-    return `<div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>`;
+    return `<div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
 
   if (b.kind === "assistant") {
     const trace = b.trace.length
@@ -196,7 +216,7 @@ function blockHtml(b: Block, i: number): string {
         </div>`
       : "";
     const bubble = `<div style="align-self:flex-start;max-width:80%;background:var(--card);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.6;min-height:20px;white-space:pre-wrap;">${b.thinking ? dots : ""}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
-    return trace + bubble;
+    return trace + bubble + (b.streaming ? "" : timeLine(b.ts, "flex-start"));
   }
 
   if (b.kind === "job") {
@@ -259,8 +279,9 @@ function send(): void {
   ta.value = "";
   stick = true;
   forceScroll = true; // 自己发的消息总是滚到底
-  blocks.push({ kind: "user", text });
-  blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true });
+  const now = Date.now();
+  blocks.push({ kind: "user", text, ts: now });
+  blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
   assistantIdx = blocks.length - 1;
   if (!chatConn.sendMessage(text)) {
     blocks.push({ kind: "error", text: "未连接到服务端，消息未发出。请检查设置里的服务端地址。" });

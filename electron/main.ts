@@ -1,7 +1,7 @@
 // Electron 主进程：开窗 + 任务执行器 + IPC。
 // 设备 WebSocket 由渲染层(Chromium)承载（主进程网络在部分环境被代理/WAF RST）；
 // 主进程只做能力探测与任务执行，经 IPC 与渲染层桥接。
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain, shell, systemPreferences } from "electron";
 import * as path from "node:path";
 import { ConfigStore, UmbraConfig } from "./core/config";
 import { TaskExecutor } from "./core/device-client";
@@ -81,6 +81,23 @@ function registerIpc(): void {
   );
   ipcMain.handle("umbra:confirmResponse", (_e, taskId: string, approved: boolean) => {
     executor.confirmResponse(taskId, approved);
+  });
+
+  // macOS 权限：读取真实授权状态。
+  ipcMain.handle("umbra:getPermissions", () => {
+    if (process.platform !== "darwin") return { accessibility: true, screen: "granted" };
+    return {
+      accessibility: systemPreferences.isTrustedAccessibilityClient(false),
+      screen: systemPreferences.getMediaAccessStatus("screen"),
+    };
+  });
+  // 打开系统设置 → 隐私与安全性 → 对应面板。
+  ipcMain.handle("umbra:openPrivacy", (_e, target: string) => {
+    const urls: Record<string, string> = {
+      screen: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+      accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+    };
+    return shell.openExternal(urls[target] || urls.screen);
   });
 }
 

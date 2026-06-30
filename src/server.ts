@@ -48,6 +48,7 @@ export interface HistoryRow {
   id: number;
   role: string;
   content: string;
+  created_at?: string;
 }
 
 // 拉历史：limit 条；传 beforeId 取更早一页（上拉加载）。
@@ -59,6 +60,60 @@ export async function fetchHistory(limit = 20, beforeId?: number): Promise<Histo
     return await r.json();
   } catch {
     return [];
+  }
+}
+
+export interface Job {
+  id: string;
+  goal: string;
+  status: string; // pending/running/done/failed/cancelled
+  result_summary?: string | null;
+  channel?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+export interface Subtask {
+  id: string;
+  seq: number;
+  title?: string | null;
+  provider?: string | null;
+  skill?: string | null;
+  status: string; // pending/dispatched/running/done/failed
+  result_json?: string | null;
+  error?: string | null;
+}
+export interface JobEvent {
+  id: number;
+  type: string;
+  message?: string | null;
+  subtask_id?: string | null;
+  created_at?: string;
+}
+export interface JobDetail {
+  job: Job;
+  subtasks: Subtask[];
+  events: JobEvent[];
+}
+
+// 任务列表（最近 limit 条，按更新时间倒序）。
+export async function fetchJobs(limit = 30): Promise<Job[]> {
+  try {
+    const r = await fetch(`${getServerUrl()}/jobs?limit=${limit}`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch {
+    return [];
+  }
+}
+
+// 单个任务详情（子任务 + 事件时间线）。
+export async function fetchJobDetail(id: string): Promise<JobDetail | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/jobs/${encodeURIComponent(id)}`);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
   }
 }
 
