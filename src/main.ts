@@ -4,6 +4,7 @@
 
 import { chatConn, getServerUrl, setServerUrl, setToken, getToken, getDeviceName, setDeviceName } from "./server";
 import * as chat from "./chat";
+import * as desktop from "./desktop";
 
 type Nav = "chat" | "tasks" | "abilities" | "realtime" | "logs" | "settings";
 
@@ -79,6 +80,38 @@ function connBadge(): string {
       <span style="width:8px;height:8px;border-radius:999px;background:${color};box-shadow:0 0 0 3px ${soft};"></span>
       <span style="font-size:11.5px;color:var(--muted);">${label}</span>
     </div>`;
+}
+
+// 设备 ID 展示：桌面态取真实 deviceId，否则占位。
+function deviceIdLabel(): string {
+  const ds = desktop.getDeviceState();
+  return ds?.deviceId || "（仅桌面应用可用）";
+}
+
+// 设备引擎状态卡（仅桌面应用显示）：连接状态 + Provider 数 + 最近任务。
+function deviceEngineCard(): string {
+  if (!desktop.isDesktop()) return "";
+  const ds = desktop.getDeviceState();
+  const status = ds?.status || "offline";
+  const color = status === "online" ? "var(--success)" : status === "connecting" ? "var(--warning)" : "var(--danger)";
+  const soft = status === "online" ? "var(--success-soft)" : status === "connecting" ? "var(--warning-soft)" : "var(--danger-soft)";
+  const label = status === "online" ? "运行中" : status === "connecting" ? "连接中…" : "未连接";
+  const provCount = ds ? ds.providers.filter((p) => p.available).length : 0;
+  const last = ds && ds.recentTasks[0];
+  const lastLine = last ? `最近任务：${esc(last.provider)}.${esc(last.skill)} · ${esc(last.message)}` : "暂无任务";
+  const lastLog = desktop.getDeviceLogs()[0] || "（无日志）";
+  return `<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">设备引擎</div><div style="display:flex;flex-direction:column;gap:11px;">
+      <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">引擎状态</label><span style="display:inline-flex;align-items:center;gap:7px;font-size:13px;"><span style="width:8px;height:8px;border-radius:999px;background:${color};box-shadow:0 0 0 3px ${soft};"></span>${label}</span><span style="flex:1;"></span><span style="font-size:12px;color:var(--muted);">查看「日志」页排错</span></div>
+      <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">可用程序</label><span style="font-size:13px;">${provCount} 个</span></div>
+      <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">任务</label><span style="font-size:12.5px;color:var(--muted);">${lastLine}</span></div>
+      <div style="display:flex;align-items:flex-start;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">最近日志</label><span style="font-size:12px;color:var(--muted);font-family:ui-monospace,Menlo,monospace;flex:1;word-break:break-all;">${esc(lastLog)}</span></div>
+    </div></div>`;
+}
+
+// Token 输入占位：设备注册需要与服务端 ASSIST_TOKEN 一致。
+function tokenPlaceholder(): string {
+  const set = desktop.isDesktop() ? !!desktop.getDesktopConfig()?.hasToken : !!getToken();
+  return set ? "（已保存，留空不变）" : "填服务端 ASSIST_TOKEN（设备注册需要）";
 }
 
 // 设置页里的内联连接状态。
@@ -177,7 +210,35 @@ function provCard(opts: { icon: string; name: string; sub: string; badge: string
   </div>`;
 }
 
+// 桌面态：用设备引擎上报的真实 Provider 渲染能力页。
+function abilitiesReal(): string {
+  const ds = desktop.getDeviceState()!;
+  const genIcon = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"></rect><path d="M3 9h18"></path></svg>`;
+  const cards = ds.providers.length
+    ? ds.providers
+        .map((m) =>
+          provCard({
+            icon: genIcon,
+            name: m.display_name || m.provider,
+            sub: m.available ? (m.version ? `v${m.version}` : (m.kind === "system" ? "系统内置" : "已就绪")) : m.unavailable_reason || "不可用",
+            badge: m.available
+              ? badge(`<span style="width:6px;height:6px;border-radius:999px;background:var(--success);"></span>可用`, "ok")
+              : badge("不可用", "off"),
+            skills: Object.keys(m.skills || {}),
+            dim: !m.available,
+          }),
+        )
+        .join("")
+    : `<div style="grid-column:1 / -1;color:var(--muted);padding:30px;text-align:center;">设备引擎未就绪或暂无 Provider（状态：${ds.status}）。</div>`;
+  return `
+  <div style="height:100%;overflow-y:auto;padding:18px 22px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;"><h1 style="margin:0;font-size:16px;font-weight:600;">能力</h1><span style="font-size:12px;color:var(--muted);">本机真实能力 · 设备 ${esc(ds.deviceName)}</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:13px;">${cards}</div>
+  </div>`;
+}
+
 function abilitiesScreen(): string {
+  if (desktop.isDesktop() && desktop.getDeviceState()) return abilitiesReal();
   const okBadge = badge(`<span style="width:6px;height:6px;border-radius:999px;background:var(--success);"></span>可用`, "ok");
   return `
   <div style="height:100%;overflow-y:auto;padding:18px 22px;">
@@ -225,10 +286,19 @@ function realtimeScreen(): string {
 }
 
 function logsScreen(): string {
-  const view = state.logFilter === "all" ? LOGS : LOGS.filter((l) => l.src === state.logFilter);
-  const rows = view
-    .map((l) => `<div style="display:flex;gap:11px;"><span style="color:var(--muted);flex:none;">${l.time}</span><span style="flex:none;width:62px;font-weight:600;color:${l.color};">${l.tag}</span><span style="color:var(--text);">${esc(l.msg)}</span></div>`)
-    .join("");
+  let rows: string;
+  if (desktop.isDesktop()) {
+    // 桌面态：展示设备引擎真实日志（连接/注册/任务/错误）。
+    const dlogs = desktop.getDeviceLogs();
+    rows = dlogs.length
+      ? dlogs.map((l) => `<div style="color:var(--text);">${esc(l)}</div>`).join("")
+      : `<div style="color:var(--muted);">暂无设备引擎日志（等待连接/注册）…</div>`;
+  } else {
+    const view = state.logFilter === "all" ? LOGS : LOGS.filter((l) => l.src === state.logFilter);
+    rows = view
+      .map((l) => `<div style="display:flex;gap:11px;"><span style="color:var(--muted);flex:none;">${l.time}</span><span style="flex:none;width:62px;font-weight:600;color:${l.color};">${l.tag}</span><span style="color:var(--text);">${esc(l.msg)}</span></div>`)
+      .join("");
+  }
   return `
   <div style="height:100%;display:flex;flex-direction:column;min-height:0;">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--border);flex:none;gap:12px;">
@@ -253,11 +323,12 @@ function settingsScreen(): string {
     <div style="display:flex;flex-direction:column;gap:14px;max-width:680px;">
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">连接</div><div style="display:flex;flex-direction:column;gap:13px;">
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">服务端地址</label><input id="set-server" value="${esc(getServerUrl())}" style="${inputBase}font-family:ui-monospace,Menlo,monospace;"></div>
-        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">访问 Token</label><input id="set-token" type="password" placeholder="${getToken() ? "（已保存，留空不变）" : "可选"}" style="${inputBase}font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;"></div>
+        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">访问 Token</label><input id="set-token" type="password" placeholder="${tokenPlaceholder()}" style="${inputBase}font-family:ui-monospace,Menlo,monospace;letter-spacing:2px;"></div>
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">连接状态</label>${connStatusInline()}<span style="flex:1;"></span><button data-act="reconnect" style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">保存并重连</button></div>
       </div></div>
+      ${deviceEngineCard()}
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">设备</div><div style="display:flex;flex-direction:column;gap:13px;">
-        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">设备 ID</label><span style="font-size:13px;font-family:ui-monospace,Menlo,monospace;color:var(--text);">dev_8f3a-2c91-mbp2</span></div>
+        <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">设备 ID</label><span style="font-size:13px;font-family:ui-monospace,Menlo,monospace;color:var(--text);">${esc(deviceIdLabel())}</span></div>
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">设备名</label><input id="set-device" value="${esc(getDeviceName())}" style="${inputBase}"></div>
       </div></div>
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:5px;">权限 <span style="font-size:12px;color:var(--muted);font-weight:400;">macOS</span></div><div style="display:flex;flex-direction:column;">
@@ -309,7 +380,17 @@ function saveAndReconnect(): void {
   if (server) setServerUrl(server);
   if (token) setToken(token);
   if (device) setDeviceName(device);
+  // 桌面态：把同样的配置推给主进程设备引擎（触发其重连）。
+  desktop.pushConfig({ serverUrl: server || getServerUrl(), token: token || "", deviceName: device || getDeviceName() }).catch(() => {});
   chatConn.reconnect();
+  render();
+}
+
+const EXEC_MODES = ["never", "confirm", "always"] as const;
+// coding 权限切换：同步到设备引擎。
+function setCodingMode(m: number): void {
+  state.codingMode = m;
+  desktop.pushConfig({ codingAllowExec: EXEC_MODES[m] }).catch(() => {});
   render();
 }
 
@@ -326,9 +407,9 @@ function onClick(e: MouseEvent): void {
     case "task-close": state.taskOpen = false; render(); break;
     case "rt-toggle": state.rtRunning = !state.rtRunning; render(); break;
     case "cu-toggle": state.cu = !state.cu; render(); break;
-    case "mode-0": state.codingMode = 0; render(); break;
-    case "mode-1": state.codingMode = 1; render(); break;
-    case "mode-2": state.codingMode = 2; render(); break;
+    case "mode-0": setCodingMode(0); break;
+    case "mode-1": setCodingMode(1); break;
+    case "mode-2": setCodingMode(2); break;
     case "log-all": state.logFilter = "all"; render(); break;
     case "log-jobs": state.logFilter = "jobs"; render(); break;
     case "log-conn": state.logFilter = "conn"; render(); break;
@@ -344,3 +425,12 @@ chat.setAppRerender(render);
 document.getElementById("app")!.addEventListener("click", onClick);
 window.addEventListener("keydown", onKeydown);
 render();
+// 桌面态：同步主进程配置并订阅设备引擎状态（浏览器预览下为 no-op）。
+// 聊天页从不被设备事件重渲染（自管子树）；日志只在日志页刷新；其它页仅 state 事件刷新。
+desktop.initDesktop((kind) => {
+  if (state.nav === "chat") return;
+  if (kind === "log" && state.nav !== "logs") return;
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA")) return; // 正在输入，别打断
+  render();
+}).catch(() => {});

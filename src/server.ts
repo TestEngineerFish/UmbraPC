@@ -44,9 +44,17 @@ function wsUrl(): string {
   return base.replace(/^http/, "ws") + "/ws/chat";
 }
 
-export async function fetchHistory(limit = 80): Promise<Array<{ role: string; content: string }>> {
+export interface HistoryRow {
+  id: number;
+  role: string;
+  content: string;
+}
+
+// 拉历史：limit 条；传 beforeId 取更早一页（上拉加载）。
+export async function fetchHistory(limit = 20, beforeId?: number): Promise<HistoryRow[]> {
   try {
-    const r = await fetch(`${getServerUrl()}/history?limit=${limit}`);
+    const q = `?limit=${limit}` + (beforeId ? `&before_id=${beforeId}` : "");
+    const r = await fetch(`${getServerUrl()}/history${q}`);
     if (!r.ok) return [];
     return await r.json();
   } catch {

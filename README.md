@@ -41,32 +41,50 @@ UmbraPC/
 cd UmbraPC
 npm install
 
-# 方式一：浏览器预览界面（最快看效果，无需 Electron）
+# 方式一：浏览器预览界面（最快看效果，无需 Electron）。仅聊天接真实服务端；
+# 设备引擎需 Node 能力（截图/子进程），只在 Electron 桌面应用里运行。
 npm run dev            # 打开 http://localhost:5173
 
-# 方式二：桌面窗口（Electron）
-npm run dev            # 先起 Vite（一个终端）
-npm run electron       # 再起 Electron（另一个终端，加载 5173）
+# 方式二：桌面窗口（Electron，含设备引擎）—— 自带界面，单条命令，无需 dev server
+npm run electron       # 先 vite build + esbuild 打包主进程，再起 Electron（加载本地 dist）
+
+# 方式三：桌面 + 热更新开发（改界面即时生效）
+npm run dev            # 终端 A：起 Vite（5173）
+npm run electron:dev   # 终端 B：起 Electron 并连 5173（带重试，dev server 稍晚也能连上）
 
 # 类型检查 / 打包
-npm run typecheck
-npm run build          # 产出 dist/，Electron 打包后加载它
+npm run typecheck      # 渲染层 + 主进程两套 tsconfig
+npm run build          # 产出 dist/（渲染层），Electron 打包后加载它
+npm run build:electron # 单独打包主进程 → dist-electron/
 ```
 
 技术栈：Electron + Vite + TypeScript（vanilla，无框架，和现有 Web 客户端一脉相承）。
-界面在 `src/`（`main.ts` 渲染 + `styles.css` 令牌），桌面外壳在 `electron/`。
+
+**设备连接的特殊架构（重要）**：`/ws/device` 的 WebSocket 由**渲染层(Chromium)**承载（`src/device-transport.ts`），不是主进程。原因：Electron 主进程的 Node 网络栈(BoringSSL)在部分网络环境（系统代理/WAF）会被 RST，而渲染层的 Chromium 网络栈能正常穿透（聊天 `/ws/chat` 就是证据）。任务的**实际执行**（截图、子进程、文件、Provider 探测、确认闸门）仍在**主进程 Node**（`electron/core/`），渲染层与主进程通过 IPC 桥接：`getRegisterInfo` / `runTask` / `confirmResponse` / `task-progress` / `task-confirm-request`。
+
+渲染层在 `src/`（`main.ts` 界面 + `chat.ts` 聊天 + `server.ts` 连接 + `device-transport.ts` 设备连接 + `desktop.ts` 桥接）；
+任务执行器在 `electron/`（主进程 Node，esbuild 打包成 `dist-electron/*.cjs`）。
 
 ## 目录结构（现状）
 
 ```
 UmbraPC/
-├── package.json  tsconfig.json  vite.config.ts  index.html
-├── electron/
-│   ├── main.cjs       # 主进程：开发加载 Vite，打包加载 dist
-│   └── preload.cjs    # 预留：把核心引擎安全暴露给渲染层
-└── src/
-    ├── styles.css     # 橙色系令牌 + 浅/深双模式 + 动画
-    └── main.ts        # 渲染层：6 个页面 + 交互（依据 Claude Design 设计稿还原）
+├── package.json  tsconfig.json  tsconfig.electron.json  vite.config.ts  index.html
+├── scripts/build-electron.mjs     # esbuild 打包主进程
+├── electron/                      # 主进程（任务执行，TS）
+│   ├── main.ts                    # 开窗 + 任务执行器 + IPC
+│   ├── preload.ts                 # contextBridge 暴露 window.umbra
+│   └── core/
+│       ├── config.ts              # 配置（userData 持久化，可被环境变量覆盖）
+│       ├── registry.ts            # Provider 注册表（设备→程序→技能）
+│       ├── device-client.ts       # TaskExecutor：探测 Provider + 执行技能 + 确认闸门（无 WS）
+│       ├── upload.ts util.ts      # 文件上传 / which+子进程
+│       └── providers/             # system(截图·文件) / coding(codex·claude_code) / 配置驱动
+└── src/                           # 渲染层（界面 + 网络）
+    ├── styles.css  main.ts        # 令牌 + 6 个页面
+    ├── chat.ts  server.ts         # 聊天 + /ws/chat 连接
+    ├── device-transport.ts        # /ws/device 连接（Chromium）：注册/收任务/回传/确认/补报/心跳
+    └── desktop.ts                 # 门面：配置同步 + 启动设备传输层
 ```
 
 ## 状态
@@ -76,8 +94,11 @@ UmbraPC/
 - [x] 界面还原：聊天 / 任务 / 能力 / 实时操作 / 日志 / 设置（含主题切换、lightbox、任务抽屉）
 - [x] **聊天接真实 `/ws/chat`**：流式回复、工具轨迹、任务进度卡、执行前确认、完成通知、图片预览、跨端同步、`/history` 历史、自动重连
 - [x] 设置：服务端地址 / Token / 设备名持久化（localStorage）+ 实时连接状态 + 保存重连
-- [ ] 设备引擎（主进程）：`/ws/device` 注册 Provider + 任务执行 + 确认闸门 + 文件/截图（→ 任务/能力页接真实数据）
-- [ ] providers.json 读写
+- [x] **设备引擎（主进程，TS）**：连 `/ws/device`、注册 Provider（system / codex / claude_code / providers.json）、收任务执行、回传进度/结果、执行前确认闸门、断线补报 + 心跳；截图 / 文件操作 / coding 已移植
+- [x] 能力页（桌面态）展示本机真实 Provider；设置页显示设备引擎状态、coding 权限同步到引擎
+- [x] providers.json 读取（不写代码即可登记可控程序与技能）
+- [ ] 任务页接真实数据（任务列表/详情走 /jobs 与设备引擎事件）
+- [ ] providers.json 内嵌编辑器、系统权限引导（macOS 辅助功能/屏幕录制）
 - [ ] computer-use（Phase C）
 
 ### 连接层结构
@@ -85,6 +106,8 @@ UmbraPC/
 - `src/chat.ts`：聊天消息模型 + 渲染（驱动设计稿组件）+ 收发/确认/跨端。
 - `src/main.ts`：外壳与其余页面；标题栏与设置页连接状态实时反映。
 
-> 已接真实数据：**聊天**。任务 / 能力 / 实时操作页仍为示例数据，待设备引擎接入后变真实。
+> 已接真实数据：**聊天**（全端）、**能力页 + 设置页设备引擎状态**（桌面应用）。任务 / 实时操作页仍为示例数据，后续接入。
+>
+> 工作方式：在桌面应用里下达任务时，服务端 AI 看到本机在线、把子任务派发给设备引擎执行，进度/结果实时回到聊天页的任务卡（这条链路即"PC 作为执行设备"）。
 >
 > 已知点：开发态浏览器预览（localhost:5173）跨域拉 `/history` 可能被 CORS 拦（聊天 WebSocket 不受影响，仍可正常收发）；服务端开启 CORS 或打包成桌面应用后历史即可加载。

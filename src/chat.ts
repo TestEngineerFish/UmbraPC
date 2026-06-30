@@ -16,6 +16,21 @@ const doneJobs = new Set<string>();
 let container: HTMLElement | null = null;
 let started = false;
 let appRerender: (() => void) | null = null;
+// 滚动策略：贴底时才跟随新消息，上滑查看历史时不打扰；forceScroll 用于发送/首次加载强制到底。
+let stick = true;
+let forceScroll = false;
+let historyLoading = false;
+// 分页游标：oldestId 为已加载最早消息的 id；hasMore 表示可能还有更早的；loadingOlder 防并发。
+const PAGE = 20;
+let oldestId: number | null = null;
+let hasMore = false;
+let loadingOlder = false;
+
+function rowToBlock(m: { role: string; content: string }): Block {
+  return m.role === "user"
+    ? { kind: "user", text: m.content }
+    : { kind: "assistant", thinking: false, streaming: false, text: m.content, trace: [], traceOpen: false };
+}
 
 export function setAppRerender(cb: () => void): void {
   appRerender = cb;
@@ -35,15 +50,47 @@ function ensureStarted(): void {
     onMessage: onMessage,
   });
   chatConn.connect();
-  fetchHistory().then((msgs) => {
-    if (msgs.length && blocks.length === 0) {
-      for (const m of msgs) {
-        if (m.role === "user") blocks.push({ kind: "user", text: m.content });
-        else if (m.role === "assistant") blocks.push({ kind: "assistant", thinking: false, streaming: false, text: m.content, trace: [], traceOpen: false });
+  historyLoading = true;
+  renderMessages();
+  fetchHistory(PAGE)
+    .then((rows) => {
+      historyLoading = false;
+      if (rows.length && blocks.length === 0) {
+        for (const m of rows) blocks.push(rowToBlock(m));
+        oldestId = rows[0].id;
+        hasMore = rows.length >= PAGE;
       }
+      forceScroll = true;
       renderMessages();
-    }
-  });
+    })
+    .catch(() => {
+      historyLoading = false;
+      renderMessages();
+    });
+}
+
+// 上拉加载更早一页历史，并保持当前可视位置不跳动。
+async function loadOlder(): Promise<void> {
+  if (loadingOlder || !hasMore || oldestId == null || !container) return;
+  loadingOlder = true;
+  const el = container.querySelector("#umsgs") as HTMLElement | null;
+  const prevH = el ? el.scrollHeight : 0;
+  const prevTop = el ? el.scrollTop : 0;
+  const rows = await fetchHistory(PAGE, oldestId);
+  loadingOlder = false;
+  if (rows.length === 0) {
+    hasMore = false;
+    return;
+  }
+  if (rows.length < PAGE) hasMore = false;
+  oldestId = rows[0].id;
+  const n = rows.length;
+  // 前置插入后，已有块的索引整体右移，需同步 jobMap 与 assistantIdx。
+  for (const k of Object.keys(jobMap)) jobMap[k] += n;
+  if (assistantIdx != null) assistantIdx += n;
+  blocks = [...rows.map(rowToBlock), ...blocks];
+  renderMessages(true); // 保留滚动，由下面手动恢复
+  if (el) el.scrollTop = prevTop + (el.scrollHeight - prevH);
 }
 
 function onMessage(msg: any): void {
@@ -178,16 +225,29 @@ function blockHtml(b: Block, i: number): string {
   return `<div style="align-self:flex-start;max-width:80%;border:1px solid rgba(180,35,24,.3);background:var(--danger-soft);color:var(--danger);padding:11px 14px;border-radius:10px;">${esc(b.text)}</div>`;
 }
 
-function renderMessages(): void {
+function renderMessages(preserve = false): void {
   if (!container) return;
   const el = container.querySelector("#umsgs") as HTMLElement | null;
   if (!el) return;
+  const prevTop = el.scrollTop;
   if (blocks.length === 0) {
-    el.innerHTML = `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;"><span style="width:46px;height:46px;border-radius:12px;background:var(--orange);color:#fff;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:.92;">U</span><span style="font-size:15px;">开始和 Umbra 聊天</span></div>`;
+    el.innerHTML = historyLoading
+      ? `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);gap:9px;min-height:300px;font-size:14px;">${dots}<span>加载历史消息…</span></div>`
+      : `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;"><span style="width:46px;height:46px;border-radius:12px;background:var(--orange);color:#fff;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:.92;">U</span><span style="font-size:15px;">开始和 Umbra 聊天</span></div>`;
   } else {
-    el.innerHTML = blocks.map(blockHtml).join("");
+    // 每条消息包一层 flex:none，避免纵向 flex 在内容（高图片）超高时压缩重叠。
+    el.innerHTML = blocks
+      .map((b, i) => `<div style="flex:none;display:flex;flex-direction:column;gap:8px;">${blockHtml(b, i)}</div>`)
+      .join("");
   }
-  el.scrollTop = el.scrollHeight;
+  if (preserve) return; // 上拉加载：由调用方手动恢复滚动位置
+  // 贴底或强制时滚到底；否则尽量保持原有滚动位置（避免上滑被弹回）。
+  if (stick || forceScroll) {
+    el.scrollTop = el.scrollHeight;
+    forceScroll = false;
+  } else {
+    el.scrollTop = prevTop;
+  }
 }
 
 function send(): void {
@@ -197,6 +257,8 @@ function send(): void {
   const text = ta.value.trim();
   if (!text) return;
   ta.value = "";
+  stick = true;
+  forceScroll = true; // 自己发的消息总是滚到底
   blocks.push({ kind: "user", text });
   blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true });
   assistantIdx = blocks.length - 1;
@@ -212,6 +274,8 @@ function newSession(): void {
   assistantIdx = null;
   for (const k of Object.keys(jobMap)) delete jobMap[k];
   doneJobs.clear();
+  oldestId = null;
+  hasMore = false;
   chatConn.sendMessage("/new");
   renderMessages();
 }
@@ -242,7 +306,14 @@ export function mount(el: HTMLElement): void {
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
-  el.querySelector("#umsgs")!.addEventListener("click", onMsgsClick);
+  const msgsEl = el.querySelector("#umsgs") as HTMLElement;
+  msgsEl.addEventListener("click", onMsgsClick);
+  // 跟踪是否贴底：上滑超过阈值即停止自动跟随，回到底部附近恢复跟随。
+  msgsEl.addEventListener("scroll", () => {
+    stick = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 80;
+    if (msgsEl.scrollTop < 60) loadOlder(); // 滚到顶附近 → 加载更早历史
+  });
+  forceScroll = true; // 首次挂载滚到底
   renderMessages();
 }
 
