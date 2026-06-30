@@ -5,6 +5,8 @@ import { app, BrowserWindow, ipcMain, shell, systemPreferences } from "electron"
 import * as path from "node:path";
 import { ConfigStore, UmbraConfig } from "./core/config";
 import { TaskExecutor } from "./core/device-client";
+import { requestStop } from "./core/computer";
+import { initRpc } from "./core/rpc";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
 
@@ -32,6 +34,9 @@ function createWindow(): void {
   };
   executor.on("progress", (p) => send("umbra:task-progress", p));
   executor.on("confirm-request", (c) => send("umbra:task-confirm-request", c));
+
+  // 让主进程能把需要 Chromium 网络的活（上传等）交给这个窗口的渲染层。
+  initRpc(win.webContents);
 
   loadRenderer(win);
 }
@@ -63,6 +68,8 @@ function publicConfig(c: UmbraConfig) {
     hasToken: Boolean(c.token),
     codingAllowExec: c.codingAllowExec,
     providersFile: c.providersFile,
+    computerUseEnabled: c.computerUseEnabled,
+    computerConfirm: c.computerConfirm,
   };
 }
 
@@ -90,6 +97,10 @@ function registerIpc(): void {
       accessibility: systemPreferences.isTrustedAccessibilityClient(false),
       screen: systemPreferences.getMediaAccessStatus("screen"),
     };
+  });
+  // computer-use 紧急停止（请求中止 operate 循环）。
+  ipcMain.handle("umbra:computerStop", () => {
+    requestStop();
   });
   // 打开系统设置 → 隐私与安全性 → 对应面板。
   ipcMain.handle("umbra:openPrivacy", (_e, target: string) => {

@@ -2,6 +2,7 @@
 // 浏览器预览（无 window.umbra）下全部 no-op，聊天仍可用。
 import { setServerUrl, setDeviceName, chatConn } from "./server";
 import * as transport from "./device-transport";
+import { initRpcHost } from "./rpc-host";
 import type { DeviceState, ProviderManifest } from "./device-transport";
 
 export type { DeviceState, ProviderManifest };
@@ -13,6 +14,8 @@ interface PublicConfig {
   hasToken: boolean;
   codingAllowExec: "never" | "confirm" | "always";
   providersFile: string;
+  computerUseEnabled: boolean;
+  computerConfirm: boolean;
 }
 interface UmbraBridge {
   isDesktop: boolean;
@@ -27,6 +30,9 @@ interface UmbraBridge {
   onConfirmRequest(cb: (c: { taskId: string; summary: string; detail: Record<string, unknown> }) => void): () => void;
   getPermissions(): Promise<{ accessibility: boolean; screen: string }>;
   openPrivacy(target: string): Promise<unknown>;
+  computerStop(): Promise<unknown>;
+  onRpc(cb: (msg: { id: string; method: string; args: unknown }) => void): () => void;
+  sendRpcResult(id: string, ok: boolean, result: unknown, error?: string): void;
 }
 
 export interface Permissions {
@@ -60,9 +66,15 @@ export function openPrivacy(target: string): void {
   if (isDesktop()) window.umbra!.openPrivacy(target);
 }
 
+// computer-use 紧急停止。
+export function computerStop(): void {
+  if (isDesktop()) window.umbra!.computerStop();
+}
+
 // 启动：同步主进程配置（让聊天与设备指向同一服务端/设备名），再启动设备传输层。
 export async function initDesktop(onUpdate: (kind: string) => void): Promise<void> {
   if (!isDesktop()) return;
+  initRpcHost(); // 注册渲染层 RPC（替主进程上传等）
   config = await window.umbra!.getConfig();
   setServerUrl(config.serverUrl);
   setDeviceName(config.deviceName);

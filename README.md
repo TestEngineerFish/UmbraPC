@@ -97,9 +97,11 @@ UmbraPC/
 - [x] **设备引擎（主进程，TS）**：连 `/ws/device`、注册 Provider（system / codex / claude_code / providers.json）、收任务执行、回传进度/结果、执行前确认闸门、断线补报 + 心跳；截图 / 文件操作 / coding 已移植
 - [x] 能力页（桌面态）展示本机真实 Provider；设置页显示设备引擎状态、coding 权限同步到引擎
 - [x] providers.json 读取（不写代码即可登记可控程序与技能）
-- [ ] 任务页接真实数据（任务列表/详情走 /jobs 与设备引擎事件）
-- [ ] providers.json 内嵌编辑器、系统权限引导（macOS 辅助功能/屏幕录制）
-- [ ] computer-use（Phase C）
+- [x] 任务页接真实数据（列表/详情走 /jobs，进入轮询，IM 风格时间，结果渲染）
+- [x] 系统权限引导（macOS 辅助功能/屏幕录制，读真实状态 + 一键去授权）
+- [x] **computer-use Phase C v0（原子动作骨架）**：`computer` Provider（默认关）— open_app/click/type/key/scroll/screenshot，nut.js 执行；安全：总开关 + 权限门禁 + 应用黑名单 + 关键动作确认 + 紧急停止；实时操作页接真实状态。`operate`（自主循环）留可插拔接口待接智谱
+- [ ] computer-use Phase C+：`operate` 接决策引擎（智谱 CogAgent/GLM-4V，PC 本地直连）、实时截图监看、低层增强
+- [ ] providers.json 内嵌编辑器
 
 ### 连接层结构
 - `src/server.ts`：配置（服务端/Token/设备名/clientId）+ `/ws/chat` 单例连接（指数退避重连）+ `/history` 拉取。

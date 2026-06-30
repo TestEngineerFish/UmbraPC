@@ -18,6 +18,17 @@ contextBridge.exposeInMainWorld("umbra", {
   // macOS 权限
   getPermissions: () => ipcRenderer.invoke("umbra:getPermissions"),
   openPrivacy: (target: string) => ipcRenderer.invoke("umbra:openPrivacy", target),
+  // computer-use 紧急停止
+  computerStop: () => ipcRenderer.invoke("umbra:computerStop"),
+
+  // 主进程 RPC：渲染层替主进程做需要 Chromium 网络的活（如上传）
+  onRpc: (cb: (msg: { id: string; method: string; args: unknown }) => void) => {
+    const l = (_e: unknown, msg: any) => cb(msg);
+    ipcRenderer.on("umbra:rpc", l);
+    return () => ipcRenderer.removeListener("umbra:rpc", l);
+  },
+  sendRpcResult: (id: string, ok: boolean, result: unknown, error?: string) =>
+    ipcRenderer.send("umbra:rpc-result", { id, ok, result, error }),
 
   // 主进程执行过程中回流的进度 / 确认请求
   onTaskProgress: (cb: (p: { taskId: string; message: string; extra: Record<string, unknown> }) => void) => {

@@ -1,0 +1,185 @@
+// computer Provider：GUI 自动化（高权限，默认关）。v0 仅原子动作 + operate 占位。
+// 安全：总开关注册门禁 + 系统权限校验 + 应用黑名单 + 关键动作执行前确认。
+import { promises as fs } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { httpBase, UmbraConfig } from "./config";
+import { Confirm, Manifest, Registry, Report } from "./registry";
+import { uploadFile } from "./upload";
+import { run } from "./util";
+
+// 紧急停止标志：operate 循环（后续接入）会检查它；原子动作无循环可停。
+let stopRequested = false;
+export function requestStop(): void {
+  stopRequested = true;
+}
+export function isStopRequested(): boolean {
+  return stopRequested;
+}
+
+// 当前前台应用名（macOS）。
+async function frontmostApp(): Promise<string> {
+  if (process.platform !== "darwin") return "";
+  const res = await run("osascript", ["-e", 'tell application "System Events" to name of first application process whose frontmost is true'], { timeoutMs: 4000 });
+  return (res.output || "").trim();
+}
+
+function blacklisted(name: string, list: string[]): boolean {
+  const n = (name || "").toLowerCase();
+  return !!n && list.some((b) => b && n.includes(b.toLowerCase()));
+}
+
+// 屏幕录制权限（截图需要）。
+async function requireScreen(): Promise<void> {
+  if (process.platform !== "darwin") return;
+  const { systemPreferences } = await import("electron");
+  if (systemPreferences.getMediaAccessStatus("screen") !== "granted") {
+    throw new Error("未授予「屏幕录制」权限：设置 → 权限 → 屏幕录制 → 去授权（授权后需重启应用）");
+  }
+}
+// 辅助功能权限（点击/输入/按键/滚动需要；截图与打开应用不需要）。
+async function requireAccessibility(): Promise<void> {
+  if (process.platform !== "darwin") return;
+  const { systemPreferences } = await import("electron");
+  if (!systemPreferences.isTrustedAccessibilityClient(false)) {
+    throw new Error("未授予「辅助功能」权限：设置 → 权限 → 辅助功能 → 去授权（开发模式下授权对象是 Electron；正式打包后是 UmbraPC）");
+  }
+}
+
+// 懒加载 nut.js（避免无界面环境在加载期就拉起原生库）。
+async function loadNut(): Promise<any> {
+  const nut: any = await import("@nut-tree-fork/nut-js");
+  nut.mouse.config.autoDelayMs = 30;
+  nut.keyboard.config.autoDelayMs = 20;
+  return nut;
+}
+
+async function shoot(cfg: UmbraConfig): Promise<unknown> {
+  const tmp = path.join(os.tmpdir(), `umbra-cu-${Date.now()}.png`);
+  if (process.platform !== "darwin") throw new Error(`暂不支持的平台：${process.platform}`);
+  const res = await run("screencapture", ["-x", tmp]);
+  if (res.code !== 0) throw new Error(`截图失败：${res.output.slice(-200)}`);
+  const up = await uploadFile(httpBase(cfg), cfg.token, tmp, "screen.png", "image/png");
+  fs.unlink(tmp).catch(() => {});
+  return up;
+}
+
+const KEYMAP: Record<string, string> = {
+  cmd: "LeftCmd", command: "LeftCmd", ctrl: "LeftControl", control: "LeftControl",
+  shift: "LeftShift", alt: "LeftAlt", option: "LeftAlt", opt: "LeftAlt",
+  enter: "Enter", return: "Enter", esc: "Escape", escape: "Escape", tab: "Tab",
+  space: "Space", delete: "Backspace", backspace: "Backspace",
+  up: "Up", down: "Down", left: "Left", right: "Right", home: "Home", end: "End",
+};
+
+async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraConfig, report: Report, confirm: Confirm): Promise<unknown> {
+  if (skill === "screenshot") {
+    await requireScreen();
+    return shoot(cfg);
+  }
+
+  if (skill === "open_app") {
+    const app = String(params.app || "").trim();
+    if (!app) throw new Error("缺少 app");
+    if (blacklisted(app, cfg.computerBlacklist)) throw new Error(`禁止打开黑名单应用：${app}`);
+    if (cfg.computerConfirm) {
+      const ok = await confirm(`允许打开/切换到应用「${app}」？`, { app });
+      if (!ok) throw new Error("用户拒绝");
+    }
+    const res = await run("open", ["-a", app]);
+    if (res.code !== 0) throw new Error(`打开应用失败：${res.output.slice(-200)}`);
+    await report(`已打开 ${app}`, { progress: 1 });
+    return { opened: app };
+  }
+
+  // 其余动作都作用于"当前前台应用"，先做黑名单校验。
+  const front = await frontmostApp();
+  if (blacklisted(front, cfg.computerBlacklist)) throw new Error(`禁止操作：前台应用「${front}」在黑名单中`);
+
+  if (skill === "operate") {
+    throw new Error("operate（自主操作）尚未接入决策引擎，当前仅支持原子动作：open_app / click / type / key / scroll / screenshot。");
+  }
+
+  // 点击/输入/按键/滚动需要辅助功能权限。
+  await requireAccessibility();
+  const { mouse, keyboard, Point, Button, Key } = await loadNut();
+
+  if (skill === "click") {
+    const x = Number(params.x);
+    const y = Number(params.y);
+    if (Number.isNaN(x) || Number.isNaN(y)) throw new Error("click 需要 x,y");
+    const btn = String(params.button || "left").toLowerCase();
+    await mouse.setPosition(new Point(x, y));
+    await mouse.click(btn === "right" ? Button.RIGHT : btn === "middle" ? Button.MIDDLE : Button.LEFT);
+    await report(`点击 (${x}, ${y})`, {});
+    return { clicked: [x, y] };
+  }
+
+  if (skill === "type") {
+    const text = String(params.text ?? "");
+    if (!text) throw new Error("type 需要 text");
+    if (cfg.computerConfirm) {
+      const ok = await confirm(`允许在「${front || "当前应用"}」输入文本：「${text.slice(0, 40)}${text.length > 40 ? "…" : ""}」？`, {});
+      if (!ok) throw new Error("用户拒绝");
+    }
+    await keyboard.type(text);
+    await report(`输入文本（${text.length} 字）`, {});
+    return { typed: text.length };
+  }
+
+  if (skill === "key") {
+    const keys: string[] = Array.isArray(params.keys) ? params.keys.map(String) : params.key ? [String(params.key)] : [];
+    if (!keys.length) throw new Error("key 需要 keys 数组或 key");
+    const mapped = keys.map((k) => Key[KEYMAP[k.toLowerCase()] || (k.length === 1 ? k.toUpperCase() : k)]).filter((v: unknown) => v !== undefined);
+    if (!mapped.length) throw new Error(`无法识别按键：${keys.join("+")}`);
+    if (cfg.computerConfirm) {
+      const ok = await confirm(`允许按下组合键：${keys.join(" + ")}？`, {});
+      if (!ok) throw new Error("用户拒绝");
+    }
+    await keyboard.pressKey(...mapped);
+    await keyboard.releaseKey(...mapped);
+    await report(`按键 ${keys.join("+")}`, {});
+    return { key: keys };
+  }
+
+  if (skill === "scroll") {
+    const amount = Number(params.amount ?? 5);
+    const dir = String(params.direction || "down").toLowerCase();
+    if (dir === "up") await mouse.scrollUp(amount);
+    else if (dir === "left") await mouse.scrollLeft(amount);
+    else if (dir === "right") await mouse.scrollRight(amount);
+    else await mouse.scrollDown(amount);
+    await report(`滚动 ${dir} ${amount}`, {});
+    return { scrolled: dir, amount };
+  }
+
+  throw new Error(`computer 不支持技能：${skill}`);
+}
+
+const SKILLS: Manifest["skills"] = {
+  operate: { description: "（v0 占位，未接决策引擎）给自然语言目标自主完成 GUI 操作", params: { goal: "目标描述", app: "可选，限定应用" } },
+  open_app: { description: "打开/切换到某应用", params: { app: "应用名，如 Keynote" } },
+  screenshot: { description: "截屏并返回图片链接", params: {} },
+  click: { description: "在坐标点击", params: { x: "横坐标", y: "纵坐标", button: "left/right/middle，默认 left" } },
+  type: { description: "向当前焦点输入文本", params: { text: "要输入的文本" } },
+  key: { description: "按下（组合）键", params: { keys: "按键数组，如 [cmd, a]" } },
+  scroll: { description: "滚动", params: { direction: "up/down/left/right", amount: "档数，默认 5" } },
+};
+
+// 注册 computer Provider（仅在总开关打开时；默认关 → 不注册 → AI 不可见不可用）。
+export function registerComputer(r: Registry, cfg: UmbraConfig): void {
+  if (!cfg.computerUseEnabled) return;
+  const manifest: Manifest = {
+    provider: "computer",
+    display_name: "电脑操作",
+    kind: "system",
+    available: true,
+    unavailable_reason: "",
+    version: null,
+    skills: SKILLS,
+  };
+  r.register(manifest, async (skill, params, report, confirm) => {
+    stopRequested = false;
+    return doSkill(skill, params as Record<string, any>, cfg, report, confirm);
+  });
+}

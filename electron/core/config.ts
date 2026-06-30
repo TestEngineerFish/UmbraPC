@@ -19,6 +19,10 @@ export interface UmbraConfig {
   codingAllowExec: AllowExec;
   confirmTimeout: number;    // 秒
   providersFile: string;     // providers.json 路径
+  // ── computer-use（GUI 自动化，高权限，默认关）──
+  computerUseEnabled: boolean;   // 总开关：关则 computer Provider 不注册、不可用
+  computerConfirm: boolean;      // 关键动作(type/key/open_app)执行前需用户确认
+  computerBlacklist: string[];   // 禁止操作的应用名（子串匹配，前台应用命中即拒绝）
 }
 
 const envBool = (k: string, d: boolean) => {
@@ -48,6 +52,15 @@ function defaults(configDir: string): UmbraConfig {
     codingAllowExec: (process.env.UMBRA_CODING_ALLOW_EXEC || "confirm").toLowerCase() as AllowExec,
     confirmTimeout: Number(process.env.UMBRA_CONFIRM_TIMEOUT || 120),
     providersFile: process.env.UMBRA_PROVIDERS_FILE || path.join(configDir, "providers.json"),
+    computerUseEnabled: envBool("UMBRA_COMPUTER_USE", false),
+    computerConfirm: envBool("UMBRA_COMPUTER_CONFIRM", true),
+    computerBlacklist: [
+      "terminal", "iterm", "console",
+      "keychain", "钥匙串", "1password", "bitwarden", "lastpass",
+      "system settings", "system preferences", "系统设置", "系统偏好",
+      "alipay", "支付宝", "wechat", "微信", "bank", "银行", "wallet", "钱包",
+      "活动监视器", "activity monitor",
+    ],
   };
 }
 

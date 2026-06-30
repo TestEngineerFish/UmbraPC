@@ -9,8 +9,8 @@ const common = {
   platform: "node",
   format: "cjs",
   target: "node20",
-  // electron 由运行时提供；ws 的可选原生加速模块缺省即可（ws 自带降级）。
-  external: ["electron", "bufferutil", "utf-8-validate"],
+  // electron 由运行时提供；nut.js 含原生模块需从 node_modules 运行时加载（不打包）。
+  external: ["electron", "bufferutil", "utf-8-validate", "@nut-tree-fork/nut-js"],
   sourcemap: true,
   logLevel: "info",
 };

@@ -351,7 +351,45 @@ function abilitiesScreen(): string {
   </div>`;
 }
 
+// 桌面态：computer-use 实时监看（v0 展示开关/权限状态 + 原子动作历史；operate 自主循环后续接入）。
+function realtimeReal(): string {
+  const enabled = computerEnabled();
+  const perms = desktop.getPermissions();
+  const ds = desktop.getDeviceState();
+  const acts = (ds?.recentTasks || []).filter((t) => t.provider === "computer");
+  const running = acts.some((t) => t.status === "running");
+  const stopBtn = `<button data-act="cu-stop" style="display:flex;align-items:center;gap:7px;padding:7px 15px;border:1.5px solid var(--danger);color:var(--danger);background:var(--danger-soft);border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>紧急停止</button>`;
+  const head = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;"><h1 style="margin:0;font-size:16px;font-weight:600;">实时操作</h1>${enabled ? stopBtn : ""}</div>`;
+
+  if (!enabled) {
+    return `<div style="height:100%;overflow-y:auto;padding:18px 22px;">${head}
+      <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);height:380px;"><span style="width:54px;height:54px;border-radius:14px;background:var(--card);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg></span><div style="font-size:14px;">computer-use 未开启</div><button data-act="nav-settings" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">去设置开启</button></div></div>`;
+  }
+
+  const permOk = perms.accessibility && perms.screen === "granted";
+  const permWarn = permOk
+    ? ""
+    : `<div style="background:var(--warning-soft);border:1px solid var(--warning);border-radius:10px;padding:12px 15px;margin-bottom:16px;display:flex;align-items:center;gap:10px;"><span style="width:7px;height:7px;border-radius:999px;background:var(--warning);"></span><span style="font-size:13px;color:var(--warning);flex:1;">权限不全：${perms.accessibility ? "" : "辅助功能 "}${perms.screen === "granted" ? "" : "屏幕录制 "}未授予，computer-use 无法执行</span><button data-act="nav-settings" style="padding:5px 12px;border:1px solid var(--warning);color:var(--warning);background:transparent;border-radius:7px;font-size:12px;font-weight:600;cursor:pointer;">去授权</button></div>`;
+
+  const idleHint = running
+    ? `<div style="font-size:12px;color:var(--orange-text);display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:999px;background:var(--orange);animation:umblink 1.4s infinite;"></span>正在执行电脑操作…</div>`
+    : `<div style="font-size:13px;color:var(--muted);">当前没有进行中的电脑操作。v0 支持原子动作（点击/输入/按键/滚动/打开应用/截图）；operate 自主操作尚未接入决策引擎。</div>`;
+
+  const history = acts.length
+    ? acts
+        .map((t, i) => `<div style="display:flex;gap:10px;padding:8px 13px;${i < acts.length - 1 ? "border-bottom:1px solid var(--border);" : ""}${t.status === "running" ? "background:var(--orange-soft);" : ""}"><span style="color:var(--muted);width:54px;flex:none;">${t.skill}</span><span style="color:${t.status === "error" ? "var(--danger)" : t.status === "ok" ? "var(--success)" : "var(--orange-text)"};flex:1;">${esc(t.message)}</span><span style="color:var(--muted);flex:none;">${new Date(t.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span></div>`)
+        .join("")
+    : `<div style="padding:13px;color:var(--muted);font-size:12.5px;">暂无动作记录</div>`;
+
+  return `<div style="height:100%;overflow-y:auto;padding:18px 22px;">${head}${permWarn}
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:18px;">${idleHint}</div>
+    <div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:9px;">动作历史</div>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;font-family:ui-monospace,Menlo,monospace;font-size:12px;">${history}</div>
+  </div>`;
+}
+
 function realtimeScreen(): string {
+  if (desktop.isDesktop()) return realtimeReal();
   const head = `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;"><div style="display:flex;align-items:center;gap:10px;"><h1 style="margin:0;font-size:16px;font-weight:600;">实时操作</h1><button data-act="rt-toggle" style="font-size:11.5px;color:var(--muted);background:transparent;border:1px solid var(--border);border-radius:999px;padding:2px 9px;cursor:pointer;">切换状态</button></div>${state.rtRunning ? `<button style="display:flex;align-items:center;gap:7px;padding:7px 15px;border:1.5px solid var(--danger);color:var(--danger);background:var(--danger-soft);border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="6" y="6" width="12" height="12" rx="2"></rect></svg>紧急停止</button>` : ""}</div>`;
 
   const idle = `<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);height:420px;"><span style="width:54px;height:54px;border-radius:14px;background:var(--card);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg></span><div style="font-size:14px;">当前没有进行中的电脑操作</div><div style="font-size:12px;display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:999px;background:var(--warning);"></span>computer-use 已开启 · 权限待授予</div></div>`;
@@ -432,7 +470,8 @@ function permissionsCard(cuTrack: string): string {
 
 function settingsScreen(): string {
   const inputBase = "flex:1;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;padding:7px 11px;font-size:13px;outline:none;";
-  const cuTrack = `width:38px;height:22px;border-radius:999px;border:none;cursor:pointer;padding:2px;display:flex;justify-content:${state.cu ? "flex-end" : "flex-start"};background:${state.cu ? "var(--orange)" : "var(--border)"};transition:background .15s;`;
+  const cuOn = computerEnabled();
+  const cuTrack = `width:38px;height:22px;border-radius:999px;border:none;cursor:pointer;padding:2px;display:flex;justify-content:${cuOn ? "flex-end" : "flex-start"};background:${cuOn ? "var(--orange)" : "var(--border)"};transition:background .15s;`;
   return `
   <div style="height:100%;overflow-y:auto;padding:18px 22px;">
     <h1 style="margin:0 0 16px;font-size:16px;font-weight:600;">设置</h1>
@@ -504,6 +543,18 @@ function setCodingMode(m: number): void {
   state.codingMode = m;
   desktop.pushConfig({ codingAllowExec: EXEC_MODES[m] }).catch(() => {});
   render();
+}
+
+// computer-use 总开关当前值（桌面态取主进程配置）。
+function computerEnabled(): boolean {
+  return desktop.isDesktop() ? !!desktop.getDesktopConfig()?.computerUseEnabled : state.cu;
+}
+// 切换 computer-use：写主进程配置并触发设备重注册（registry 据此增/删 computer Provider）。
+function toggleComputerUse(): void {
+  const next = !computerEnabled();
+  state.cu = next;
+  render();
+  desktop.pushConfig({ computerUseEnabled: next }).then(() => render()).catch(() => {});
 }
 
 // ── 任务页数据（/jobs）──────────────────────────────────────────────────────
@@ -578,7 +629,8 @@ function onClick(e: MouseEvent): void {
     case "task-close": closeJob(); break;
     case "tasks-refresh": manualRefresh(); break;
     case "rt-toggle": state.rtRunning = !state.rtRunning; render(); break;
-    case "cu-toggle": state.cu = !state.cu; render(); break;
+    case "cu-toggle": toggleComputerUse(); break;
+    case "cu-stop": desktop.computerStop(); break;
     case "perm-screen": desktop.openPrivacy("screen"); break;
     case "perm-accessibility": desktop.openPrivacy("accessibility"); break;
     case "mode-0": setCodingMode(0); break;
