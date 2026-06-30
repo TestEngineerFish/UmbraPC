@@ -1,0 +1,39 @@
+appId: xyz.tingyusha.umbra
+productName: Umbra
+directories:
+  output: release
+  buildResources: build
+# 只打包构建产物 + 生产依赖（electron-builder 会自动带上 dependencies 里的 node_modules）。
+files:
+  - "dist/**"
+  - "dist-electron/**"
+  - "package.json"
+# 原生模块/可执行从 asar 解出来，否则运行时加载不到。
+asarUnpack:
+  - "**/*.node"
+  - "node_modules/@nut-tree-fork/**"
+mac:
+  target:
+    - dmg
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # 复用现有 Developer ID 证书（已在钥匙串）。稳定签名 → 辅助功能/屏幕录制权限可长期保持。
+  identity: "Mimikko network technology co.LTD. (7M4S44CE7D)"
+  extendInfo:
+    NSDownloadsFolderUsageDescription: Umbra 在你授权时读写下载目录以保存/读取文件。
+    NSDocumentsFolderUsageDescription: Umbra 在你授权时读写文稿目录以保存/读取文件。
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+# 公证暂关（本机自用，签名即可让权限稳定）。需要分发给他人时再开 afterSign 公证。
+# afterSign: build/notarize.js
+win:
+  target:
+    - nsis
+  executableName: Umbra
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-${version}-${arch}-setup.${ext}

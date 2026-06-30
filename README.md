@@ -65,6 +65,21 @@ npm run build:electron # 单独打包主进程 → dist-electron/
 渲染层在 `src/`（`main.ts` 界面 + `chat.ts` 聊天 + `server.ts` 连接 + `device-transport.ts` 设备连接 + `desktop.ts` 桥接）；
 任务执行器在 `electron/`（主进程 Node，esbuild 打包成 `dist-electron/*.cjs`）。
 
+## 打包（macOS，签名 .app）
+
+computer-use 的 `click`/`type` 需要 macOS「辅助功能」权限，而开发模式（`npm run electron` 跑裸 Electron）签名不稳定、权限对不上。**打包成用 Developer ID 签名的 `.app` 后，权限才会稳定保持**。
+
+配置：`electron-builder.yml`（appId `xyz.tingyusha.umbra`，复用 Developer ID 证书 `7M4S44CE7D`）+ `build/entitlements.mac.plist`（含 `disable-library-validation`，hardenedRuntime 下加载 nut.js 原生模块必需）。公证默认关（本机自用签名即可；分发他人再开）。
+
+```bash
+cd UmbraPC
+npm install                 # 装 electron-builder
+npm run pack:mac            # 快速产出签名 .app（release/mac-*/Umbra.app）→ 拖到 /Applications 运行
+npm run dist:mac            # 产出 dmg（分发用）
+```
+
+首次运行签名版 `Umbra.app` 后，到「系统设置 → 隐私与安全性 → 辅助功能 / 屏幕录制」给 **Umbra** 授权（不再是 "Electron"），之后权限稳定保持。
+
 ## 目录结构（现状）
 
 ```
