@@ -53,7 +53,8 @@ function defaults(configDir: string): UmbraConfig {
     confirmTimeout: Number(process.env.UMBRA_CONFIRM_TIMEOUT || 300),
     providersFile: process.env.UMBRA_PROVIDERS_FILE || path.join(configDir, "providers.json"),
     computerUseEnabled: envBool("UMBRA_COMPUTER_USE", false),
-    computerConfirm: envBool("UMBRA_COMPUTER_CONFIRM", true),
+    // 默认关：operate 在服务端做"方案确认 + 红线确认"，不在设备端逐个动作确认（太吵）。
+    computerConfirm: envBool("UMBRA_COMPUTER_CONFIRM", false),
     computerBlacklist: [
       "terminal", "iterm", "console",
       "keychain", "钥匙串", "1password", "bitwarden", "lastpass",

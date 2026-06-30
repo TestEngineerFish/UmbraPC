@@ -103,12 +103,20 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
 
   // 点击/输入/按键/滚动需要辅助功能权限。
   await requireAccessibility();
-  const { mouse, keyboard, Point, Button, Key } = await loadNut();
+  const { mouse, keyboard, Point, Button, Key, screen } = await loadNut();
 
   if (skill === "click") {
-    const x = Number(params.x);
-    const y = Number(params.y);
-    if (Number.isNaN(x) || Number.isNaN(y)) throw new Error("click 需要 x,y");
+    let x = Number(params.x);
+    let y = Number(params.y);
+    // 归一化坐标 nx/ny(0-1000，相对屏幕)→ 逻辑坐标。视觉模型输出的是归一化坐标，
+    // 这样可避开 Retina 像素与逻辑点的缩放问题。
+    if ((Number.isNaN(x) || Number.isNaN(y)) && params.nx != null && params.ny != null) {
+      const w = await screen.width();
+      const h = await screen.height();
+      x = Math.round((w * Number(params.nx)) / 1000);
+      y = Math.round((h * Number(params.ny)) / 1000);
+    }
+    if (Number.isNaN(x) || Number.isNaN(y)) throw new Error("click 需要 x,y 或 nx,ny(0-1000)");
     const btn = String(params.button || "left").toLowerCase();
     await mouse.setPosition(new Point(x, y));
     await mouse.click(btn === "right" ? Button.RIGHT : btn === "middle" ? Button.MIDDLE : Button.LEFT);

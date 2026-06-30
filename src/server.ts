@@ -209,6 +209,11 @@ class ChatConnection {
   sendConfirm(taskId: string, approved: boolean): boolean {
     return this.rawSend({ type: "job_confirm_response", task_id: taskId, approved });
   }
+
+  // 紧急停止：让服务端中止正在运行的 operate 循环。
+  sendOperateStop(): boolean {
+    return this.rawSend({ type: "operate_stop" });
+  }
 }
 
 export const chatConn = new ChatConnection();

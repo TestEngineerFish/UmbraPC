@@ -631,7 +631,7 @@ function onClick(e: MouseEvent): void {
     case "tasks-refresh": manualRefresh(); break;
     case "rt-toggle": state.rtRunning = !state.rtRunning; render(); break;
     case "cu-toggle": toggleComputerUse(); break;
-    case "cu-stop": desktop.computerStop(); break;
+    case "cu-stop": desktop.computerStop(); chatConn.sendOperateStop(); break;
     case "perm-screen": desktop.openPrivacy("screen"); break;
     case "perm-accessibility": desktop.openPrivacy("accessibility"); break;
     case "edit-providers": desktop.openProvidersFile(); break;
