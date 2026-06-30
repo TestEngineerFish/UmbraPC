@@ -3,12 +3,38 @@
 // 主进程只做能力探测与任务执行，经 IPC 与渲染层桥接。
 import { app, BrowserWindow, ipcMain, shell, systemPreferences } from "electron";
 import * as path from "node:path";
+import { promises as fs } from "node:fs";
 import { ConfigStore, UmbraConfig } from "./core/config";
 import { TaskExecutor } from "./core/device-client";
 import { requestStop } from "./core/computer";
 import { initRpc } from "./core/rpc";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
+
+// providers.json 模板（首次编辑时写入，含一个 ffmpeg 示例说明格式；JSON 不支持注释）。
+const PROVIDERS_TEMPLATE = JSON.stringify(
+  {
+    providers: [
+      {
+        provider: "ffmpeg",
+        display_name: "FFmpeg",
+        detect: "ffmpeg",
+        version_cmd: ["ffmpeg", "-version"],
+        skills: {
+          to_gif: {
+            description: "把视频转成 GIF",
+            params: { input: "输入视频路径", output: "输出 GIF 路径" },
+            command: ["ffmpeg", "-y", "-i", "{input}", "{output}"],
+            timeout: 600,
+            confirm: false,
+          },
+        },
+      },
+    ],
+  },
+  null,
+  2,
+);
 
 let store: ConfigStore;
 let executor: TaskExecutor;
@@ -101,6 +127,18 @@ function registerIpc(): void {
   // computer-use 紧急停止（请求中止 operate 循环）。
   ipcMain.handle("umbra:computerStop", () => {
     requestStop();
+  });
+  // 打开 providers.json 供用户编辑（不存在则写入带示例的模板）。改完下次设备重连即生效。
+  ipcMain.handle("umbra:openProvidersFile", async () => {
+    const file = store.get().providersFile;
+    try {
+      await fs.access(file);
+    } catch {
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, PROVIDERS_TEMPLATE, "utf-8");
+    }
+    await shell.openPath(file);
+    return file;
   });
   // 打开系统设置 → 隐私与安全性 → 对应面板。
   ipcMain.handle("umbra:openPrivacy", (_e, target: string) => {

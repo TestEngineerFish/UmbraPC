@@ -31,6 +31,7 @@ interface UmbraBridge {
   getPermissions(): Promise<{ accessibility: boolean; screen: string }>;
   openPrivacy(target: string): Promise<unknown>;
   computerStop(): Promise<unknown>;
+  openProvidersFile(): Promise<string>;
   onRpc(cb: (msg: { id: string; method: string; args: unknown }) => void): () => void;
   sendRpcResult(id: string, ok: boolean, result: unknown, error?: string): void;
 }
@@ -69,6 +70,11 @@ export function openPrivacy(target: string): void {
 // computer-use 紧急停止。
 export function computerStop(): void {
   if (isDesktop()) window.umbra!.computerStop();
+}
+
+// 打开 providers.json 供用户编辑（系统默认编辑器）。
+export function openProvidersFile(): void {
+  if (isDesktop()) window.umbra!.openProvidersFile();
 }
 
 // 启动：同步主进程配置（让聊天与设备指向同一服务端/设备名），再启动设备传输层。

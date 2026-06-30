@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Umbra 私人 AI 助手 · PC 桌面客户端（Electron + Vite + TypeScript）",
   "private": true,
+  "author": "Umbra",
   "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "vite",

@@ -330,8 +330,9 @@ function abilitiesReal(): string {
     : `<div style="grid-column:1 / -1;color:var(--muted);padding:30px;text-align:center;">设备引擎未就绪或暂无 Provider（状态：${ds.status}）。</div>`;
   return `
   <div style="height:100%;overflow-y:auto;padding:18px 22px;">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;"><h1 style="margin:0;font-size:16px;font-weight:600;">能力</h1><span style="font-size:12px;color:var(--muted);">本机真实能力 · 设备 ${esc(ds.deviceName)}</span></div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px;"><div style="display:flex;align-items:baseline;gap:10px;"><h1 style="margin:0;font-size:16px;font-weight:600;">能力</h1><span style="font-size:12px;color:var(--muted);">本机真实能力 · 设备 ${esc(ds.deviceName)}</span></div><button data-act="edit-providers" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;flex:none;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"></path><path d="M18.5 2.5a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"></path></svg>添加/编辑程序</button></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:13px;">${cards}</div>
+    <div style="margin-top:14px;font-size:11.5px;color:var(--muted);">在 providers.json 里登记本机可控程序与技能（无需写代码）。改完保存后，到「设置」点「保存并重连」让设备重新读取。</div>
   </div>`;
 }
 
@@ -488,7 +489,7 @@ function settingsScreen(): string {
       </div></div>
       ${permissionsCard(cuTrack)}
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">能力配置</div>
-        <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">providers.json</label><span style="flex:1;font-size:12px;font-family:ui-monospace,Menlo,monospace;color:var(--muted);">~/.umbra/providers.json</span><button style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">编辑</button></div>
+        <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">providers.json</label><span style="flex:1;font-size:12px;font-family:ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all;">${esc(desktop.getDesktopConfig()?.providersFile || "（仅桌面应用可用）")}</span><button data-act="edit-providers" style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">编辑</button></div>
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">coding 权限</label><div style="display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;"><button data-act="mode-0" style="${seg(state.codingMode === 0)}">只生成</button><button data-act="mode-1" style="${seg(state.codingMode === 1)}">执行前确认</button><button data-act="mode-2" style="${seg(state.codingMode === 2, true)}">直接执行</button></div></div>
       </div>
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;"><div style="flex:1;"><div style="font-weight:600;">关于</div><div style="font-size:12px;color:var(--muted);margin-top:3px;">Umbra 桌面客户端 · v0.1.0 (electron)</div></div><button style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">检查更新</button></div>
@@ -633,6 +634,7 @@ function onClick(e: MouseEvent): void {
     case "cu-stop": desktop.computerStop(); break;
     case "perm-screen": desktop.openPrivacy("screen"); break;
     case "perm-accessibility": desktop.openPrivacy("accessibility"); break;
+    case "edit-providers": desktop.openProvidersFile(); break;
     case "mode-0": setCodingMode(0); break;
     case "mode-1": setCodingMode(1); break;
     case "mode-2": setCodingMode(2); break;

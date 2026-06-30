@@ -347,6 +347,8 @@ export function mount(el: HTMLElement): void {
   el.querySelector("#newsess")!.addEventListener("click", newSession);
   const ta = el.querySelector("#draft") as HTMLTextAreaElement;
   ta.addEventListener("keydown", (e) => {
+    // 输入法选词/组字过程中按回车是确认候选，不应发送（isComposing / keyCode 229）。
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   });
   const msgsEl = el.querySelector("#umsgs") as HTMLElement;

@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld("umbra", {
   openPrivacy: (target: string) => ipcRenderer.invoke("umbra:openPrivacy", target),
   // computer-use 紧急停止
   computerStop: () => ipcRenderer.invoke("umbra:computerStop"),
+  // 打开 providers.json 供编辑
+  openProvidersFile: () => ipcRenderer.invoke("umbra:openProvidersFile"),
 
   // 主进程 RPC：渲染层替主进程做需要 Chromium 网络的活（如上传）
   onRpc: (cb: (msg: { id: string; method: string; args: unknown }) => void) => {
