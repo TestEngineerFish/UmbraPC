@@ -4,6 +4,7 @@
 import { app, BrowserWindow, ipcMain, shell, systemPreferences } from "electron";
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
+import { execFile } from "node:child_process";
 import { ConfigStore, UmbraConfig } from "./core/config";
 import { TaskExecutor } from "./core/device-client";
 import { requestStop } from "./core/computer";
@@ -38,6 +39,27 @@ const PROVIDERS_TEMPLATE = JSON.stringify(
 
 let store: ConfigStore;
 let executor: TaskExecutor;
+
+// 打包后的 .app 只有极简 PATH（看不到 homebrew/nvm/npm 全局），导致 which(claude/codex/ffmpeg) 找不到。
+// 读取用户登录 shell 的真实 PATH 合并进来，并兜底补常见目录，让 Provider 探测正常。
+async function fixPath(): Promise<void> {
+  if (process.platform === "win32") return;
+  try {
+    const sh = process.env.SHELL || "/bin/zsh";
+    const out = await new Promise<string>((resolve) => {
+      execFile(sh, ["-ilc", 'echo -n "__UMBRA_PATH__:$PATH"'], { timeout: 5000 }, (_e, stdout) => resolve(stdout || ""));
+    });
+    const m = out.match(/__UMBRA_PATH__:(.*)/);
+    if (m && m[1].trim()) process.env.PATH = m[1].trim();
+  } catch {
+    /* 用兜底目录 */
+  }
+  const home = process.env.HOME || "";
+  const extra = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", `${home}/.local/bin`, `${home}/.npm-global/bin`, `${home}/.bun/bin`];
+  const cur = (process.env.PATH || "").split(":").filter(Boolean);
+  for (const p of extra) if (p && !cur.includes(p)) cur.push(p);
+  process.env.PATH = cur.join(":");
+}
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -96,7 +118,20 @@ function publicConfig(c: UmbraConfig) {
     providersFile: c.providersFile,
     computerUseEnabled: c.computerUseEnabled,
     computerConfirm: c.computerConfirm,
+    disabledProviders: c.disabledProviders || [],
   };
+}
+
+// 读取 providers.json 里的自定义程序（统一成数组）。
+async function readProvidersConfig(): Promise<any[]> {
+  try {
+    const raw = await fs.readFile(store.get().providersFile, "utf-8");
+    const data = JSON.parse(raw);
+    const arr = Array.isArray(data) ? data : data?.providers || [];
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
 }
 
 function registerIpc(): void {
@@ -140,6 +175,19 @@ function registerIpc(): void {
     await shell.openPath(file);
     return file;
   });
+  // 能力页：启用/停用某程序（写 disabledProviders）。
+  ipcMain.handle("umbra:setDisabled", async (_e, list: string[]) => {
+    await store.save({ disabledProviders: Array.isArray(list) ? list : [] });
+    return publicConfig(store.get());
+  });
+  // 能力页：读取/保存自定义程序（providers.json）。
+  ipcMain.handle("umbra:getProvidersConfig", () => readProvidersConfig());
+  ipcMain.handle("umbra:saveProvidersConfig", async (_e, providers: any[]) => {
+    const file = store.get().providersFile;
+    await fs.mkdir(path.dirname(file), { recursive: true });
+    await fs.writeFile(file, JSON.stringify({ providers: Array.isArray(providers) ? providers : [] }, null, 2), "utf-8");
+    return true;
+  });
   // 打开系统设置 → 隐私与安全性 → 对应面板。
   ipcMain.handle("umbra:openPrivacy", (_e, target: string) => {
     const urls: Record<string, string> = {
@@ -151,6 +199,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  await fixPath(); // 先补全 PATH，之后 Provider 探测(which)才能找到 claude/codex/ffmpeg
   store = new ConfigStore(app.getPath("userData"));
   await store.load();
   executor = new TaskExecutor(store);

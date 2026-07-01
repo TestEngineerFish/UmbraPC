@@ -16,6 +16,16 @@ interface PublicConfig {
   providersFile: string;
   computerUseEnabled: boolean;
   computerConfirm: boolean;
+  disabledProviders: string[];
+}
+
+// providers.json 里的一条自定义程序。
+export interface CustomProviderCfg {
+  provider: string;
+  display_name?: string;
+  detect?: string;
+  version_cmd?: string[];
+  skills?: Record<string, { description?: string; params?: Record<string, string>; command?: string[]; timeout?: number; confirm?: boolean }>;
 }
 interface UmbraBridge {
   isDesktop: boolean;
@@ -32,6 +42,9 @@ interface UmbraBridge {
   openPrivacy(target: string): Promise<unknown>;
   computerStop(): Promise<unknown>;
   openProvidersFile(): Promise<string>;
+  setDisabled(list: string[]): Promise<PublicConfig>;
+  getProvidersConfig(): Promise<CustomProviderCfg[]>;
+  saveProvidersConfig(providers: CustomProviderCfg[]): Promise<boolean>;
   onRpc(cb: (msg: { id: string; method: string; args: unknown }) => void): () => void;
   sendRpcResult(id: string, ok: boolean, result: unknown, error?: string): void;
 }
@@ -48,11 +61,36 @@ declare global {
 
 let config: PublicConfig | null = null;
 let perms: Permissions = { accessibility: false, screen: "not-determined" };
+let customProviders: CustomProviderCfg[] = [];
 
 export const isDesktop = (): boolean => !!window.umbra?.isDesktop;
 export const getDeviceState = (): DeviceState | null => (isDesktop() ? transport.getState() : null);
 export const getDeviceLogs = (): string[] => transport.getLogs();
 export const getDesktopConfig = (): PublicConfig | null => config;
+export const getCustomProviders = (): CustomProviderCfg[] => customProviders;
+export const isProviderDisabled = (name: string): boolean => !!config?.disabledProviders?.includes(name);
+
+// 切换某程序启用/停用，然后让设备重新注册（registry 据此增删可用性）。
+export async function setProviderEnabled(name: string, enabled: boolean): Promise<void> {
+  if (!isDesktop()) return;
+  const cur = new Set(config?.disabledProviders || []);
+  if (enabled) cur.delete(name);
+  else cur.add(name);
+  config = await window.umbra!.setDisabled([...cur]);
+  transport.reconnect();
+}
+
+// 读取 / 保存自定义程序（providers.json），保存后让设备重新读取。
+export async function reloadCustomProviders(): Promise<CustomProviderCfg[]> {
+  if (isDesktop()) customProviders = await window.umbra!.getProvidersConfig();
+  return customProviders;
+}
+export async function saveCustomProviders(list: CustomProviderCfg[]): Promise<void> {
+  if (!isDesktop()) return;
+  await window.umbra!.saveProvidersConfig(list);
+  customProviders = list;
+  transport.reconnect();
+}
 export const getPermissions = (): Permissions => perms;
 
 // 刷新 macOS 权限状态缓存。
@@ -86,6 +124,7 @@ export async function initDesktop(onUpdate: (kind: string) => void): Promise<voi
   setDeviceName(config.deviceName);
   chatConn.reconnect();
   await refreshPermissions().catch(() => {});
+  await reloadCustomProviders().catch(() => {});
   transport.start(onUpdate);
 }
 

@@ -22,6 +22,10 @@ contextBridge.exposeInMainWorld("umbra", {
   computerStop: () => ipcRenderer.invoke("umbra:computerStop"),
   // 打开 providers.json 供编辑
   openProvidersFile: () => ipcRenderer.invoke("umbra:openProvidersFile"),
+  // 能力页：启用/停用程序 + 自定义程序读写
+  setDisabled: (list: string[]) => ipcRenderer.invoke("umbra:setDisabled", list),
+  getProvidersConfig: () => ipcRenderer.invoke("umbra:getProvidersConfig"),
+  saveProvidersConfig: (providers: unknown[]) => ipcRenderer.invoke("umbra:saveProvidersConfig", providers),
 
   // 主进程 RPC：渲染层替主进程做需要 Chromium 网络的活（如上传）
   onRpc: (cb: (msg: { id: string; method: string; args: unknown }) => void) => {

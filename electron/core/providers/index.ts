@@ -13,5 +13,13 @@ export async function buildRegistry(cfg: UmbraConfig): Promise<Registry> {
   registerCoding(r, cfg);
   registerComputer(r, cfg);
   await registerConfigProviders(r, cfg);
+  // 用户在能力页手动停用的程序：标记为不可用（仍上报以便在页面上看到并可重新开启）。
+  const disabled = new Set(cfg.disabledProviders || []);
+  for (const m of r.providers()) {
+    if (disabled.has(m.provider)) {
+      m.available = false;
+      m.unavailable_reason = "已停用（在能力页开启）";
+    }
+  }
   return r;
 }

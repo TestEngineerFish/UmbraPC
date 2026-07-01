@@ -23,6 +23,7 @@ export interface UmbraConfig {
   computerUseEnabled: boolean;   // 总开关：关则 computer Provider 不注册、不可用
   computerConfirm: boolean;      // 关键动作(type/key/open_app)执行前需用户确认
   computerBlacklist: string[];   // 禁止操作的应用名（子串匹配，前台应用命中即拒绝）
+  disabledProviders: string[];   // 用户在能力页手动停用的程序名（即使安装/可用也不上报、不可执行）
 }
 
 const envBool = (k: string, d: boolean) => {
@@ -62,6 +63,7 @@ function defaults(configDir: string): UmbraConfig {
       "alipay", "支付宝", "wechat", "微信", "bank", "银行", "wallet", "钱包",
       "活动监视器", "activity monitor",
     ],
+    disabledProviders: [],
   };
 }
 

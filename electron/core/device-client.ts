@@ -49,6 +49,9 @@ export class TaskExecutor extends EventEmitter {
 
   // 执行一个任务，返回结果或抛错。进度/确认请求通过事件发给渲染层转发到服务端。
   async runTask(taskId: string, provider: string, skill: string, params: Record<string, unknown>): Promise<unknown> {
+    if ((this.store.get().disabledProviders || []).includes(provider)) {
+      throw new Error(`程序「${provider}」已被停用（可在能力页开启）`);
+    }
     const r = this.registry || (await this.refreshRegistry());
     const handler = r.getHandler(provider);
     if (!handler) throw new Error(`本设备没有该程序：${provider}`);
