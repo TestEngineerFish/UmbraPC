@@ -106,7 +106,9 @@ function connect(): void {
     return;
   }
   ws = sock;
+  // 守卫：只有仍是"当前连接"的回调才生效，避免 connect/reconnect 抖动时旧连接误触发重连（重复注册）。
   sock.onopen = async () => {
+    if (ws !== sock) return;
     try {
       const info = await window.umbra!.getRegisterInfo();
       deviceId = info.deviceId;
@@ -125,8 +127,12 @@ function connect(): void {
       log(`获取注册信息失败：${String(e)}`);
     }
   };
-  sock.onmessage = (ev) => onMessage(String(ev.data));
+  sock.onmessage = (ev) => {
+    if (ws !== sock) return;
+    onMessage(String(ev.data));
+  };
   sock.onclose = () => {
+    if (ws !== sock) return; // 不是当前连接 → 不重连
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     setStatus("offline");
     scheduleReconnect();

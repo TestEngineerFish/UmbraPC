@@ -150,11 +150,15 @@ class ChatConnection {
       return;
     }
     this.ws = ws;
+    // 守卫：只有仍是"当前连接"的回调才生效，避免 connect/reconnect 抖动时旧连接的 close
+    // 回调误触发重连（会导致服务端一度存在多个 /ws/chat 连接、把自己的消息当"其它端"广播回来 → 消息重复）。
     ws.addEventListener("open", () => {
+      if (this.ws !== ws) return;
       this.backoff = 1000;
       this.setStatus("online");
     });
     ws.addEventListener("message", (e) => {
+      if (this.ws !== ws) return;
       let msg: any;
       try {
         msg = JSON.parse(e.data);
@@ -164,11 +168,18 @@ class ChatConnection {
       this.handlers.onMessage?.(msg);
     });
     ws.addEventListener("close", () => {
+      if (this.ws !== ws) return; // 不是当前连接（被 connect/reconnect 主动替换）→ 不重连
       this.ws = null;
       this.setStatus("offline");
       this.scheduleReconnect();
     });
-    ws.addEventListener("error", () => ws.close());
+    ws.addEventListener("error", () => {
+      try {
+        ws.close();
+      } catch {
+        /* ignore */
+      }
+    });
   }
 
   private scheduleReconnect(): void {
@@ -185,12 +196,13 @@ class ChatConnection {
   close(): void {
     clearTimeout(this.timer);
     if (this.ws) {
+      const old = this.ws;
+      this.ws = null; // 先置空，让 old 的 close 回调因守卫失配而不触发重连
       try {
-        this.ws.close();
+        old.close();
       } catch {
         /* ignore */
       }
-      this.ws = null;
     }
   }
 
