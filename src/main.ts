@@ -376,16 +376,33 @@ function realtimeReal(): string {
     ? `<div style="font-size:12px;color:var(--orange-text);display:flex;align-items:center;gap:6px;"><span style="width:7px;height:7px;border-radius:999px;background:var(--orange);animation:umblink 1.4s infinite;"></span>正在执行电脑操作…</div>`
     : `<div style="font-size:13px;color:var(--muted);">当前没有进行中的电脑操作。v0 支持原子动作（点击/输入/按键/滚动/打开应用/截图）；operate 自主操作尚未接入决策引擎。</div>`;
 
+  const skillLabel = (s: string): string =>
+    ({ click: "点击", type: "输入", key: "按键", scroll: "滚动", open_app: "打开应用", screenshot: "截图", operate: "自主操作" } as Record<string, string>)[s] || s;
+  const statusColor = (st: string): string => (st === "error" ? "var(--danger)" : st === "ok" ? "var(--success)" : "var(--orange)");
+  const statusText = (st: string): string => (st === "error" ? "失败" : st === "ok" ? "完成" : "进行中");
+
   const history = acts.length
     ? acts
-        .map((t, i) => `<div style="display:flex;gap:10px;padding:8px 13px;${i < acts.length - 1 ? "border-bottom:1px solid var(--border);" : ""}${t.status === "running" ? "background:var(--orange-soft);" : ""}"><span style="color:var(--muted);width:54px;flex:none;">${t.skill}</span><span style="color:${t.status === "error" ? "var(--danger)" : t.status === "ok" ? "var(--success)" : "var(--orange-text)"};flex:1;">${esc(t.message)}</span><span style="color:var(--muted);flex:none;">${new Date(t.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span></div>`)
+        .map(
+          (t, i) => `<div style="padding:10px 14px;${i < acts.length - 1 ? "border-bottom:1px solid var(--border);" : ""}${t.status === "running" ? "background:var(--orange-soft);" : ""}">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+          <span style="width:7px;height:7px;border-radius:999px;background:${statusColor(t.status)};flex:none;"></span>
+          <span style="font-size:13px;font-weight:600;">${skillLabel(t.skill)}</span>
+          <span style="font-size:10.5px;color:var(--muted);font-family:ui-monospace,Menlo,monospace;">${esc(t.skill)}</span>
+          <span style="flex:1;"></span>
+          <span style="font-size:11px;color:${statusColor(t.status)};flex:none;">${statusText(t.status)}</span>
+          <span style="font-size:11px;color:var(--muted);flex:none;">${new Date(t.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>
+        </div>
+        <div style="font-size:12.5px;color:${t.status === "error" ? "var(--danger)" : "var(--text)"};line-height:1.55;word-break:break-word;padding-left:15px;">${esc(t.message)}</div>
+      </div>`,
+        )
         .join("")
-    : `<div style="padding:13px;color:var(--muted);font-size:12.5px;">暂无动作记录</div>`;
+    : `<div style="padding:16px;color:var(--muted);font-size:12.5px;">暂无动作记录</div>`;
 
   return `<div style="height:100%;overflow-y:auto;padding:18px 22px;">${head}${permWarn}
     <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:18px;">${idleHint}</div>
-    <div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:9px;">动作历史</div>
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;font-family:ui-monospace,Menlo,monospace;font-size:12px;">${history}</div>
+    <div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:9px;">动作历史（最新在上）</div>
+    <div style="background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;">${history}</div>
   </div>`;
 }
 

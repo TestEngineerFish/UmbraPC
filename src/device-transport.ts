@@ -238,12 +238,14 @@ function flushPending(): void {
 function recordTask(taskId: string, st: string, message: string, provider?: string, skill?: string): void {
   const idx = recentTasks.findIndex((t) => t.taskId === taskId);
   const prev = idx >= 0 ? recentTasks[idx] : undefined;
+  // 成功时若传入的是通用"完成"，保留上一条更具体的消息（如"点击 (x,y)"），避免详情被覆盖。
+  const keepDetail = st === "ok" && message === "完成" && prev && prev.message && prev.message !== "执行中…";
   const t: TaskLog = {
     taskId,
     provider: provider ?? prev?.provider ?? "",
     skill: skill ?? prev?.skill ?? "",
     status: st,
-    message,
+    message: keepDetail ? prev!.message : message,
     ts: Date.now(),
   };
   if (idx >= 0) recentTasks[idx] = t;
