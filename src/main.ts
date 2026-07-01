@@ -27,6 +27,7 @@ const state = {
   provModal: {
     open: false,
     original: null as string | null, // 正在编辑的程序名（null=新增）
+    light: false, // 轻量覆盖模式（内置程序如 Claude Code/Codex：只改显示名/检测命令，不编辑技能命令）
     provider: "",
     display_name: "",
     detect: "",
@@ -322,15 +323,18 @@ const PROV_ICON = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" s
 // 单张能力卡：状态(检测/停用) + 启用开关；自定义程序additionally可编辑/删除。
 function abilityCard(m: desktop.ProviderManifest): string {
   const enabled = !desktop.isProviderDisabled(m.provider);
-  const isCustom = desktop.getCustomProviders().some((p) => p.provider === m.provider);
+  const cfgEntry = desktop.getCustomProviders().find((p) => p.provider === m.provider);
+  // 真·自定义程序（可删除、标注“自定义”）：providers.json 里含带命令的技能。仅“轻量覆盖”内置程序的条目不算。
+  const isCustom = !!cfgEntry && Object.values(cfgEntry.skills || {}).some((s) => (s.command?.length ?? 0) > 0);
+  const canEdit = m.kind === "program"; // Claude Code / Codex / 自定义程序可编辑；系统内置不可编辑
   const status = !enabled ? "已停用" : m.available ? (m.version ? `v${m.version}` : m.kind === "system" ? "系统内置" : "已就绪") : m.unavailable_reason || "不可用";
   const track = `width:36px;height:21px;border-radius:999px;border:none;cursor:pointer;padding:2px;display:flex;justify-content:${enabled ? "flex-end" : "flex-start"};background:${enabled ? "var(--orange)" : "var(--border)"};flex:none;transition:background .15s;`;
   const skills = Object.keys(m.skills || {})
     .map((s) => `<span style="padding:3px 9px;border-radius:999px;background:var(--chip);font-size:11.5px;color:var(--muted);font-family:ui-monospace,Menlo,monospace;">${esc(s)}</span>`)
     .join("");
-  const custBtns = isCustom
-    ? `<span style="flex:1;"></span><button data-act="prov-edit" data-prov="${esc(m.provider)}" style="padding:3px 10px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:6px;font-size:11.5px;cursor:pointer;">编辑</button><button data-act="prov-del" data-prov="${esc(m.provider)}" style="padding:3px 10px;border:1px solid var(--danger);background:transparent;color:var(--danger);border-radius:6px;font-size:11.5px;cursor:pointer;">删除</button>`
-    : "";
+  const editBtn = `<button data-act="prov-edit" data-prov="${esc(m.provider)}" style="padding:3px 10px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:6px;font-size:11.5px;cursor:pointer;">编辑</button>`;
+  const delBtn = `<button data-act="prov-del" data-prov="${esc(m.provider)}" style="padding:3px 10px;border:1px solid var(--danger);background:transparent;color:var(--danger);border-radius:6px;font-size:11.5px;cursor:pointer;">删除</button>`;
+  const custBtns = canEdit ? `<span style="flex:1;"></span>${editBtn}${isCustom ? delBtn : ""}` : "";
   return `<div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:15px;${enabled && !m.available ? "opacity:.72;" : ""}">
     <div style="display:flex;align-items:center;gap:11px;margin-bottom:12px;">
       <span style="width:34px;height:34px;border-radius:9px;background:var(--orange-soft);color:var(--orange-text);display:flex;align-items:center;justify-content:center;flex:none;">${PROV_ICON}</span>
@@ -376,15 +380,16 @@ function provModalHtml(): string {
     <div style="position:absolute;top:0;right:0;bottom:0;width:460px;background:var(--card);border-left:1px solid var(--border);z-index:31;display:flex;flex-direction:column;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:15px 20px;border-bottom:1px solid var(--border);"><div style="font-weight:600;font-size:15px;">${pm.original ? "编辑程序" : "新增程序"}</div><button data-act="pm-cancel" style="border:none;background:transparent;color:var(--muted);cursor:pointer;font-size:20px;line-height:1;">×</button></div>
       <div style="flex:1;overflow-y:auto;padding:18px 20px;">
+        ${pm.light ? `<div style="font-size:12px;color:var(--muted);background:var(--chip);border-radius:8px;padding:9px 11px;margin-bottom:14px;line-height:1.5;">内置程序：仅可覆盖显示名与检测命令，执行仍走内置逻辑（引擎选择 / 隔离目录等），因此不提供技能命令编辑。</div>` : ""}
         <label style="font-size:12px;color:var(--muted);">程序标识（provider，英文小写）</label>
         <input id="pm-provider" placeholder="如 ffmpeg" value="${esc(pm.provider)}" ${pm.original ? "readonly" : ""} style="${inp}margin:5px 0 12px;${pm.original ? "opacity:.6;" : ""}">
         <label style="font-size:12px;color:var(--muted);">显示名</label>
         <input id="pm-display" placeholder="如 FFmpeg" value="${esc(pm.display_name)}" style="${inp}margin:5px 0 12px;">
         <label style="font-size:12px;color:var(--muted);">检测命令（可选，用 which 判断是否安装，留空视为始终可用）</label>
         <input id="pm-detect" placeholder="如 ffmpeg" value="${esc(pm.detect)}" style="${inp}margin:5px 0 14px;">
-        <div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:8px;">技能（命令用 {参数名} 占位，AI 只能填参数、不能改命令本身）</div>
+        ${pm.light ? "" : `<div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:8px;">技能（命令用 {参数名} 占位，AI 只能填参数、不能改命令本身）</div>
         ${skillsHtml}
-        <button data-act="pm-add-skill" style="width:100%;padding:8px;border:1px dashed var(--border);background:transparent;color:var(--muted);border-radius:8px;font-size:12.5px;cursor:pointer;">+ 添加技能</button>
+        <button data-act="pm-add-skill" style="width:100%;padding:8px;border:1px dashed var(--border);background:transparent;color:var(--muted);border-radius:8px;font-size:12.5px;cursor:pointer;">+ 添加技能</button>`}
       </div>
       <div style="padding:14px 20px;border-top:1px solid var(--border);display:flex;gap:10px;justify-content:flex-end;">
         <button data-act="pm-cancel" style="padding:8px 16px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;">取消</button>
@@ -410,29 +415,43 @@ function captureProvModal(): void {
 }
 
 function openProvAdd(): void {
-  state.provModal = { open: true, original: null, provider: "", display_name: "", detect: "", skills: [{ skill: "", description: "", command: "", confirm: false }] };
+  state.provModal = { open: true, light: false, original: null, provider: "", display_name: "", detect: "", skills: [{ skill: "", description: "", command: "", confirm: false }] };
   render();
 }
 function openProvEdit(prov: string): void {
   const e = desktop.getCustomProviders().find((p) => p.provider === prov);
-  if (!e) return;
-  const skills = Object.entries(e.skills || {}).map(([k, v]) => ({ skill: k, description: v.description || "", command: (v.command || []).join(" "), confirm: !!v.confirm }));
-  state.provModal = { open: true, original: prov, provider: e.provider, display_name: e.display_name || "", detect: e.detect || "", skills: skills.length ? skills : [{ skill: "", description: "", command: "", confirm: false }] };
+  const hasCmd = !!e && Object.values(e.skills || {}).some((s) => (s.command?.length ?? 0) > 0);
+  if (e && hasCmd) {
+    // 真·自定义程序：完整编辑（含技能命令）
+    const skills = Object.entries(e.skills || {}).map(([k, v]) => ({ skill: k, description: v.description || "", command: (v.command || []).join(" "), confirm: !!v.confirm }));
+    state.provModal = { open: true, light: false, original: prov, provider: e.provider, display_name: e.display_name || "", detect: e.detect || "", skills: skills.length ? skills : [{ skill: "", description: "", command: "", confirm: false }] };
+  } else {
+    // 内置程序（Claude Code / Codex）：轻量覆盖，只改显示名 / 检测命令，执行仍走内置逻辑。
+    const m = desktop.getDeviceState()?.providers.find((p) => p.provider === prov);
+    state.provModal = { open: true, light: true, original: prov, provider: prov, display_name: e?.display_name || m?.display_name || "", detect: e?.detect || "", skills: [] };
+  }
   render();
 }
 function saveProvModal(): void {
   captureProvModal();
   const pm = state.provModal;
   const provider = pm.provider.trim();
-  const skills: Record<string, { description: string; params: Record<string, string>; command: string[]; confirm: boolean }> = {};
-  for (const s of pm.skills) {
-    const name = s.skill.trim();
-    const cmd = s.command.trim();
-    if (name && cmd) skills[name] = { description: s.description.trim(), params: {}, command: cmd.split(/\s+/), confirm: !!s.confirm };
-  }
-  if (!provider || Object.keys(skills).length === 0) return; // 不合法：需程序标识 + 至少一个含命令的技能
-  const entry: desktop.CustomProviderCfg = { provider, display_name: pm.display_name.trim() || undefined, detect: pm.detect.trim() || undefined, skills };
+  if (!provider) return;
   const list = [...desktop.getCustomProviders()];
+  let entry: desktop.CustomProviderCfg;
+  if (pm.light) {
+    // 轻量覆盖：只写 display_name / detect（无技能命令 → 后端识别为覆盖内置 manifest，不替换执行器）。
+    entry = { provider, display_name: pm.display_name.trim() || undefined, detect: pm.detect.trim() || undefined };
+  } else {
+    const skills: Record<string, { description: string; params: Record<string, string>; command: string[]; confirm: boolean }> = {};
+    for (const s of pm.skills) {
+      const name = s.skill.trim();
+      const cmd = s.command.trim();
+      if (name && cmd) skills[name] = { description: s.description.trim(), params: {}, command: cmd.split(/\s+/), confirm: !!s.confirm };
+    }
+    if (Object.keys(skills).length === 0) return; // 自定义程序需至少一个含命令的技能
+    entry = { provider, display_name: pm.display_name.trim() || undefined, detect: pm.detect.trim() || undefined, skills };
+  }
   const idx = list.findIndex((p) => p.provider === (pm.original || provider));
   if (idx >= 0) list[idx] = entry;
   else list.push(entry);

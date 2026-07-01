@@ -27,6 +27,17 @@ export class Registry {
     this.handlers.set(manifest.provider, handler);
   }
 
+  has(provider: string): boolean {
+    return this.manifests.has(provider);
+  }
+
+  // 轻量覆盖：只改内置 Provider 的 manifest 字段（显示名/可用性/版本），保留原 handler 与技能。
+  patch(provider: string, partial: Partial<Manifest>): void {
+    const m = this.manifests.get(provider);
+    if (!m) return;
+    this.manifests.set(provider, { ...m, ...partial });
+  }
+
   getHandler(provider: string): Handler | undefined {
     return this.handlers.get(provider);
   }

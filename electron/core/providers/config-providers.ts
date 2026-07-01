@@ -77,6 +77,23 @@ export async function registerConfigProviders(r: Registry, cfg: UmbraConfig): Pr
   const entries = await loadConfig(cfg.providersFile);
   for (const entry of entries) {
     if (!entry.provider) continue;
+
+    // 轻量覆盖：providers.json 里没有带命令的技能，且该 provider 已由内置注册（如 claude_code / codex）。
+    // → 只 patch 内置 manifest（显示名 / 检测可用性 / 版本），保留内置 handler，不替换为命令执行器。
+    const hasCommandSkill = Object.values(entry.skills || {}).some((s) => (s.command?.length ?? 0) > 0);
+    if (r.has(entry.provider) && !hasCommandSkill) {
+      const patch: Partial<Manifest> = {};
+      if (entry.display_name) patch.display_name = entry.display_name;
+      if (entry.detect) {
+        const ok = which(entry.detect) !== null;
+        patch.available = ok;
+        patch.unavailable_reason = ok ? "" : `未安装 ${entry.detect}`;
+        if (ok && entry.version_cmd) patch.version = await detectVersion(entry.version_cmd);
+      }
+      r.patch(entry.provider, patch);
+      continue;
+    }
+
     const available = entry.detect ? which(entry.detect) !== null : true;
     const skillsCfg = entry.skills || {};
     const skills: Manifest["skills"] = {};
