@@ -123,7 +123,8 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     const btn = String(params.button || "left").toLowerCase();
     await mouse.setPosition(new Point(x, y));
     await mouse.click(btn === "right" ? Button.RIGHT : btn === "middle" ? Button.MIDDLE : Button.LEFT);
-    await report(`点击 (${x}, ${y})`, {});
+    const norm = params.nx != null ? ` [归一化 nx=${params.nx},ny=${params.ny}]` : "";
+    await report(`点击 (${x}, ${y})${norm}`, {});
     return { clicked: [x, y] };
   }
 

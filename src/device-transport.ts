@@ -72,6 +72,7 @@ export function start(onUpdate: (kind: string) => void): void {
   u.onTaskProgress((p) => {
     sendJson({ type: "task_progress", task_id: p.taskId, message: p.message, ...(p.extra || {}) });
     recordTask(p.taskId, "running", p.message);
+    log(`执行：${p.message}`); // 同时进 PC 日志，便于调试
   });
   u.onConfirmRequest((c) => {
     sendJson({ type: "task_confirm_request", task_id: c.taskId, summary: c.summary, detail: c.detail });
