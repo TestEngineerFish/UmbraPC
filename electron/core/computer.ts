@@ -59,6 +59,9 @@ async function shoot(cfg: UmbraConfig): Promise<unknown> {
   if (process.platform !== "darwin") throw new Error(`暂不支持的平台：${process.platform}`);
   const res = await run("screencapture", ["-x", tmp]);
   if (res.code !== 0) throw new Error(`截图失败：${res.output.slice(-200)}`);
+  // 降采样到最长边 ~1440，控制体积（Retina 全屏原图数 MB，视觉模型有大小/分辨率限制）。
+  // 归一化坐标(0-1000)与分辨率无关，缩放不影响点击定位。
+  await run("sips", ["-Z", "1440", tmp]).catch(() => undefined);
   const up = await uploadFile(httpBase(cfg), cfg.token, tmp, "screen.png", "image/png");
   fs.unlink(tmp).catch(() => {});
   return up;
