@@ -5,5 +5,15 @@ import { defineConfig } from "vite";
 export default defineConfig({
   base: "./",
   server: { port: 5173, strictPort: true },
-  build: { outDir: "dist", emptyOutDir: true },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    rollupOptions: {
+      // 两个渲染入口：主窗口 index.html + 剪贴板面板 clipboard-panel.html
+      input: {
+        main: "index.html",
+        panel: "clipboard-panel.html",
+      },
+    },
+  },
 });

@@ -33,7 +33,22 @@ const state = {
     detect: "",
     skills: [{ skill: "", description: "", command: "", confirm: false }] as Array<{ skill: string; description: string; command: string; confirm: boolean }>,
   },
+  // 剪贴板历史设置
+  clip: {
+    enabled: true,
+    shortcut: "Alt+V",
+    recording: false, // 正在录制快捷键
+  },
 };
+
+// 剪贴板历史 IPC 桥（面板与设置页共用；浏览器预览下为 undefined）。
+interface ClipBridge {
+  clear(): Promise<boolean>;
+  getSettings(): Promise<{ enabled: boolean; shortcut: string }>;
+  setEnabled(enabled: boolean): Promise<void>;
+  setShortcut(acc: string): Promise<{ ok: boolean }>;
+}
+const clipBridge: ClipBridge | undefined = (window as unknown as { umbraClip?: ClipBridge }).umbraClip;
 
 const LOGS = [
   { time: "14:01:55", tag: "conn", src: "conn", color: "var(--success)", msg: "已连接 umbra.tingyusha.xyz · 设备已登记" },
@@ -614,6 +629,87 @@ function permissionsCard(cuTrack: string): string {
       </div></div>`;
 }
 
+// 剪贴板历史设置卡片（开关 / 快捷键录制 / 清空历史）。
+function clipboardCard(): string {
+  if (!clipBridge) return "";
+  const on = state.clip.enabled;
+  const track = `width:38px;height:22px;border-radius:999px;border:none;cursor:pointer;padding:2px;display:flex;justify-content:${on ? "flex-end" : "flex-start"};background:${on ? "var(--orange)" : "var(--border)"};transition:background .15s;flex:none;`;
+  const shortcutText = state.clip.recording ? "按下快捷键…（Esc 取消）" : esc(state.clip.shortcut);
+  return `
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">剪贴板历史</div><div style="display:flex;flex-direction:column;gap:14px;">
+    <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">开启历史记录</label><span style="flex:1;font-size:12px;color:var(--muted);">后台监听剪贴板，${on ? "已开启" : "已关闭（历史保留）"}</span><button data-act="clip-toggle" style="${track}"><span style="width:18px;height:18px;border-radius:999px;background:#fff;display:block;box-shadow:0 1px 2px rgba(0,0,0,.25);"></span></button></div>
+    <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">面板快捷键</label><button data-act="clip-rec" style="flex:1;text-align:left;border:1px solid ${state.clip.recording ? "var(--orange)" : "var(--border)"};background:var(--bg);color:var(--text);border-radius:8px;padding:7px 11px;font-size:13px;cursor:pointer;font-family:ui-monospace,Menlo,monospace;">${shortcutText}</button></div>
+    <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">清空历史</label><span style="flex:1;font-size:12px;color:var(--muted);">删除全部非收藏条目（收藏保留）</span><button data-act="clip-clear" style="padding:6px 13px;border:1px solid var(--danger);background:transparent;color:var(--danger);border-radius:8px;font-size:12.5px;cursor:pointer;">清空</button></div>
+  </div></div>`;
+}
+
+// 载入剪贴板设置（进入设置页时）。
+async function loadClipSettings(): Promise<void> {
+  if (!clipBridge) return;
+  try {
+    const s = await clipBridge.getSettings();
+    state.clip.enabled = s.enabled;
+    state.clip.shortcut = s.shortcut;
+    if (state.nav === "settings") render();
+  } catch {
+    /* ignore */
+  }
+}
+
+// 快捷键录制：捕获修饰键 + 物理键位（event.code），组装 Electron Accelerator。
+function beginShortcutRecording(): void {
+  if (!clipBridge) return;
+  state.clip.recording = true;
+  render();
+  const onKey = (e: KeyboardEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      finish();
+      return;
+    }
+    const mods: string[] = [];
+    if (e.metaKey) mods.push("Command");
+    if (e.ctrlKey) mods.push("Control");
+    if (e.altKey) mods.push("Alt");
+    if (e.shiftKey) mods.push("Shift");
+    const code = e.code;
+    let main = "";
+    if (/^Key([A-Z])$/.test(code)) main = code.slice(3);
+    else if (/^Digit([0-9])$/.test(code)) main = code.slice(5);
+    else if (/^F([0-9]{1,2})$/.test(code)) main = code;
+    else if (code === "Space") main = "Space";
+    else if (code === "Backquote") main = "`";
+    // 必须含修饰键 + 有效主键
+    if (mods.length === 0 || !main) return;
+    const acc = [...mods, main].join("+");
+    clipBridge!.setShortcut(acc).then((r) => {
+      if (!r.ok) console.warn("快捷键注册失败（可能被占用）：" + acc);
+    });
+    state.clip.shortcut = acc;
+    finish();
+  };
+  const finish = () => {
+    state.clip.recording = false;
+    window.removeEventListener("keydown", onKey, true);
+    render();
+  };
+  window.addEventListener("keydown", onKey, true);
+}
+
+function toggleClipEnabled(): void {
+  if (!clipBridge) return;
+  state.clip.enabled = !state.clip.enabled;
+  render();
+  clipBridge.setEnabled(state.clip.enabled).catch(() => {});
+}
+
+function clearClipHistory(): void {
+  if (!clipBridge) return;
+  if (!confirm("确定清空全部非收藏的剪贴板历史？收藏条目会保留。")) return;
+  clipBridge.clear().catch(() => {});
+}
+
 function settingsScreen(): string {
   const inputBase = "flex:1;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;padding:7px 11px;font-size:13px;outline:none;";
   const cuOn = computerEnabled();
@@ -637,6 +733,7 @@ function settingsScreen(): string {
         <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">providers.json</label><span style="flex:1;font-size:12px;font-family:ui-monospace,Menlo,monospace;color:var(--muted);word-break:break-all;">${esc(desktop.getDesktopConfig()?.providersFile || "（仅桌面应用可用）")}</span><button data-act="edit-providers" style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">编辑</button></div>
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">coding 权限</label><div style="display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;"><button data-act="mode-0" style="${seg(state.codingMode === 0)}">只生成</button><button data-act="mode-1" style="${seg(state.codingMode === 1)}">执行前确认</button><button data-act="mode-2" style="${seg(state.codingMode === 2, true)}">直接执行</button></div></div>
       </div>
+      ${clipboardCard()}
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;"><div style="flex:1;"><div style="font-weight:600;">关于</div><div style="font-size:12px;color:var(--muted);margin-top:3px;">Umbra 桌面客户端 · v0.1.0 (electron)</div></div><button style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">检查更新</button></div>
     </div>
   </div>`;
@@ -759,6 +856,7 @@ function setNav(nav: Nav): void {
   state.nav = nav;
   if (nav === "tasks") startTasksPolling();
   else stopTasksPolling();
+  if (nav === "settings") loadClipSettings();
   render();
 }
 
@@ -791,6 +889,9 @@ function onClick(e: MouseEvent): void {
     case "mode-0": setCodingMode(0); break;
     case "mode-1": setCodingMode(1); break;
     case "mode-2": setCodingMode(2); break;
+    case "clip-toggle": toggleClipEnabled(); break;
+    case "clip-rec": beginShortcutRecording(); break;
+    case "clip-clear": clearClipHistory(); break;
     case "log-all": state.logFilter = "all"; render(); break;
     case "log-jobs": state.logFilter = "jobs"; render(); break;
     case "log-conn": state.logFilter = "conn"; render(); break;

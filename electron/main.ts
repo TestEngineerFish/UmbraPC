@@ -1,7 +1,7 @@
 // Electron 主进程：开窗 + 任务执行器 + IPC。
 // 设备 WebSocket 由渲染层(Chromium)承载（主进程网络在部分环境被代理/WAF RST）；
 // 主进程只做能力探测与任务执行，经 IPC 与渲染层桥接。
-import { app, BrowserWindow, ipcMain, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, globalShortcut, ipcMain, shell, systemPreferences } from "electron";
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
@@ -9,6 +9,7 @@ import { ConfigStore, UmbraConfig } from "./core/config";
 import { TaskExecutor } from "./core/device-client";
 import { requestStop } from "./core/computer";
 import { initRpc } from "./core/rpc";
+import { ClipboardManager } from "./core/clipboard";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
 
@@ -39,6 +40,7 @@ const PROVIDERS_TEMPLATE = JSON.stringify(
 
 let store: ConfigStore;
 let executor: TaskExecutor;
+let clipboard: ClipboardManager;
 
 // 打包后的 .app 只有极简 PATH（看不到 homebrew/nvm/npm 全局），导致 which(claude/codex/ffmpeg) 找不到。
 // 读取用户登录 shell 的真实 PATH 合并进来，并兜底补常见目录，让 Provider 探测正常。
@@ -206,9 +208,21 @@ app.whenReady().then(async () => {
   registerIpc();
   createWindow();
 
+  // 剪贴板历史：后台采集 + 面板窗口 + 全局快捷键（面板复用主窗口的 preload）。
+  clipboard = new ClipboardManager(store, app.getPath("userData"), {
+    preloadPath: path.join(__dirname, "preload.cjs"),
+    devUrl: DEV_URL,
+    distDir: path.join(__dirname, "..", "dist"),
+  });
+  clipboard.init().catch((e) => console.error("剪贴板历史初始化失败", e));
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
+});
+
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
 });
 
 app.on("window-all-closed", () => {

@@ -48,3 +48,30 @@ contextBridge.exposeInMainWorld("umbra", {
     return () => ipcRenderer.removeListener("umbra:task-confirm-request", l);
   },
 });
+
+// 剪贴板历史桥（面板窗口与设置页共用）。
+contextBridge.exposeInMainWorld("umbraClip", {
+  list: (category: string, keyword: string) => ipcRenderer.invoke("clip:list", category, keyword),
+  copy: (id: number) => ipcRenderer.invoke("clip:copy", id),
+  paste: (id: number) => ipcRenderer.invoke("clip:paste", id),
+  setFavorite: (id: number, favorite: boolean) => ipcRenderer.invoke("clip:setFavorite", id, favorite),
+  remove: (id: number) => ipcRenderer.invoke("clip:remove", id),
+  clear: () => ipcRenderer.invoke("clip:clear"),
+  readImageDataUrl: (id: number) => ipcRenderer.invoke("clip:readImageDataUrl", id),
+  readPathThumbnail: (p: string) => ipcRenderer.invoke("clip:readPathThumbnail", p),
+  getAppIcon: (p: string) => ipcRenderer.invoke("clip:getAppIcon", p),
+  hidePanel: () => ipcRenderer.invoke("clip:hidePanel"),
+  getSettings: () => ipcRenderer.invoke("clip:getSettings"),
+  setEnabled: (enabled: boolean) => ipcRenderer.invoke("clip:setEnabled", enabled),
+  setShortcut: (acc: string) => ipcRenderer.invoke("clip:setShortcut", acc),
+  onHistoryChanged: (cb: () => void) => {
+    const l = () => cb();
+    ipcRenderer.on("clipboard:history:changed", l);
+    return () => ipcRenderer.removeListener("clipboard:history:changed", l);
+  },
+  onPanelShown: (cb: () => void) => {
+    const l = () => cb();
+    ipcRenderer.on("clipboard:panel:shown", l);
+    return () => ipcRenderer.removeListener("clipboard:panel:shown", l);
+  },
+});

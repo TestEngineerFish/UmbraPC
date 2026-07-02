@@ -24,6 +24,9 @@ export interface UmbraConfig {
   computerConfirm: boolean;      // 关键动作(type/key/open_app)执行前需用户确认
   computerBlacklist: string[];   // 禁止操作的应用名（子串匹配，前台应用命中即拒绝）
   disabledProviders: string[];   // 用户在能力页手动停用的程序名（即使安装/可用也不上报、不可执行）
+  // ── 剪贴板历史 ──
+  clipboardEnabled: boolean;     // 后台监听剪贴板开关
+  clipboardShortcut: string;     // 唤起面板的全局快捷键（Electron Accelerator）
 }
 
 const envBool = (k: string, d: boolean) => {
@@ -64,6 +67,8 @@ function defaults(configDir: string): UmbraConfig {
       "活动监视器", "activity monitor",
     ],
     disabledProviders: [],
+    clipboardEnabled: envBool("UMBRA_CLIPBOARD_ENABLED", true),
+    clipboardShortcut: process.env.UMBRA_CLIPBOARD_SHORTCUT || "Alt+V",
   };
 }
 
