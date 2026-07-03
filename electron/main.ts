@@ -10,6 +10,7 @@ import { TaskExecutor } from "./core/device-client";
 import { requestStop } from "./core/computer";
 import { initRpc } from "./core/rpc";
 import { ClipboardManager } from "./core/clipboard";
+import { ScreenshotManager } from "./core/screenshot";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
 
@@ -41,6 +42,14 @@ const PROVIDERS_TEMPLATE = JSON.stringify(
 let store: ConfigStore;
 let executor: TaskExecutor;
 let clipboard: ClipboardManager;
+let screenshot: ScreenshotManager;
+
+// 截图与剪贴板共用 globalShortcut：任何一方改快捷键，都先全清再各自重注册，避免互相覆盖。
+function reregisterShortcuts(): void {
+  globalShortcut.unregisterAll();
+  clipboard?.registerShortcut();
+  screenshot?.registerShortcut();
+}
 
 // 打包后的 .app 只有极简 PATH（看不到 homebrew/nvm/npm 全局），导致 which(claude/codex/ffmpeg) 找不到。
 // 读取用户登录 shell 的真实 PATH 合并进来，并兜底补常见目录，让 Provider 探测正常。
@@ -190,6 +199,13 @@ function registerIpc(): void {
     await fs.writeFile(file, JSON.stringify({ providers: Array.isArray(providers) ? providers : [] }, null, 2), "utf-8");
     return true;
   });
+  // 录制快捷键期间：暂停全局快捷键（否则按下旧快捷键会触发对应功能，如又开始截图）。
+  ipcMain.handle("umbra:pauseShortcuts", () => {
+    globalShortcut.unregisterAll();
+  });
+  ipcMain.handle("umbra:resumeShortcuts", () => {
+    reregisterShortcuts();
+  });
   // 打开系统设置 → 隐私与安全性 → 对应面板。
   ipcMain.handle("umbra:openPrivacy", (_e, target: string) => {
     const urls: Record<string, string> = {
@@ -208,13 +224,17 @@ app.whenReady().then(async () => {
   registerIpc();
   createWindow();
 
-  // 剪贴板历史：后台采集 + 面板窗口 + 全局快捷键（面板复用主窗口的 preload）。
-  clipboard = new ClipboardManager(store, app.getPath("userData"), {
+  // 剪贴板历史 + 截图：均复用主窗口的 preload；快捷键统一注册。
+  const winOpts = {
     preloadPath: path.join(__dirname, "preload.cjs"),
     devUrl: DEV_URL,
     distDir: path.join(__dirname, "..", "dist"),
-  });
-  clipboard.init().catch((e) => console.error("剪贴板历史初始化失败", e));
+  };
+  clipboard = new ClipboardManager(store, app.getPath("userData"), winOpts, reregisterShortcuts);
+  screenshot = new ScreenshotManager(store, winOpts, reregisterShortcuts);
+  Promise.all([clipboard.init(), screenshot.init()])
+    .then(() => reregisterShortcuts()) // 两者就绪后统一注册各自快捷键
+    .catch((e) => console.error("剪贴板/截图初始化失败", e));
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

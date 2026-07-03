@@ -41,6 +41,8 @@ interface UmbraBridge {
   getPermissions(): Promise<{ accessibility: boolean; screen: string }>;
   openPrivacy(target: string): Promise<unknown>;
   computerStop(): Promise<unknown>;
+  pauseShortcuts(): Promise<void>;
+  resumeShortcuts(): Promise<void>;
   openProvidersFile(): Promise<string>;
   setDisabled(list: string[]): Promise<PublicConfig>;
   getProvidersConfig(): Promise<CustomProviderCfg[]>;
@@ -108,6 +110,14 @@ export function openPrivacy(target: string): void {
 // computer-use 紧急停止。
 export function computerStop(): void {
   if (isDesktop()) window.umbra!.computerStop();
+}
+
+// 录制快捷键期间暂停/恢复全局快捷键（避免按下旧快捷键触发功能）。
+export function pauseShortcuts(): void {
+  if (isDesktop()) window.umbra!.pauseShortcuts();
+}
+export function resumeShortcuts(): void {
+  if (isDesktop()) window.umbra!.resumeShortcuts();
 }
 
 // 打开 providers.json 供用户编辑（系统默认编辑器）。

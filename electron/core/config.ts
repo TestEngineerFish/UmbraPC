@@ -27,6 +27,10 @@ export interface UmbraConfig {
   // ── 剪贴板历史 ──
   clipboardEnabled: boolean;     // 后台监听剪贴板开关
   clipboardShortcut: string;     // 唤起面板的全局快捷键（Electron Accelerator）
+  // ── 截图 ──
+  screenshotEnabled: boolean;    // 截图功能开关（关则不注册快捷键）
+  screenshotShortcut: string;    // 截图全局快捷键
+  glmApiKey: string;             // 智谱 GLM API Key（截图翻译直连用；不硬编码，走 env/设置）
 }
 
 const envBool = (k: string, d: boolean) => {
@@ -69,6 +73,9 @@ function defaults(configDir: string): UmbraConfig {
     disabledProviders: [],
     clipboardEnabled: envBool("UMBRA_CLIPBOARD_ENABLED", true),
     clipboardShortcut: process.env.UMBRA_CLIPBOARD_SHORTCUT || "Alt+V",
+    screenshotEnabled: envBool("UMBRA_SCREENSHOT_ENABLED", true),
+    screenshotShortcut: process.env.UMBRA_SCREENSHOT_SHORTCUT || "CommandOrControl+Alt+A",
+    glmApiKey: process.env.UMBRA_GLM_API_KEY || "",
   };
 }
 

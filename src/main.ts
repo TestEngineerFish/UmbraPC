@@ -39,6 +39,13 @@ const state = {
     shortcut: "Alt+V",
     recording: false, // 正在录制快捷键
   },
+  // 截图设置
+  shot: {
+    enabled: true,
+    shortcut: "CommandOrControl+Alt+A",
+    recording: false,
+    hasGlmKey: false,
+  },
 };
 
 // 剪贴板历史 IPC 桥（面板与设置页共用；浏览器预览下为 undefined）。
@@ -49,6 +56,15 @@ interface ClipBridge {
   setShortcut(acc: string): Promise<{ ok: boolean }>;
 }
 const clipBridge: ClipBridge | undefined = (window as unknown as { umbraClip?: ClipBridge }).umbraClip;
+
+// 截图 IPC 桥（设置页用；浏览器预览下为 undefined）。
+interface ShotBridge {
+  getSettings(): Promise<{ enabled: boolean; shortcut: string; hasGlmKey: boolean }>;
+  setEnabled(enabled: boolean): Promise<void>;
+  setShortcut(acc: string): Promise<{ ok: boolean }>;
+  setGlmKey(key: string): Promise<boolean>;
+}
+const shotBridge: ShotBridge | undefined = (window as unknown as { umbraShot?: ShotBridge }).umbraShot;
 
 const LOGS = [
   { time: "14:01:55", tag: "conn", src: "conn", color: "var(--success)", msg: "已连接 umbra.tingyusha.xyz · 设备已登记" },
@@ -656,10 +672,41 @@ async function loadClipSettings(): Promise<void> {
   }
 }
 
-// 快捷键录制：捕获修饰键 + 物理键位（event.code），组装 Electron Accelerator。
-function beginShortcutRecording(): void {
-  if (!clipBridge) return;
-  state.clip.recording = true;
+// 截图设置卡片（开关 / 快捷键录制）。
+function screenshotCard(): string {
+  if (!shotBridge) return "";
+  const on = state.shot.enabled;
+  const track = `width:38px;height:22px;border-radius:999px;border:none;cursor:pointer;padding:2px;display:flex;justify-content:${on ? "flex-end" : "flex-start"};background:${on ? "var(--orange)" : "var(--border)"};transition:background .15s;flex:none;`;
+  const shortcutText = state.shot.recording ? "按下快捷键…（Esc 取消）" : esc(state.shot.shortcut);
+  return `
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">截图</div><div style="display:flex;flex-direction:column;gap:14px;">
+    <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">开启截图</label><span style="flex:1;font-size:12px;color:var(--muted);">${on ? "已开启" : "已关闭（不注册快捷键）"}；需「屏幕录制」权限</span><button data-act="shot-toggle" style="${track}"><span style="width:18px;height:18px;border-radius:999px;background:#fff;display:block;box-shadow:0 1px 2px rgba(0,0,0,.25);"></span></button></div>
+    <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">截图快捷键</label><button data-act="shot-rec" style="flex:1;text-align:left;border:1px solid ${state.shot.recording ? "var(--orange)" : "var(--border)"};background:var(--bg);color:var(--text);border-radius:8px;padding:7px 11px;font-size:13px;cursor:pointer;font-family:ui-monospace,Menlo,monospace;">${shortcutText}</button></div>
+    <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">翻译 Key</label><input id="shot-glmkey" type="password" placeholder="${state.shot.hasGlmKey ? "已设置（智谱 GLM）" : "智谱 GLM API Key（翻译用）"}" style="flex:1;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;padding:7px 11px;font-size:13px;outline:none;font-family:ui-monospace,Menlo,monospace;"><button data-act="shot-savekey" style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">保存</button></div>
+  </div></div>`;
+}
+
+async function loadShotSettings(): Promise<void> {
+  if (!shotBridge) return;
+  try {
+    const s = await shotBridge.getSettings();
+    state.shot.enabled = s.enabled;
+    state.shot.shortcut = s.shortcut;
+    state.shot.hasGlmKey = s.hasGlmKey;
+    if (state.nav === "settings") render();
+  } catch {
+    /* ignore */
+  }
+}
+
+// 通用快捷键录制：捕获修饰键 + 物理键位（event.code），组装 Electron Accelerator。
+type ShortcutTarget = "clip" | "shot";
+function beginShortcutRecording(target: ShortcutTarget): void {
+  const bridge = target === "clip" ? clipBridge : shotBridge;
+  if (!bridge) return;
+  const slot = target === "clip" ? state.clip : state.shot;
+  slot.recording = true;
+  desktop.pauseShortcuts(); // 录制期间暂停全局快捷键，避免按下旧键触发功能
   render();
   const onKey = (e: KeyboardEvent) => {
     e.preventDefault();
@@ -680,18 +727,18 @@ function beginShortcutRecording(): void {
     else if (/^F([0-9]{1,2})$/.test(code)) main = code;
     else if (code === "Space") main = "Space";
     else if (code === "Backquote") main = "`";
-    // 必须含修饰键 + 有效主键
-    if (mods.length === 0 || !main) return;
+    if (mods.length === 0 || !main) return; // 必须含修饰键 + 有效主键
     const acc = [...mods, main].join("+");
-    clipBridge!.setShortcut(acc).then((r) => {
+    bridge.setShortcut(acc).then((r) => {
       if (!r.ok) console.warn("快捷键注册失败（可能被占用）：" + acc);
     });
-    state.clip.shortcut = acc;
+    slot.shortcut = acc;
     finish();
   };
   const finish = () => {
-    state.clip.recording = false;
+    slot.recording = false;
     window.removeEventListener("keydown", onKey, true);
+    desktop.resumeShortcuts(); // 恢复全局快捷键（新键已在 setShortcut 里注册）
     render();
   };
   window.addEventListener("keydown", onKey, true);
@@ -710,12 +757,31 @@ function clearClipHistory(): void {
   clipBridge.clear().catch(() => {});
 }
 
+function toggleShotEnabled(): void {
+  if (!shotBridge) return;
+  state.shot.enabled = !state.shot.enabled;
+  render();
+  shotBridge.setEnabled(state.shot.enabled).catch(() => {});
+}
+
+function saveShotGlmKey(): void {
+  if (!shotBridge) return;
+  const el = document.getElementById("shot-glmkey") as HTMLInputElement | null;
+  const key = (el?.value || "").trim();
+  if (!key) return;
+  shotBridge.setGlmKey(key).then(() => {
+    state.shot.hasGlmKey = true;
+    if (el) el.value = "";
+    render();
+  }).catch(() => {});
+}
+
 function settingsScreen(): string {
   const inputBase = "flex:1;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:8px;padding:7px 11px;font-size:13px;outline:none;";
   const cuOn = computerEnabled();
   const cuTrack = `width:38px;height:22px;border-radius:999px;border:none;cursor:pointer;padding:2px;display:flex;justify-content:${cuOn ? "flex-end" : "flex-start"};background:${cuOn ? "var(--orange)" : "var(--border)"};transition:background .15s;`;
   return `
-  <div style="height:100%;overflow-y:auto;padding:18px 22px;">
+  <div id="scroll-main" style="height:100%;overflow-y:auto;padding:18px 22px;">
     <h1 style="margin:0 0 16px;font-size:16px;font-weight:600;">设置</h1>
     <div style="display:flex;flex-direction:column;gap:14px;max-width:680px;">
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;"><div style="font-weight:600;margin-bottom:14px;">连接</div><div style="display:flex;flex-direction:column;gap:13px;">
@@ -734,6 +800,7 @@ function settingsScreen(): string {
         <div style="display:flex;align-items:center;gap:14px;"><label style="width:120px;font-size:13px;color:var(--muted);">coding 权限</label><div style="display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;"><button data-act="mode-0" style="${seg(state.codingMode === 0)}">只生成</button><button data-act="mode-1" style="${seg(state.codingMode === 1)}">执行前确认</button><button data-act="mode-2" style="${seg(state.codingMode === 2, true)}">直接执行</button></div></div>
       </div>
       ${clipboardCard()}
+      ${screenshotCard()}
       <div style="background:var(--card);border:1px solid var(--border);border-radius:12px;padding:16px 18px;display:flex;align-items:center;gap:14px;"><div style="flex:1;"><div style="font-weight:600;">关于</div><div style="font-size:12px;color:var(--muted);margin-top:3px;">Umbra 桌面客户端 · v0.1.0 (electron)</div></div><button style="padding:6px 13px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:12.5px;cursor:pointer;">检查更新</button></div>
     </div>
   </div>`;
@@ -752,6 +819,8 @@ function currentScreen(): string {
 
 function render(): void {
   const app = document.getElementById("app")!;
+  // 保留内容区滚动位置：整页 innerHTML 重建会把滚动重置到顶部。
+  const prevScroll = document.getElementById("scroll-main")?.scrollTop;
   app.innerHTML = `
     <div class="umbra-root" data-theme="${state.dark ? "dark" : "light"}" style="position:relative;">
       ${titlebar()}
@@ -760,6 +829,10 @@ function render(): void {
         <main style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);position:relative;">${currentScreen()}</main>
       </div>
     </div>`;
+  if (prevScroll != null) {
+    const el = document.getElementById("scroll-main");
+    if (el) el.scrollTop = prevScroll;
+  }
   if (state.nav === "chat") {
     const root = document.getElementById("chatroot");
     if (root) chat.mount(root);
@@ -856,7 +929,10 @@ function setNav(nav: Nav): void {
   state.nav = nav;
   if (nav === "tasks") startTasksPolling();
   else stopTasksPolling();
-  if (nav === "settings") loadClipSettings();
+  if (nav === "settings") {
+    loadClipSettings();
+    loadShotSettings();
+  }
   render();
 }
 
@@ -890,8 +966,11 @@ function onClick(e: MouseEvent): void {
     case "mode-1": setCodingMode(1); break;
     case "mode-2": setCodingMode(2); break;
     case "clip-toggle": toggleClipEnabled(); break;
-    case "clip-rec": beginShortcutRecording(); break;
+    case "clip-rec": beginShortcutRecording("clip"); break;
     case "clip-clear": clearClipHistory(); break;
+    case "shot-toggle": toggleShotEnabled(); break;
+    case "shot-rec": beginShortcutRecording("shot"); break;
+    case "shot-savekey": saveShotGlmKey(); break;
     case "log-all": state.logFilter = "all"; render(); break;
     case "log-jobs": state.logFilter = "jobs"; render(); break;
     case "log-conn": state.logFilter = "conn"; render(); break;

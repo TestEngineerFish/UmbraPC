@@ -23,7 +23,8 @@ export class ClipboardManager {
   // 关闭面板时需把焦点还给那个应用，而不是让 Umbra 主窗口抢到前台。
   private appWasActive = false;
 
-  constructor(private cfg: ConfigStore, userData: string, private opts: ManagerOpts) {
+  // reregister：截图与剪贴板共用 globalShortcut，改快捷键时由 main.ts 统一清理后各自重注册。
+  constructor(private cfg: ConfigStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
     this.store = new ClipStore(userData);
     this.watcher = new ClipWatcher(this.store, () => this.broadcast("clipboard:history:changed"));
   }
@@ -31,8 +32,8 @@ export class ClipboardManager {
   async init(): Promise<void> {
     await this.store.load();
     if (this.cfg.get().clipboardEnabled) this.watcher.start();
-    this.registerShortcut();
     this.registerIpc();
+    // 全局快捷键由 main.ts 统一注册（与截图共用 globalShortcut）。
   }
 
   // ── 面板窗口 ──
@@ -104,10 +105,9 @@ export class ClipboardManager {
     }
   }
 
-  // ── 全局快捷键 ──
-  private async registerShortcut(): Promise<void> {
+  // ── 全局快捷键 ──（只注册自身，不 unregisterAll；清理由 main.ts 统一做）
+  async registerShortcut(): Promise<void> {
     const { globalShortcut } = await import("electron");
-    globalShortcut.unregisterAll();
     const acc = this.cfg.get().clipboardShortcut || "Alt+V";
     try {
       const ok = globalShortcut.register(acc, () => this.togglePanel());
@@ -125,7 +125,7 @@ export class ClipboardManager {
   }
   async setShortcut(acc: string): Promise<{ ok: boolean }> {
     await this.cfg.save({ clipboardShortcut: acc });
-    await this.registerShortcut();
+    this.reregister();
     const { globalShortcut } = await import("electron");
     return { ok: globalShortcut.isRegistered(acc) };
   }

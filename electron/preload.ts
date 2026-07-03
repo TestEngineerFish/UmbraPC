@@ -20,6 +20,9 @@ contextBridge.exposeInMainWorld("umbra", {
   openPrivacy: (target: string) => ipcRenderer.invoke("umbra:openPrivacy", target),
   // computer-use 紧急停止
   computerStop: () => ipcRenderer.invoke("umbra:computerStop"),
+  // 录制快捷键期间暂停/恢复全局快捷键
+  pauseShortcuts: () => ipcRenderer.invoke("umbra:pauseShortcuts"),
+  resumeShortcuts: () => ipcRenderer.invoke("umbra:resumeShortcuts"),
   // 打开 providers.json 供编辑
   openProvidersFile: () => ipcRenderer.invoke("umbra:openProvidersFile"),
   // 能力页：启用/停用程序 + 自定义程序读写
@@ -74,4 +77,35 @@ contextBridge.exposeInMainWorld("umbraClip", {
     ipcRenderer.on("clipboard:panel:shown", l);
     return () => ipcRenderer.removeListener("clipboard:panel:shown", l);
   },
+});
+
+// 截图桥（覆盖窗渲染层与设置页共用）。
+contextBridge.exposeInMainWorld("umbraShot", {
+  getCapture: () => ipcRenderer.invoke("screenshot:getCapture"),
+  ready: () => ipcRenderer.invoke("screenshot:ready"),
+  cancel: () => ipcRenderer.invoke("screenshot:cancel"),
+  finish: (dataUrl: string) => ipcRenderer.invoke("screenshot:finish", dataUrl),
+  save: (dataUrl: string) => ipcRenderer.invoke("screenshot:save", dataUrl),
+  setInputMode: (active: boolean) => ipcRenderer.invoke("screenshot:setInputMode", active),
+  pin: (dataUrl: string, selection: unknown) => ipcRenderer.invoke("screenshot:pin", dataUrl, selection),
+  ocr: (dataUrl: string) => ipcRenderer.invoke("screenshot:ocr", dataUrl),
+  translate: (dataUrl: string) => ipcRenderer.invoke("screenshot:translate", dataUrl),
+  getSettings: () => ipcRenderer.invoke("screenshot:getSettings"),
+  setEnabled: (enabled: boolean) => ipcRenderer.invoke("screenshot:setEnabled", enabled),
+  setShortcut: (acc: string) => ipcRenderer.invoke("screenshot:setShortcut", acc),
+  setGlmKey: (key: string) => ipcRenderer.invoke("screenshot:setGlmKey", key),
+  onSession: (cb: (data: { dataUrl: string; bounds: { x: number; y: number; width: number; height: number }; scaleFactor: number }) => void) => {
+    const l = (_e: unknown, data: any) => cb(data);
+    ipcRenderer.on("screenshot:session", l);
+    return () => ipcRenderer.removeListener("screenshot:session", l);
+  },
+});
+
+// 贴图窗口桥。
+contextBridge.exposeInMainWorld("umbraSticker", {
+  getImage: () => ipcRenderer.invoke("stickers:getImage"),
+  move: (x: number, y: number) => ipcRenderer.invoke("stickers:move", x, y),
+  setScale: (scale: number) => ipcRenderer.invoke("stickers:setScale", scale),
+  showMenu: () => ipcRenderer.invoke("stickers:showMenu"),
+  close: () => ipcRenderer.invoke("stickers:close"),
 });
