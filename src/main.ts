@@ -858,6 +858,36 @@ function saveAndReconnect(): void {
   render();
 }
 
+// React 设置页用：带参保存连接配置并重连（等价于旧 saveAndReconnect，但入参来自受控输入）。
+export function applyConnection(server: string, token: string, device: string): void {
+  if (server) setServerUrl(server);
+  if (token) setToken(token);
+  if (device) setDeviceName(device);
+  desktop.pushConfig({ serverUrl: server || getServerUrl(), token: token || "", deviceName: device || getDeviceName() }).catch(() => {});
+  chatConn.reconnect();
+  render();
+}
+// React 设置页用：保存智谱 Key（入参来自受控输入）。
+export function setShotGlmKey(key: string): void {
+  if (!shotBridge) return;
+  const k = (key || "").trim();
+  if (!k) return;
+  shotBridge.setGlmKey(k).then(() => {
+    state.shot.hasGlmKey = true;
+    render();
+  }).catch(() => {});
+}
+// React 设置页用的状态访问器。
+export function getCodingMode(): number {
+  return state.codingMode;
+}
+export function getClipState() {
+  return state.clip;
+}
+export function getShotState() {
+  return state.shot;
+}
+
 const EXEC_MODES = ["never", "confirm", "always"] as const;
 // coding 权限切换：同步到设备引擎。
 function setCodingMode(m: number): void {
@@ -1011,3 +1041,5 @@ export function initLegacy(): void {
 
 // 供 React 根渲染各区块。
 export { titlebar, sidebar, currentScreen };
+// 供 React 设置页复用的处理器 / 载入器。
+export { setCodingMode, toggleComputerUse, computerEnabled, tokenPlaceholder, deviceIdLabel, toggleClipEnabled, clearClipHistory, toggleShotEnabled, beginShortcutRecording, loadClipSettings, loadShotSettings };

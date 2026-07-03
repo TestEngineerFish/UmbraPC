@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import * as legacy from "./main";
 import type { Nav } from "./main";
+import { Settings } from "./screens/Settings";
 
 // 把 vanilla 生成的 HTML 挂进一个 div，并在挂载后还原滚动位置 / 触发回调（如挂载聊天子树）。
 function LegacyHost({ html, onMounted, style }: { html: string; onMounted?: () => void; style?: React.CSSProperties }) {
@@ -39,16 +40,20 @@ function App() {
         {/* display:flex 让内部 nav 拉伸到全高，底部设备信息才能 flex:1 顶到底 */}
         <LegacyHost html={legacy.sidebar()} style={{ display: "flex", flex: "none" }} />
         <main style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, background: "var(--bg)", position: "relative" }}>
-          <LegacyHost
-            html={legacy.currentScreen()}
-            style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}
-            onMounted={() => {
-              if (legacy.getNav() === "chat") {
-                const r = document.getElementById("chatroot");
-                if (r) legacy.mountChat(r);
-              }
-            }}
-          />
+          {nav === "settings" ? (
+            <Settings />
+          ) : (
+            <LegacyHost
+              html={legacy.currentScreen()}
+              style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}
+              onMounted={() => {
+                if (legacy.getNav() === "chat") {
+                  const r = document.getElementById("chatroot");
+                  if (r) legacy.mountChat(r);
+                }
+              }}
+            />
+          )}
         </main>
       </div>
     </div>
