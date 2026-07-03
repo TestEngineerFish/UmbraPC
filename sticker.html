@@ -5,12 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>贴图</title>
     <style>
-      html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; cursor: default; user-select: none; }
-      #sticker-img { width: 100vw; height: 100vh; display: block; object-fit: fill; border: 1px solid rgba(255,255,255,0.35); box-sizing: border-box; -webkit-user-drag: none; }
+      html, body, #sticker-root { margin: 0; padding: 0; width: 100vw; height: 100vh; overflow: hidden; background: #000; cursor: default; user-select: none; }
     </style>
   </head>
   <body>
-    <img id="sticker-img" alt="" />
-    <script type="module" src="/src/sticker.ts"></script>
+    <div id="sticker-root"></div>
+    <script type="module" src="/src/sticker.tsx"></script>
   </body>
 </html>
