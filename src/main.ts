@@ -887,6 +887,34 @@ export function getClipState() {
 export function getShotState() {
   return state.shot;
 }
+// React 页面切换（复用 setNav 的副作用 + 同步 React nav）。
+export function navigate(n: Nav): void {
+  setNav(n);
+}
+export function getRtRunning(): boolean {
+  return state.rtRunning;
+}
+export function toggleRt(): void {
+  state.rtRunning = !state.rtRunning;
+  render();
+}
+export function getTasksState() {
+  return state.tasks;
+}
+// React 能力页：写入/删除自定义程序（复用 providers.json 持久化逻辑）。
+export function saveCustomProviderEntry(entry: desktop.CustomProviderCfg, original: string | null): void {
+  const list = [...desktop.getCustomProviders()];
+  const idx = list.findIndex((p) => p.provider === (original || entry.provider));
+  if (idx >= 0) list[idx] = entry;
+  else list.push(entry);
+  desktop.saveCustomProviders(list).then(render).catch(() => {});
+}
+export function deleteCustomProvider(prov: string): void {
+  delProv(prov);
+}
+export function toggleProviderEnabled(prov: string): void {
+  desktop.setProviderEnabled(prov, desktop.isProviderDisabled(prov)).then(render).catch(() => {});
+}
 
 const EXEC_MODES = ["never", "confirm", "always"] as const;
 // coding 权限切换：同步到设备引擎。
@@ -1043,3 +1071,5 @@ export function initLegacy(): void {
 export { titlebar, sidebar, currentScreen };
 // 供 React 设置页复用的处理器 / 载入器。
 export { setCodingMode, toggleComputerUse, computerEnabled, tokenPlaceholder, deviceIdLabel, toggleClipEnabled, clearClipHistory, toggleShotEnabled, beginShortcutRecording, loadClipSettings, loadShotSettings };
+// 供 React 任务页复用。
+export { openJob, closeJob, manualRefresh, fmtTime, fmtListTime };
