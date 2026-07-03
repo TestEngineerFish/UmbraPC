@@ -1,3 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Tailwind 边框工具：preflight 关闭后需自行给默认边框样式/色，React 组件用 border 类才生效。内联样式(legacy)优先级更高，不受影响。 */
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-width: 0;
+    border-style: solid;
+    border-color: var(--border);
+  }
+}
+
 /* 设计令牌：橙色系 + 浅/深双模式（取自 Claude Design 设计稿） */
 :root {
   --bg: #F6F5F2; --card: #FFFFFF; --titlebar: #EFEDE8; --border: #E6E3DC; --text: #1F2320; --muted: #6B716B;

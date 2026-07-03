@@ -7,7 +7,7 @@ import { fetchJobs, fetchJobDetail, type Job, type JobDetail, type Subtask } fro
 import * as chat from "./chat";
 import * as desktop from "./desktop";
 
-type Nav = "chat" | "tasks" | "abilities" | "realtime" | "logs" | "settings";
+export type Nav = "chat" | "tasks" | "abilities" | "realtime" | "logs" | "settings";
 
 const state = {
   nav: "chat" as Nav,
@@ -56,6 +56,28 @@ interface ClipBridge {
   setShortcut(acc: string): Promise<{ ok: boolean }>;
 }
 const clipBridge: ClipBridge | undefined = (window as unknown as { umbraClip?: ClipBridge }).umbraClip;
+
+// ── React 桥接（Phase A：React 作为根，托管现有 vanilla 渲染）──
+// 现有代码里所有 render() 调用改为触发 React 重渲染；nav 变化同步给 React。
+let bridgeRerender: () => void = () => {};
+let bridgeNav: (n: Nav) => void = () => {};
+export function setBridge(rerender: () => void, nav: (n: Nav) => void): void {
+  bridgeRerender = rerender;
+  bridgeNav = nav;
+}
+export function toggleTheme(): void {
+  state.dark = !state.dark;
+  bridgeRerender();
+}
+export function mountChat(el: HTMLElement): void {
+  chat.mount(el);
+}
+export function getNav(): Nav {
+  return state.nav;
+}
+export function isDark(): boolean {
+  return state.dark;
+}
 
 // 截图 IPC 桥（设置页用；浏览器预览下为 undefined）。
 interface ShotBridge {
@@ -817,26 +839,9 @@ function currentScreen(): string {
   }
 }
 
+// 触发 React 重渲染（React 的 LegacyHost 会重建各区块 innerHTML 并还原滚动、挂载聊天子树）。
 function render(): void {
-  const app = document.getElementById("app")!;
-  // 保留内容区滚动位置：整页 innerHTML 重建会把滚动重置到顶部。
-  const prevScroll = document.getElementById("scroll-main")?.scrollTop;
-  app.innerHTML = `
-    <div class="umbra-root" data-theme="${state.dark ? "dark" : "light"}" style="position:relative;">
-      ${titlebar()}
-      <div style="flex:1;display:flex;min-height:0;">
-        ${sidebar()}
-        <main style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg);position:relative;">${currentScreen()}</main>
-      </div>
-    </div>`;
-  if (prevScroll != null) {
-    const el = document.getElementById("scroll-main");
-    if (el) el.scrollTop = prevScroll;
-  }
-  if (state.nav === "chat") {
-    const root = document.getElementById("chatroot");
-    if (root) chat.mount(root);
-  }
+  bridgeRerender();
 }
 
 // 从设置表单读取并保存连接配置，然后重连。
@@ -933,7 +938,7 @@ function setNav(nav: Nav): void {
     loadClipSettings();
     loadShotSettings();
   }
-  render();
+  bridgeNav(nav); // 同步给 React（会触发重渲染）
 }
 
 function onClick(e: MouseEvent): void {
@@ -984,20 +989,25 @@ function onKeydown(e: KeyboardEvent): void {
   if (state.tasks.detailId) closeJob();
 }
 
-chat.setAppRerender(render);
-document.getElementById("app")!.addEventListener("click", onClick);
-window.addEventListener("keydown", onKeydown);
-// 窗口重新获得焦点时刷新权限状态（用户可能刚去系统设置授予了权限）。
-window.addEventListener("focus", () => {
-  if (desktop.isDesktop()) desktop.refreshPermissions().then(() => { if (state.nav === "settings") render(); });
-});
-render();
-// 桌面态：同步主进程配置并订阅设备引擎状态（浏览器预览下为 no-op）。
-// 聊天页从不被设备事件重渲染（自管子树）；日志只在日志页刷新；其它页仅 state 事件刷新。
-desktop.initDesktop((kind) => {
-  if (state.nav === "chat") return;
-  if (kind === "log" && state.nav !== "logs") return;
-  const ae = document.activeElement;
-  if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA")) return; // 正在输入，别打断
-  render();
-}).catch(() => {});
+// 由 React 根（main.tsx）在挂载后调用：接管点击委托、键盘、设备事件订阅。
+export function initLegacy(): void {
+  chat.setAppRerender(render);
+  document.addEventListener("click", onClick); // 委托：处理各页面/弹窗内的 data-act（含侧边栏 nav / 标题栏 theme）
+  window.addEventListener("keydown", onKeydown);
+  // 窗口重新获得焦点时刷新权限状态（用户可能刚去系统设置授予了权限）。
+  window.addEventListener("focus", () => {
+    if (desktop.isDesktop()) desktop.refreshPermissions().then(() => { if (state.nav === "settings") render(); });
+  });
+  // 桌面态：同步主进程配置并订阅设备引擎状态（浏览器预览下为 no-op）。
+  // 聊天页从不被设备事件重渲染（自管子树）；日志只在日志页刷新；其它页仅 state 事件刷新。
+  desktop.initDesktop((kind) => {
+    if (state.nav === "chat") return;
+    if (kind === "log" && state.nav !== "logs") return;
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA")) return; // 正在输入，别打断
+    render();
+  }).catch(() => {});
+}
+
+// 供 React 根渲染各区块。
+export { titlebar, sidebar, currentScreen };
