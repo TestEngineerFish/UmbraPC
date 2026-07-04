@@ -1,6 +1,5 @@
 // 贴图窗口（React）：显示图片 + 拖移 + 滚轮缩放 + 右键菜单 + Esc/双击关闭。
 import { useEffect, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
 
 interface StickerAPI {
   getImage(): Promise<string>;
@@ -11,7 +10,7 @@ interface StickerAPI {
 }
 const api = (window as unknown as { umbraSticker: StickerAPI }).umbraSticker;
 
-function Sticker() {
+export function Sticker() {
   const [src, setSrc] = useState("");
   const scale = useRef(1);
   const off = useRef({ x: 0, y: 0 });
@@ -66,4 +65,3 @@ function Sticker() {
   return <img src={src} draggable={false} alt="" style={{ width: "100vw", height: "100vh", display: "block", objectFit: "fill", border: "1px solid rgba(255,255,255,0.35)", boxSizing: "border-box", WebkitUserDrag: "none" } as React.CSSProperties} />;
 }
 
-createRoot(document.getElementById("sticker-root")!).render(<Sticker />);

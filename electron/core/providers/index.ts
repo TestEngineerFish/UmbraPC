@@ -1,6 +1,6 @@
 // 聚合本机所有内置 + 配置 Provider，构建一个注册表。
 import { UmbraConfig } from "../config";
-import { Registry } from "../registry";
+import { Registry } from "./registry";
 import { registerSystem } from "./system";
 import { registerCoding } from "./coding";
 import { registerConfigProviders } from "./config-providers";

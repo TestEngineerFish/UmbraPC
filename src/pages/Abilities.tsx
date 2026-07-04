@@ -1,8 +1,8 @@
 // 能力页（React + Tailwind）。设备真实 Provider 卡片 + 启用开关 + 自定义程序增删改（含轻量覆盖）。
 import { useState } from "react";
-import * as desktop from "../desktop";
-import * as legacy from "../main";
-import type { ProviderManifest, CustomProviderCfg } from "../desktop";
+import * as desktop from "../services/desktop";
+import * as legacy from "../app/shell";
+import type { ProviderManifest, CustomProviderCfg } from "../services/desktop";
 
 interface SkillForm {
   skill: string;

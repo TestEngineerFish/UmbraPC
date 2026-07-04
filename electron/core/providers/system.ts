@@ -3,10 +3,10 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { run } from "../util";
-import { uploadFile } from "../upload";
+import { run } from "../shared/util";
+import { uploadFile } from "../shared/upload";
 import { httpBase, UmbraConfig } from "../config";
-import { Manifest, Registry } from "../registry";
+import { Manifest, Registry } from "./registry";
 
 function expand(p: string): string {
   if (p === "~") return os.homedir();

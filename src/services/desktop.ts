@@ -1,9 +1,9 @@
 // 桌面（Electron）集成门面：同步主进程配置 + 启动设备传输层（渲染层连 /ws/device）。
 // 浏览器预览（无 window.umbra）下全部 no-op，聊天仍可用。
 import { setServerUrl, setDeviceName, chatConn } from "./server";
-import * as transport from "./device-transport";
-import { initRpcHost } from "./rpc-host";
-import type { DeviceState, ProviderManifest } from "./device-transport";
+import * as transport from "./deviceTransport";
+import { initRpcHost } from "./rpcHost";
+import type { DeviceState, ProviderManifest } from "./deviceTransport";
 
 export type { DeviceState, ProviderManifest };
 

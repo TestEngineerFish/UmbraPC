@@ -1,6 +1,5 @@
 // 剪贴板历史面板（React）。复用原有 CSS 类，逻辑与 vanilla 版一致。
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createRoot } from "react-dom/client";
 
 type ClipType = "text" | "image" | "files";
 interface ClipItem {
@@ -102,7 +101,7 @@ function fileName(it: ClipItem): string {
 }
 const typeGlyph = (t: ClipType) => (t === "image" ? "🖼" : t === "files" ? "📄" : "✎");
 
-function Panel() {
+export function Panel() {
   const [items, setItems] = useState<ClipItem[]>([]);
   const [category, setCategory] = useState<Category>("all");
   const [keyword, setKeyword] = useState("");
@@ -409,4 +408,3 @@ function Menu({ menu, onClose }: { menu: { x: number; y: number; item: ClipItem 
   );
 }
 
-createRoot(document.getElementById("clip-root")!).render(<Panel />);

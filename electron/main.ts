@@ -6,9 +6,9 @@ import * as path from "node:path";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import { ConfigStore, UmbraConfig } from "./core/config";
-import { TaskExecutor } from "./core/device-client";
+import { TaskExecutor } from "./core/device/client";
 import { requestStop } from "./core/computer";
-import { initRpc } from "./core/rpc";
+import { initRpc } from "./core/shared/rpc";
 import { ClipboardManager } from "./core/clipboard";
 import { ScreenshotManager } from "./core/screenshot";
 

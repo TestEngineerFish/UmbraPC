@@ -1,11 +1,12 @@
-// Umbra 桌面客户端 · 渲染层（vanilla TS）
-// 依据 Claude Design 设计稿还原。当前为界面 + mock 交互；
-// 后续接入核心引擎（连服务端、Provider、computer-use）时，把 mock 数据换成真实数据源即可。
+// 主窗口 shell：React 根(app/App.tsx)之下的 legacy 桥接层。
+// 提供标题栏/侧边栏(仍为 legacy HTML，经 LegacyHost 托管)、全局状态与 React 页面复用的处理器/访问器，
+// 以及 render()→React 重渲染、nav 同步、点击/键盘委托与设备事件订阅(initLegacy)。
+// 业务逻辑走 services/*(server/desktop/…)；聊天走 features/chat。
 
-import { chatConn, getServerUrl, setServerUrl, setToken, getToken, getDeviceName, setDeviceName } from "./server";
-import { fetchJobs, fetchJobDetail, type Job, type JobDetail } from "./server";
-import * as chat from "./chat";
-import * as desktop from "./desktop";
+import { chatConn, getServerUrl, setServerUrl, setToken, getToken, getDeviceName, setDeviceName } from "../services/server";
+import { fetchJobs, fetchJobDetail, type Job, type JobDetail } from "../services/server";
+import * as chat from "../features/chat/chat";
+import * as desktop from "../services/desktop";
 
 export type Nav = "chat" | "tasks" | "abilities" | "realtime" | "logs" | "settings";
 

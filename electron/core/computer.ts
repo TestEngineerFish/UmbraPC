@@ -4,9 +4,9 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { httpBase, UmbraConfig } from "./config";
-import { Confirm, Manifest, Registry, Report } from "./registry";
-import { uploadFile } from "./upload";
-import { run } from "./util";
+import { Confirm, Manifest, Registry, Report } from "./providers/registry";
+import { uploadFile } from "./shared/upload";
+import { run } from "./shared/util";
 
 // 紧急停止标志：operate 循环（后续接入）会检查它；原子动作无循环可停。
 let stopRequested = false;

@@ -1,9 +1,9 @@
 // 配置驱动的 Provider：从 providers.json 读取用户登记的程序与技能（不写代码即可扩展）。
 // 对齐 Python config_providers.py：命令以 argv 执行，params 仅作单个 token 注入，AI 不能注入新命令。
 import { promises as fs } from "node:fs";
-import { run, which } from "../util";
+import { run, which } from "../shared/util";
 import { UmbraConfig } from "../config";
-import { Confirm, Manifest, Registry, Report } from "../registry";
+import { Confirm, Manifest, Registry, Report } from "./registry";
 
 interface SkillCfg {
   description?: string;

@@ -4,9 +4,9 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { run, which } from "../util";
+import { run, which } from "../shared/util";
 import { UmbraConfig } from "../config";
-import { Confirm, Manifest, Registry, Report } from "../registry";
+import { Confirm, Manifest, Registry, Report } from "./registry";
 
 const ENGINE_BIN: Record<string, string> = { claude: "claude", codex: "codex" };
 

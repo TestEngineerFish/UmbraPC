@@ -1,6 +1,6 @@
 // 实时聊天：连接 /ws/chat，按现有协议驱动设计稿里的聊天组件
 // （流式回复、工具轨迹、任务进度卡、执行前确认、完成通知、图片预览、跨端同步）。
-import { chatConn, fetchHistory, getServerUrl } from "./server";
+import { chatConn, fetchHistory, getServerUrl } from "../../services/server";
 
 type Block =
   | { kind: "user"; text: string; ts?: string | number }

@@ -1,5 +1,5 @@
 // 日志页（React + Tailwind）。桌面态展示设备引擎真实日志。
-import * as desktop from "../desktop";
+import * as desktop from "../services/desktop";
 
 export function Logs() {
   const lines = desktop.getDeviceLogs();

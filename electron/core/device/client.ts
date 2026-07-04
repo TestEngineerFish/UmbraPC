@@ -3,9 +3,9 @@
 // 设备 WebSocket 已改由渲染层(Chromium)承载（见 src/device-transport.ts）。
 // 主进程只负责：探测 Provider、执行技能、执行前确认——通过 IPC 与渲染层桥接。
 import { EventEmitter } from "node:events";
-import { ConfigStore } from "./config";
-import { buildRegistry } from "./providers";
-import { Manifest, Registry } from "./registry";
+import { ConfigStore } from "../config";
+import { buildRegistry } from "../providers";
+import { Manifest, Registry } from "../providers/registry";
 
 export interface RegisterInfo {
   deviceId: string;
