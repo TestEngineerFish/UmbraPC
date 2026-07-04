@@ -7,6 +7,7 @@ import { Logs } from "../features/logs/Logs";
 import { Realtime } from "../features/realtime/Realtime";
 import { Tasks } from "../features/tasks/Tasks";
 import { Abilities } from "../features/abilities/Abilities";
+import { subscribeLocale } from "../i18n";
 
 // 把 legacy 生成的 HTML 挂进一个 div，挂载后还原滚动位置 / 触发回调（如挂载聊天子树）。
 function LegacyHost({ html, onMounted, style }: { html: string; onMounted?: () => void; style?: React.CSSProperties }) {
@@ -32,6 +33,7 @@ export function App() {
   useEffect(() => {
     legacy.setBridge(() => bump(), (n) => setNav(n));
     legacy.initLegacy();
+    return subscribeLocale(() => bump());
   }, []);
 
   const dark = legacy.isDark();

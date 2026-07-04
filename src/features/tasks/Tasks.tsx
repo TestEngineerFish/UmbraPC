@@ -1,14 +1,15 @@
 // 任务页（React + Tailwind）。列表 + 刷新（轮询由 legacy setNav 驱动 → 触发 React 重渲染）+ 详情抽屉。
+import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
 import type { Job, JobDetail, Subtask } from "../../services/server";
 
 type Kind = "ok" | "run" | "wait" | "fail" | "off";
-const STATUS: Record<string, [string, Kind]> = {
-  done: ["已完成", "ok"],
-  running: ["执行中", "run"],
-  pending: ["待执行", "wait"],
-  failed: ["失败", "fail"],
-  cancelled: ["已取消", "off"],
+const STATUS_KEYS: Record<string, [string, Kind]> = {
+  done: ["tasks.statusDone", "ok"],
+  running: ["tasks.statusRunning", "run"],
+  pending: ["tasks.statusPending", "wait"],
+  failed: ["tasks.statusFailed", "fail"],
+  cancelled: ["tasks.statusCancelled", "off"],
 };
 const KIND_CLS: Record<Kind, string> = {
   ok: "bg-success-soft text-success",
@@ -19,8 +20,9 @@ const KIND_CLS: Record<Kind, string> = {
 };
 
 function Badge({ status }: { status: string }) {
-  const [label, kind] = STATUS[status] || [status, "wait"];
-  return <span className={`px-[10px] py-[2px] rounded-full text-[11px] font-semibold shrink-0 ${KIND_CLS[kind]}`}>{label}</span>;
+  const { t } = useTranslation();
+  const [key, kind] = STATUS_KEYS[status] || [status, "wait"];
+  return <span className={`px-[10px] py-[2px] rounded-full text-[11px] font-semibold shrink-0 ${KIND_CLS[kind]}`}>{t(key)}</span>;
 }
 
 function isImg(u: string) {
@@ -28,33 +30,35 @@ function isImg(u: string) {
 }
 
 export function Tasks() {
-  const t = legacy.getTasksState();
+  const { t } = useTranslation();
+  const tasks = legacy.getTasksState();
   return (
     <div className="h-full overflow-y-auto p-[18px_22px] relative">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="m-0 text-[16px] font-semibold">任务</h1>
+        <h1 className="m-0 text-[16px] font-semibold">{t("tasks.title")}</h1>
         <button onClick={() => legacy.manualRefresh()} className="flex items-center gap-1.5 px-3 py-1.5 border border-border bg-card text-text rounded-lg text-[12.5px] cursor-pointer">
-          <span className={t.refreshing ? "inline-block animate-spin" : ""}>↻</span>
-          {t.refreshing ? "刷新中" : "刷新"}
+          <span className={tasks.refreshing ? "inline-block animate-spin" : ""}>↻</span>
+          {tasks.refreshing ? t("common.refreshing") : t("common.refresh")}
         </button>
       </div>
 
       <div className="flex flex-col gap-2.5">
-        {t.list.length ? (
-          t.list.map((j) => <TaskRow key={j.id} job={j} active={j.id === t.detailId} onOpen={() => legacy.openJob(j.id)} />)
+        {tasks.list.length ? (
+          tasks.list.map((j) => <TaskRow key={j.id} job={j} active={j.id === tasks.detailId} onOpen={() => legacy.openJob(j.id)} />)
         ) : (
-          <div className="text-muted p-10 text-center">{t.loading ? "加载任务中…" : "暂无任务"}</div>
+          <div className="text-muted p-10 text-center">{tasks.loading ? t("tasks.loading") : t("tasks.empty")}</div>
         )}
       </div>
 
-      {t.detailId ? <Drawer detailId={t.detailId} detail={t.detail} onClose={() => legacy.closeJob()} /> : null}
+      {tasks.detailId ? <Drawer detailId={tasks.detailId} detail={tasks.detail} onClose={() => legacy.closeJob()} /> : null}
     </div>
   );
 }
 
 function TaskRow({ job, active, onOpen }: { job: Job; active: boolean; onOpen: () => void }) {
+  const { t } = useTranslation();
   const failed = job.status === "failed";
-  const sub = job.result_summary ? job.result_summary.slice(0, 70) : job.channel ? `来自 ${job.channel}` : "";
+  const sub = job.result_summary ? job.result_summary.slice(0, 70) : job.channel ? t("tasks.fromChannel", { channel: job.channel }) : "";
   const running = job.status === "running" || job.status === "pending";
   return (
     <div onClick={onOpen} className={`bg-card border rounded-xl p-[13px_16px] cursor-pointer ${active ? "border-orange" : "border-border"}`}>
@@ -78,13 +82,14 @@ function TaskRow({ job, active, onOpen }: { job: Job; active: boolean; onOpen: (
 }
 
 function Drawer({ detailId, detail, onClose }: { detailId: string; detail: JobDetail | null; onClose: () => void }) {
+  const { t } = useTranslation();
   const loading = !detail || detail.job.id !== detailId;
   return (
     <>
       <div onClick={onClose} className="absolute inset-0 bg-black/30 z-30" />
       <div className="absolute top-0 right-0 bottom-0 w-[420px] bg-card border-l border-border z-[31] flex flex-col">
         {loading ? (
-          <div className="flex-1 flex items-center justify-center text-muted">加载详情…</div>
+          <div className="flex-1 flex items-center justify-center text-muted">{t("tasks.loadingDetail")}</div>
         ) : (
           <DrawerBody d={detail!} onClose={onClose} />
         )}
@@ -94,6 +99,7 @@ function Drawer({ detailId, detail, onClose }: { detailId: string; detail: JobDe
 }
 
 function DrawerBody({ d, onClose }: { d: JobDetail; onClose: () => void }) {
+  const { t } = useTranslation();
   const subs = [...d.subtasks].sort((a, b) => a.seq - b.seq);
   const doneN = subs.filter((s) => s.status === "done").length;
   const pct = subs.length ? Math.round((doneN / subs.length) * 100) : d.job.status === "done" ? 100 : 0;
@@ -114,7 +120,7 @@ function DrawerBody({ d, onClose }: { d: JobDetail; onClose: () => void }) {
       <div className="flex-1 overflow-y-auto p-[18px_20px] flex flex-col gap-5">
         <div>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[12px] text-muted">总进度</span>
+            <span className="text-[12px] text-muted">{t("tasks.progress")}</span>
             <span className="text-[12px] text-orange-text font-semibold">{pct}%</span>
           </div>
           <div className="h-1.5 rounded-full bg-track overflow-hidden">
@@ -123,14 +129,14 @@ function DrawerBody({ d, onClose }: { d: JobDetail; onClose: () => void }) {
         </div>
 
         <div>
-          <div className="text-[12px] text-muted font-semibold mb-2.5">步骤</div>
+          <div className="text-[12px] text-muted font-semibold mb-2.5">{t("tasks.steps")}</div>
           <div className="flex flex-col gap-[9px]">
-            {subs.length ? subs.map((s) => <Step key={s.seq} s={s} />) : <div className="text-[12.5px] text-muted">（无步骤）</div>}
+            {subs.length ? subs.map((s) => <Step key={s.seq} s={s} />) : <div className="text-[12.5px] text-muted">{t("tasks.noSteps")}</div>}
           </div>
         </div>
 
         <div>
-          <div className="text-[12px] text-muted font-semibold mb-2.5">事件时间线</div>
+          <div className="text-[12px] text-muted font-semibold mb-2.5">{t("tasks.timeline")}</div>
           <div className="flex flex-col border-l-2 border-border ml-1">
             {d.events.length ? (
               d.events.map((e, i) => (
@@ -141,7 +147,7 @@ function DrawerBody({ d, onClose }: { d: JobDetail; onClose: () => void }) {
                 </div>
               ))
             ) : (
-              <div className="text-[12.5px] text-muted pl-4">（无事件）</div>
+              <div className="text-[12.5px] text-muted pl-4">{t("tasks.noEvents")}</div>
             )}
           </div>
         </div>
@@ -172,6 +178,7 @@ function Step({ s }: { s: Subtask }) {
 }
 
 function Results({ subs }: { subs: Subtask[] }) {
+  const { t } = useTranslation();
   const items: React.ReactNode[] = [];
   subs.forEach((s, i) => {
     if (!s.result_json) return;
@@ -189,7 +196,7 @@ function Results({ subs }: { subs: Subtask[] }) {
         <div key={`u${i}`} className="flex items-center gap-2 text-[13px]">
           <span className="text-muted">📄</span>
           <a href={url} target="_blank" rel="noopener noreferrer" className="text-orange-text no-underline font-medium">
-            {r.filename || "下载结果"}
+            {r.filename || t("tasks.downloadResult")}
           </a>
         </div>,
       );
@@ -198,13 +205,13 @@ function Results({ subs }: { subs: Subtask[] }) {
     if (typeof r.path === "string") items.push(<div key={`p${i}`} className="font-mono text-[11px] text-muted mt-[3px]">{r.path}</div>);
     if (Array.isArray(r.changed_files) && r.changed_files.length) {
       const cf = r.changed_files;
-      items.push(<div key={`cf${i}`} className="text-[11.5px] text-muted mt-1">变更 {cf.length} 个文件：{cf.slice(0, 8).join("、")}{cf.length > 8 ? " …" : ""}</div>);
+      items.push(<div key={`cf${i}`} className="text-[11.5px] text-muted mt-1">{t("tasks.changedFiles", { count: cf.length, files: cf.slice(0, 8).join("、") + (cf.length > 8 ? " …" : "") })}</div>);
     }
   });
   if (!items.length) return null;
   return (
     <div>
-      <div className="text-[12px] text-muted font-semibold mb-2.5">生成结果</div>
+      <div className="text-[12px] text-muted font-semibold mb-2.5">{t("tasks.results")}</div>
       <div className="flex flex-col gap-1">{items}</div>
     </div>
   );

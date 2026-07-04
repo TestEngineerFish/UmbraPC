@@ -50,6 +50,11 @@ contextBridge.exposeInMainWorld("umbra", {
     ipcRenderer.on("umbra:task-confirm-request", l);
     return () => ipcRenderer.removeListener("umbra:task-confirm-request", l);
   },
+  onLocaleChanged: (cb: (locale: string) => void) => {
+    const l = (_e: unknown, locale: string) => cb(locale);
+    ipcRenderer.on("umbra:locale-changed", l);
+    return () => ipcRenderer.removeListener("umbra:locale-changed", l);
+  },
 });
 
 // 剪贴板历史桥（面板窗口与设置页共用）。

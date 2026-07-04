@@ -31,6 +31,7 @@ export interface UmbraConfig {
   screenshotEnabled: boolean;    // 截图功能开关（关则不注册快捷键）
   screenshotShortcut: string;    // 截图全局快捷键
   glmApiKey: string;             // 智谱 GLM API Key（截图翻译直连用；不硬编码，走 env/设置）
+  locale?: string;               // 界面语言（zh-CN | en）；缺省时由主进程按系统语言初始化
 }
 
 const envBool = (k: string, d: boolean) => {

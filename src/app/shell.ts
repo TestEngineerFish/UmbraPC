@@ -7,6 +7,7 @@ import { chatConn, getServerUrl, setServerUrl, setToken, getToken, getDeviceName
 import { fetchJobs, fetchJobDetail, type Job, type JobDetail } from "../services/server";
 import * as chat from "../features/chat/chat";
 import * as desktop from "../services/desktop";
+import { t } from "../i18n";
 
 export type Nav = "chat" | "tasks" | "abilities" | "realtime" | "logs" | "settings";
 
@@ -108,7 +109,7 @@ function titlebar(): string {
     </div>
     <span style="font-weight:600;font-size:13px;letter-spacing:.2px;">Umbra</span>
     <div style="flex:1;"></div>
-    <button data-act="theme" title="切换深浅色" style="-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:center;width:28px;height:24px;border:1px solid var(--border);background:var(--card);border-radius:7px;color:var(--muted);cursor:pointer;">${themeIcon}</button>
+    <button data-act="theme" title="${t("conn.toggleTheme")}" style="-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:center;width:28px;height:24px;border:1px solid var(--border);background:var(--card);border-radius:7px;color:var(--muted);cursor:pointer;">${themeIcon}</button>
     ${connBadge()}
   </div>`;
 }
@@ -117,7 +118,7 @@ function connBadge(): string {
   const s = chatConn.status;
   const color = s === "online" ? "var(--success)" : s === "connecting" ? "var(--warning)" : "var(--danger)";
   const soft = s === "online" ? "var(--success-soft)" : s === "connecting" ? "var(--warning-soft)" : "var(--danger-soft)";
-  const label = s === "online" ? `已连接 · ${chat.serverLabel()}` : s === "connecting" ? "连接中…" : "未连接";
+  const label = s === "online" ? t("conn.onlineWithServer", { server: chat.serverLabel() }) : s === "connecting" ? t("conn.connecting") : t("conn.offline");
   return `<div style="display:flex;align-items:center;gap:7px;padding:3px 10px;border:1px solid var(--border);border-radius:999px;background:var(--card);">
       <span style="width:8px;height:8px;border-radius:999px;background:${color};box-shadow:0 0 0 3px ${soft};"></span>
       <span style="font-size:11.5px;color:var(--muted);">${label}</span>
@@ -127,7 +128,7 @@ function connBadge(): string {
 // 设备 ID 展示：桌面态取真实 deviceId，否则占位。
 function deviceIdLabel(): string {
   const ds = desktop.getDeviceState();
-  return ds?.deviceId || "（仅桌面应用可用）";
+  return ds?.deviceId || t("common.desktopOnly");
 }
 
 // 设备引擎状态卡（仅桌面应用显示）：连接状态 + Provider 数 + 最近任务。
@@ -135,7 +136,7 @@ function deviceIdLabel(): string {
 // Token 输入占位：设备注册需要与服务端 ASSIST_TOKEN 一致。
 function tokenPlaceholder(): string {
   const set = desktop.isDesktop() ? !!desktop.getDesktopConfig()?.hasToken : !!getToken();
-  return set ? "（已保存，留空不变）" : "填服务端 ASSIST_TOKEN（设备注册需要）";
+  return set ? t("settings.tokenSaved") : t("settings.tokenHint");
 }
 
 // 设置页里的内联连接状态。
@@ -147,16 +148,16 @@ function sidebar(): string {
       <span style="width:26px;height:26px;border-radius:7px;background:var(--orange);color:#fff;font-weight:700;font-size:15px;display:flex;align-items:center;justify-content:center;">U</span>
       <span style="color:#fff;font-weight:600;font-size:14.5px;">Umbra</span>
     </div>
-    ${navItem("chat", "聊天", SVG.chat)}
-    ${navItem("tasks", "任务", SVG.tasks)}
-    ${navItem("abilities", "能力", SVG.abilities)}
-    ${navItem("realtime", "实时操作", SVG.realtime)}
-    ${navItem("logs", "日志", SVG.logs)}
-    ${navItem("settings", "设置", SVG.settings)}
+    ${navItem("chat", t("nav.chat"), SVG.chat)}
+    ${navItem("tasks", t("nav.tasks"), SVG.tasks)}
+    ${navItem("abilities", t("nav.abilities"), SVG.abilities)}
+    ${navItem("realtime", t("nav.realtime"), SVG.realtime)}
+    ${navItem("logs", t("nav.logs"), SVG.logs)}
+    ${navItem("settings", t("nav.settings"), SVG.settings)}
     <div style="flex:1;"></div>
     <div style="border-top:1px solid rgba(255,255,255,.08);padding:12px 6px 2px;">
       <div style="color:rgba(255,255,255,.9);font-size:12px;font-weight:500;">MacBook-Pro-2.local</div>
-      <div style="color:rgba(255,255,255,.42);font-size:11px;margin-top:2px;">macOS · 此设备</div>
+      <div style="color:rgba(255,255,255,.42);font-size:11px;margin-top:2px;">macOS · ${t("sidebar.thisDevice")}</div>
     </div>
   </nav>`;
 }
@@ -189,9 +190,9 @@ function fmtListTime(s?: string): string {
   const days = Math.round((sod(now) - sod(d)) / 86400000);
   const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   if (days <= 0) return hm;
-  if (days === 1) return "昨天";
-  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日`;
-  return `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+  if (days === 1) return t("time.yesterday");
+  if (d.getFullYear() === now.getFullYear()) return t("time.monthDay", { month: d.getMonth() + 1, day: d.getDate() });
+  return t("time.yearMonthDay", { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate() });
 }
 
 
@@ -308,7 +309,7 @@ function toggleClipEnabled(): void {
 
 function clearClipHistory(): void {
   if (!clipBridge) return;
-  if (!confirm("确定清空全部非收藏的剪贴板历史？收藏条目会保留。")) return;
+  if (!confirm(t("settings.clipClearConfirm"))) return;
   clipBridge.clear().catch(() => {});
 }
 

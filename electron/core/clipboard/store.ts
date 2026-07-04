@@ -3,6 +3,7 @@
 import { promises as fs } from "node:fs";
 import * as fssync from "node:fs";
 import * as path from "node:path";
+import { mt, getMainLocale } from "../../i18n";
 
 export type ClipType = "text" | "image" | "files";
 
@@ -23,7 +24,7 @@ export interface ClipItem {
 
 export const NON_FAV_LIMIT = 100;
 export const FAV_LIMIT = 100;
-export const FAV_LIMIT_MSG = "已达收藏历史数量上限，请阁下删除收藏历史后再进行操作";
+export const FAV_LIMIT_MSG = () => mt("electron.favLimit", undefined, getMainLocale());
 
 export type ClipCategory = "all" | "text" | "image" | "files" | "favorite";
 
@@ -121,7 +122,7 @@ export class ClipStore {
     if (!it) return undefined;
     if (favorite && !it.favorite) {
       const favCount = this.items.filter((x) => x.favorite).length;
-      if (favCount >= FAV_LIMIT) throw new Error(FAV_LIMIT_MSG);
+      if (favCount >= FAV_LIMIT) throw new Error(FAV_LIMIT_MSG());
     }
     it.favorite = favorite;
     it.lastUsedAt = Date.now();

@@ -11,6 +11,7 @@ import { requestStop } from "./core/computer";
 import { initRpc } from "./core/shared/rpc";
 import { ClipboardManager } from "./core/clipboard";
 import { ScreenshotManager } from "./core/screenshot";
+import { resolveLocale, setMainLocale } from "./i18n";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
 
@@ -130,6 +131,7 @@ function publicConfig(c: UmbraConfig) {
     computerUseEnabled: c.computerUseEnabled,
     computerConfirm: c.computerConfirm,
     disabledProviders: c.disabledProviders || [],
+    locale: resolveLocale(c.locale),
   };
 }
 
@@ -149,8 +151,17 @@ function registerIpc(): void {
   ipcMain.handle("umbra:getConfig", () => publicConfig(store.get()));
   ipcMain.handle("umbra:setConfig", async (_e, patch: Partial<UmbraConfig>) => {
     if (patch.token === "" || patch.token === undefined) delete (patch as Record<string, unknown>).token;
+    const prevLocale = resolveLocale(store.get().locale);
     await store.save(patch);
-    return publicConfig(store.get());
+    const cfg = store.get();
+    const nextLocale = resolveLocale(cfg.locale);
+    if (patch.locale && nextLocale !== prevLocale) {
+      setMainLocale(nextLocale);
+      for (const w of BrowserWindow.getAllWindows()) {
+        w.webContents.send("umbra:locale-changed", nextLocale);
+      }
+    }
+    return publicConfig(cfg);
   });
   // 设备引擎（渲染层连 /ws/device）所需：注册信息、Provider 列表、执行、确认。
   ipcMain.handle("umbra:getRegisterInfo", () => executor.getRegisterInfo());
@@ -220,6 +231,14 @@ app.whenReady().then(async () => {
   await fixPath(); // 先补全 PATH，之后 Provider 探测(which)才能找到 claude/codex/ffmpeg
   store = new ConfigStore(app.getPath("userData"));
   await store.load();
+  if (!store.get().locale) {
+    try {
+      await store.save({ locale: resolveLocale(app.getLocale()) });
+    } catch {
+      await store.save({ locale: resolveLocale(null) });
+    }
+  }
+  setMainLocale(resolveLocale(store.get().locale));
   executor = new TaskExecutor(store);
   registerIpc();
   createWindow();

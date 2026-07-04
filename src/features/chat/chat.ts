@@ -1,6 +1,7 @@
 // 实时聊天：连接 /ws/chat，按现有协议驱动设计稿里的聊天组件
 // （流式回复、工具轨迹、任务进度卡、执行前确认、完成通知、图片预览、跨端同步）。
 import { chatConn, fetchHistory, getServerUrl } from "../../services/server";
+import { t } from "../../i18n";
 
 type Block =
   | { kind: "user"; text: string; ts?: string | number }
@@ -43,9 +44,9 @@ function fmtMsgTime(ts?: string | number): string {
   const days = Math.round((sod(now) - sod(d)) / 86400000);
   const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   if (days <= 0) return hm;
-  if (days === 1) return `昨天 ${hm}`;
-  if (d.getFullYear() === now.getFullYear()) return `${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${hm}`;
+  if (days === 1) return t("time.yesterdayAt", { time: hm });
+  if (d.getFullYear() === now.getFullYear()) return t("time.monthDayAt", { month: d.getMonth() + 1, day: d.getDate(), time: hm });
+  return t("time.yearMonthDayAt", { year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(), time: hm });
 }
 
 export function setAppRerender(cb: () => void): void {
@@ -145,7 +146,7 @@ function onMessage(msg: any): void {
     case "job_update": handleJob(msg); break;
     case "confirm_request":
       if (msg.task_id && !blocks.some((b) => b.kind === "confirm" && b.taskId === msg.task_id)) {
-        blocks.push({ kind: "confirm", taskId: msg.task_id, summary: msg.summary || "需要执行前确认", detail: msg.detail });
+        blocks.push({ kind: "confirm", taskId: msg.task_id, summary: msg.summary || t("chat.needConfirm"), detail: msg.detail });
       }
       break;
     case "confirm_resolved":
@@ -157,7 +158,7 @@ function onMessage(msg: any): void {
       break;
     case "error":
       if (assistantIdx !== null) { const a = currentAssistant(); if (a) { a.thinking = false; a.streaming = false; } assistantIdx = null; }
-      blocks.push({ kind: "error", text: msg.message || "出错了" });
+      blocks.push({ kind: "error", text: msg.message || t("chat.error") });
       break;
     default: return;
   }
@@ -177,7 +178,7 @@ function handleJob(msg: any): void {
   const pct = Math.max(0, Math.min(100, Math.round(overall * 100)));
   let idx = jobMap[id];
   if (idx === undefined) {
-    blocks.push({ kind: "job", jobId: id, goal: msg.goal || "任务", pct, status: msg.status || "running", message: msg.message || "" });
+    blocks.push({ kind: "job", jobId: id, goal: msg.goal || t("chat.task"), pct, status: msg.status || "running", message: msg.message || "" });
     idx = blocks.length - 1;
     jobMap[id] = idx;
   }
@@ -197,7 +198,7 @@ function handleJob(msg: any): void {
 
 // ── 渲染 ────────────────────────────────────────────────────────────────────
 function imageHtml(url: string): string {
-  return `<img data-img="${esc(url)}" src="${esc(url)}" alt="图片" style="display:block;margin-top:8px;max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;" onerror="this.remove()">`;
+  return `<img data-img="${esc(url)}" src="${esc(url)}" alt="${esc(t("chat.imageAlt"))}" style="display:block;margin-top:8px;max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;" onerror="this.remove()">`;
 }
 function assistantBody(text: string): string {
   let html = esc(text);
@@ -220,7 +221,7 @@ function blockHtml(b: Block, i: number): string {
   if (b.kind === "assistant") {
     const trace = b.trace.length
       ? `<div style="align-self:flex-start;max-width:80%;width:100%;">
-          <div data-trace="${i}" style="display:flex;align-items:center;gap:7px;cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:6px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .15s;transform:rotate(${b.traceOpen ? 90 : 0}deg);"><path d="M9 6l6 6-6 6"></path></svg>工具轨迹 · ${b.trace.length} 步</div>
+          <div data-trace="${i}" style="display:flex;align-items:center;gap:7px;cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:6px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .15s;transform:rotate(${b.traceOpen ? 90 : 0}deg);"><path d="M9 6l6 6-6 6"></path></svg>${esc(t("chat.toolTrace", { count: b.trace.length }))}</div>
           ${b.traceOpen ? `<div style="background:var(--track);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.85;color:var(--muted);">${b.trace.map((t) => `<div>${esc(t)}</div>`).join("")}</div>` : ""}
         </div>`
       : "";
@@ -231,7 +232,7 @@ function blockHtml(b: Block, i: number): string {
   if (b.kind === "job") {
     const color = b.status === "done" ? "var(--success)" : b.status === "failed" ? "var(--danger)" : "var(--orange)";
     const confirm = b.confirmTaskId
-      ? `<div style="display:flex;gap:9px;margin-top:11px;"><button data-approve="${esc(b.confirmTaskId)}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">批准执行</button><button data-deny="${esc(b.confirmTaskId)}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">拒绝</button></div>`
+      ? `<div style="display:flex;gap:9px;margin-top:11px;"><button data-approve="${esc(b.confirmTaskId)}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approve"))}</button><button data-deny="${esc(b.confirmTaskId)}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.reject"))}</button></div>`
       : "";
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-left:3px solid ${color};border-radius:10px;padding:13px 15px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;"><span style="font-weight:600;">${esc(b.goal)}</span><span style="font-size:12px;color:var(--orange-text);font-weight:600;">${b.pct}%</span></div>
@@ -248,16 +249,16 @@ function blockHtml(b: Block, i: number): string {
         return `${img}<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg><a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--orange-text);text-decoration:none;font-weight:500;">${esc(r.title)}</a></div>`;
       })
       .join("");
-    return `<div style="align-self:flex-start;max-width:80%;background:var(--success-soft);border:1px solid var(--success);border-left:3px solid var(--success);border-radius:10px;padding:13px 15px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;">🎉 任务完成：${esc(b.goal)}</div>${links}</div>`;
+    return `<div style="align-self:flex-start;max-width:80%;background:var(--success-soft);border:1px solid var(--success);border-left:3px solid var(--success);border-radius:10px;padding:13px 15px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;">🎉 ${esc(t("chat.done"))}：${esc(b.goal)}</div>${links}</div>`;
   }
 
   if (b.kind === "confirm") {
     const detail = b.detail != null ? (typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail)) : "";
     const foot = b.resolved
-      ? `<div style="font-size:12.5px;font-weight:600;margin-top:9px;color:${b.resolved === "approved" ? "var(--success)" : "var(--danger)"};">${b.resolved === "approved" ? "✅ 已批准执行" : "🚫 已拒绝"}</div>`
-      : `<div style="display:flex;gap:9px;margin-top:11px;"><button data-approve="${esc(b.taskId)}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">批准执行</button><button data-deny="${esc(b.taskId)}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">拒绝</button></div>`;
+      ? `<div style="font-size:12.5px;font-weight:600;margin-top:9px;color:${b.resolved === "approved" ? "var(--success)" : "var(--danger)"};">${b.resolved === "approved" ? `✅ ${esc(t("chat.approved"))}` : `🚫 ${esc(t("chat.denied"))}`}</div>`
+      : `<div style="display:flex;gap:9px;margin-top:11px;"><button data-approve="${esc(b.taskId)}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approve"))}</button><button data-deny="${esc(b.taskId)}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.reject"))}</button></div>`;
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--orange-soft);border:1px solid var(--orange);border-radius:10px;padding:13px 15px;">
-        <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>执行前确认</div>
+        <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>${esc(t("chat.needConfirm"))}</div>
         <div style="font-size:13px;line-height:1.55;color:var(--text);">${esc(b.summary)}</div>
         ${detail ? `<div style="font-size:11.5px;color:var(--muted);margin-top:6px;font-family:ui-monospace,Menlo,monospace;word-break:break-all;">${esc(detail)}</div>` : ""}
         ${foot}
@@ -274,8 +275,8 @@ function renderMessages(preserve = false): void {
   const prevTop = el.scrollTop;
   if (blocks.length === 0) {
     el.innerHTML = historyLoading
-      ? `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);gap:9px;min-height:300px;font-size:14px;">${dots}<span>加载历史消息…</span></div>`
-      : `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;"><span style="width:46px;height:46px;border-radius:12px;background:var(--orange);color:#fff;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:.92;">U</span><span style="font-size:15px;">开始和 Umbra 聊天</span></div>`;
+      ? `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);gap:9px;min-height:300px;font-size:14px;">${dots}<span>${esc(t("common.loading"))}</span></div>`
+      : `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;"><span style="width:46px;height:46px;border-radius:12px;background:var(--orange);color:#fff;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:.92;">U</span><span style="font-size:15px;">${esc(t("chat.emptyHint"))}</span></div>`;
   } else {
     // 每条消息包一层 flex:none，避免纵向 flex 在内容（高图片）超高时压缩重叠。
     el.innerHTML = blocks
@@ -306,7 +307,7 @@ function send(): void {
   blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
   assistantIdx = blocks.length - 1;
   if (!chatConn.sendMessage(text)) {
-    blocks.push({ kind: "error", text: "未连接到服务端，消息未发出。请检查设置里的服务端地址。" });
+    blocks.push({ kind: "error", text: t("chat.notConnected") });
     assistantIdx = null;
   }
   renderMessages();
@@ -324,20 +325,43 @@ function newSession(): void {
 }
 
 // 把聊天屏渲染进 container；只在首次写入外壳，事件只刷新消息区（保留输入框焦点）。
+let chatShellEl: HTMLElement | null = null;
+
+function refreshChatShell(el: HTMLElement): void {
+  const h1 = el.querySelector("h1");
+  if (h1) h1.textContent = t("nav.chat");
+  const newsess = el.querySelector("#newsess");
+  if (newsess) {
+    newsess.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>${esc(t("chat.newSession"))}`;
+  }
+  const ta = el.querySelector("#draft") as HTMLTextAreaElement | null;
+  if (ta) ta.placeholder = t("chat.placeholder");
+  const sendbtn = el.querySelector("#sendbtn");
+  if (sendbtn) {
+    sendbtn.innerHTML = `${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>`;
+  }
+}
+
 export function mount(el: HTMLElement): void {
   container = el;
   ensureStarted();
+  if (chatShellEl === el) {
+    refreshChatShell(el);
+    renderMessages();
+    return;
+  }
+  chatShellEl = el;
   el.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;min-height:0;position:relative;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--border);flex:none;">
-        <h1 style="margin:0;font-size:16px;font-weight:600;">聊天</h1>
-        <button id="newsess" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>新会话</button>
+        <h1 style="margin:0;font-size:16px;font-weight:600;">${esc(t("nav.chat"))}</h1>
+        <button id="newsess" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>${esc(t("chat.newSession"))}</button>
       </div>
       <div id="umsgs" style="flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:16px;min-height:0;"></div>
       <div style="flex:none;border-top:1px solid var(--border);background:var(--card);padding:12px 16px;">
         <div style="display:flex;gap:10px;align-items:flex-end;">
-          <textarea id="draft" placeholder="输入消息，Enter 发送，Shift+Enter 换行" rows="2" style="flex:1;resize:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;padding:9px 12px;font-size:13.5px;line-height:1.5;font-family:inherit;outline:none;max-height:120px;"></textarea>
-          <button id="sendbtn" style="flex:none;display:flex;align-items:center;gap:6px;padding:9px 16px;height:40px;background:var(--orange);color:#fff;border:none;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;align-self:center;">发送<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
+          <textarea id="draft" placeholder="${esc(t("chat.placeholder"))}" rows="2" style="flex:1;resize:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;padding:9px 12px;font-size:13.5px;line-height:1.5;font-family:inherit;outline:none;max-height:120px;"></textarea>
+          <button id="sendbtn" style="flex:none;display:flex;align-items:center;gap:6px;padding:9px 16px;height:40px;background:var(--orange);color:#fff;border:none;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;align-self:center;">${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
         </div>
       </div>
       <div id="ulightbox"></div>
@@ -382,7 +406,7 @@ function onMsgsClick(e: Event): void {
 // 标记某个确认已被处理（Job 卡片 + 独立确认卡片都更新）。
 function resolveConfirm(taskId: string, approved: boolean): void {
   for (const b of blocks) {
-    if (b.kind === "job" && b.confirmTaskId === taskId) { b.confirmTaskId = undefined; b.message = approved ? "已批准，执行中…" : "已拒绝"; }
+    if (b.kind === "job" && b.confirmTaskId === taskId) { b.confirmTaskId = undefined; b.message = approved ? t("chat.approved") : t("chat.denied"); }
     if (b.kind === "confirm" && b.taskId === taskId) { b.resolved = approved ? "approved" : "denied"; }
   }
   renderMessages();
@@ -397,6 +421,7 @@ function openLightbox(src: string): void {
 
 export function unmount(): void {
   container = null;
+  chatShellEl = null;
 }
 
 export function serverLabel(): string {

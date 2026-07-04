@@ -1,6 +1,6 @@
 // 主窗口入口。
-import { createRoot } from "react-dom/client";
 import { App } from "./app/App";
 import "./styles/index.css";
+import { mountApp } from "./i18n/bootstrap";
 
-createRoot(document.getElementById("app")!).render(<App />);
+void mountApp(document.getElementById("app")!, <App />);

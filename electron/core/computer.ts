@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { httpBase, UmbraConfig } from "./config";
+import { mt, getMainLocale } from "../i18n";
 import { Confirm, Manifest, Registry, Report } from "./providers/registry";
 import { uploadFile } from "./shared/upload";
 import { run } from "./shared/util";
@@ -34,7 +35,7 @@ async function requireScreen(): Promise<void> {
   if (process.platform !== "darwin") return;
   const { systemPreferences } = await import("electron");
   if (systemPreferences.getMediaAccessStatus("screen") !== "granted") {
-    throw new Error("未授予「屏幕录制」权限：设置 → 权限 → 屏幕录制 → 去授权（授权后需重启应用）");
+    throw new Error(mt("electron.screenPermDenied", undefined, getMainLocale()));
   }
 }
 // 辅助功能权限（点击/输入/按键/滚动需要；截图与打开应用不需要）。
@@ -42,7 +43,7 @@ async function requireAccessibility(): Promise<void> {
   if (process.platform !== "darwin") return;
   const { systemPreferences } = await import("electron");
   if (!systemPreferences.isTrustedAccessibilityClient(false)) {
-    throw new Error("未授予「辅助功能」权限：设置 → 权限 → 辅助功能 → 去授权（开发模式下授权对象是 Electron；正式打包后是 UmbraPC）");
+    throw new Error(mt("electron.accessibilityDenied", undefined, getMainLocale()));
   }
 }
 
@@ -56,9 +57,9 @@ async function loadNut(): Promise<any> {
 
 async function shoot(cfg: UmbraConfig): Promise<unknown> {
   const tmp = path.join(os.tmpdir(), `umbra-cu-${Date.now()}.png`);
-  if (process.platform !== "darwin") throw new Error(`暂不支持的平台：${process.platform}`);
+  if (process.platform !== "darwin") throw new Error(mt("electron.platformUnsupported", { platform: process.platform }, getMainLocale()));
   const res = await run("screencapture", ["-x", tmp]);
-  if (res.code !== 0) throw new Error(`截图失败：${res.output.slice(-200)}`);
+  if (res.code !== 0) throw new Error(mt("electron.screenshotFailed", { detail: res.output.slice(-200) }, getMainLocale()));
   // 降采样到最长边 ~1440，控制体积（Retina 全屏原图数 MB，视觉模型有大小/分辨率限制）。
   // 归一化坐标(0-1000)与分辨率无关，缩放不影响点击定位。
   await run("sips", ["-Z", "1440", tmp]).catch(() => undefined);
@@ -84,24 +85,26 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
   if (skill === "open_app") {
     const app = String(params.app || "").trim();
     const url = String(params.url || "").trim();
-    if (!app) throw new Error("缺少 app");
-    if (blacklisted(app, cfg.computerBlacklist)) throw new Error(`禁止打开黑名单应用：${app}`);
-    if (cfg.computerConfirm && !(await confirm(`允许 Umbra 打开/切换到应用「${app}」${url ? `并访问 ${url}` : ""}？`, { app, url: url || undefined }))) {
-      throw new Error("用户拒绝");
+    const loc = getMainLocale();
+    if (!app) throw new Error(mt("electron.appMissing", undefined, loc));
+    if (blacklisted(app, cfg.computerBlacklist)) throw new Error(mt("electron.blacklistApp", { app }, loc));
+    const urlPart = url ? mt("electron.openAppWithUrl", { url }, loc) : "";
+    if (cfg.computerConfirm && !(await confirm(mt("electron.openAppConfirm", { app, urlPart }, loc), { app, url: url || undefined }))) {
+      throw new Error(mt("electron.userDenied", undefined, loc));
     }
     const args = url ? ["-a", app, url] : ["-a", app];
     const res = await run("open", args);
-    if (res.code !== 0) throw new Error(`打开应用失败：${res.output.slice(-200)}`);
-    await report(`已打开 ${app}${url ? ` · ${url}` : ""}`, { progress: 1 });
+    if (res.code !== 0) throw new Error(mt("electron.openAppFailed", { detail: res.output.slice(-200) }, loc));
+    await report(mt("electron.openedApp", { app, urlPart: url ? ` · ${url}` : "" }, loc), { progress: 1 });
     return { opened: app, url: url || undefined };
   }
 
   // 其余动作都作用于"当前前台应用"，先做黑名单校验。
   const front = await frontmostApp();
-  if (blacklisted(front, cfg.computerBlacklist)) throw new Error(`禁止操作：前台应用「${front}」在黑名单中`);
+  if (blacklisted(front, cfg.computerBlacklist)) throw new Error(mt("electron.blacklistFront", { app: front }, getMainLocale()));
 
   if (skill === "operate") {
-    throw new Error("operate（自主操作）尚未接入决策引擎，当前仅支持原子动作：open_app / click / type / key / scroll / screenshot。");
+    throw new Error(mt("electron.operateUnsupported", undefined, getMainLocale()));
   }
 
   // 点击/输入/按键/滚动需要辅助功能权限。
@@ -124,18 +127,21 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     await mouse.setPosition(new Point(x, y));
     await mouse.click(btn === "right" ? Button.RIGHT : btn === "middle" ? Button.MIDDLE : Button.LEFT);
     const norm = params.nx != null ? ` [归一化 nx=${params.nx},ny=${params.ny}]` : "";
-    await report(`点击 (${x}, ${y})${norm}`, {});
+    await report(mt("electron.clickAt", { x, y, norm }, getMainLocale()), {});
     return { clicked: [x, y] };
   }
 
   if (skill === "type") {
     const text = String(params.text ?? "");
     if (!text) throw new Error("type 需要 text");
-    if (cfg.computerConfirm && !(await confirm(`允许在「${front || "当前应用"}」输入文本：「${text.slice(0, 40)}${text.length > 40 ? "…" : ""}」？`, {}))) {
-      throw new Error("用户拒绝");
+    const loc = getMainLocale();
+    const appName = front || mt("electron.currentApp", undefined, loc);
+    const displayText = `${text.slice(0, 40)}${text.length > 40 ? "…" : ""}`;
+    if (cfg.computerConfirm && !(await confirm(mt("electron.typeConfirm", { app: appName, text: displayText }, loc), {}))) {
+      throw new Error(mt("electron.userDenied", undefined, loc));
     }
     await keyboard.type(text);
-    await report(`输入文本（${text.length} 字）`, {});
+    await report(mt("electron.typedChars", { count: text.length }, loc), {});
     return { typed: text.length };
   }
 
@@ -143,13 +149,14 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     const keys: string[] = Array.isArray(params.keys) ? params.keys.map(String) : params.key ? [String(params.key)] : [];
     if (!keys.length) throw new Error("key 需要 keys 数组或 key");
     const mapped = keys.map((k) => Key[KEYMAP[k.toLowerCase()] || (k.length === 1 ? k.toUpperCase() : k)]).filter((v: unknown) => v !== undefined);
-    if (!mapped.length) throw new Error(`无法识别按键：${keys.join("+")}`);
-    if (cfg.computerConfirm && !(await confirm(`允许按下组合键：${keys.join(" + ")}？`, {}))) {
-      throw new Error("用户拒绝");
+    const loc = getMainLocale();
+    if (!mapped.length) throw new Error(mt("electron.keyUnknown", { keys: keys.join("+") }, loc));
+    if (cfg.computerConfirm && !(await confirm(mt("electron.keyConfirm", { keys: keys.join(" + ") }, loc), {}))) {
+      throw new Error(mt("electron.userDenied", undefined, loc));
     }
     await keyboard.pressKey(...mapped);
     await keyboard.releaseKey(...mapped);
-    await report(`按键 ${keys.join("+")}`, {});
+    await report(mt("electron.keyPressed", { keys: keys.join("+") }, loc), {});
     return { key: keys };
   }
 
@@ -160,7 +167,7 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     else if (dir === "left") await mouse.scrollLeft(amount);
     else if (dir === "right") await mouse.scrollRight(amount);
     else await mouse.scrollDown(amount);
-    await report(`滚动 ${dir} ${amount}`, {});
+    await report(mt("electron.scrolled", { dir, amount }, getMainLocale()), {});
     return { scrolled: dir, amount };
   }
 

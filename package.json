@@ -21,6 +21,8 @@
   },
   "dependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6",
+    "i18next": "^26.3.4",
+    "react-i18next": "^17.0.8",
     "ws": "^8.21.0"
   },
   "devDependencies": {

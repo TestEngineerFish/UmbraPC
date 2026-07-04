@@ -17,6 +17,7 @@ interface PublicConfig {
   computerUseEnabled: boolean;
   computerConfirm: boolean;
   disabledProviders: string[];
+  locale: string;
 }
 
 // providers.json 里的一条自定义程序。
@@ -47,6 +48,7 @@ interface UmbraBridge {
   setDisabled(list: string[]): Promise<PublicConfig>;
   getProvidersConfig(): Promise<CustomProviderCfg[]>;
   saveProvidersConfig(providers: CustomProviderCfg[]): Promise<boolean>;
+  onLocaleChanged(cb: (locale: string) => void): () => void;
   onRpc(cb: (msg: { id: string; method: string; args: unknown }) => void): () => void;
   sendRpcResult(id: string, ok: boolean, result: unknown, error?: string): void;
 }

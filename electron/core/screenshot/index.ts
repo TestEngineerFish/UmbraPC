@@ -3,6 +3,7 @@
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
 import { ConfigStore } from "../config";
+import { mt } from "../../i18n";
 import { ocrImage, translateImage } from "./ocr";
 import { StickerManager } from "./stickers";
 
@@ -70,11 +71,11 @@ export class ScreenshotManager {
     await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } }).catch(() => {});
     const r = await dialog.showMessageBox({
       type: "info",
-      buttons: ["去授权", "取消"],
+      buttons: [mt("electron.goAuthorize"), mt("common.cancel")],
       defaultId: 0,
       cancelId: 1,
-      message: "需要「屏幕录制」权限",
-      detail: "截图需在 系统设置 → 隐私与安全性 → 屏幕录制 中授权 Umbra（授权后需重启应用生效）。",
+      message: mt("electron.screenPermTitle"),
+      detail: mt("electron.screenPermDetail"),
     });
     if (r.response === 0) shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture");
     return false;
@@ -188,7 +189,8 @@ export class ScreenshotManager {
     ipcMain.handle("screenshot:save", async (_e, dataUrl: string) => {
       const now = new Date();
       const p = (n: number) => String(n).padStart(2, "0");
-      const name = `Umbra截图-${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}.png`;
+      const time = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+      const name = `${mt("electron.shotFilename", { time })}.png`;
       const { canceled, filePath } = await dialog.showSaveDialog(this.overlay!, {
         defaultPath: path.join(app.getPath("pictures"), name),
         filters: [{ name: "PNG", extensions: ["png"] }],

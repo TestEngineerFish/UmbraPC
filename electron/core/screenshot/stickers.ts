@@ -1,6 +1,7 @@
 // 贴图（Snipaste 式）：截图原位钉在桌面，可多张、拖移、滚轮缩放、右键原生菜单。
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
+import { mt } from "../../i18n";
 
 interface StickerOpts {
   preloadPath: string;
@@ -93,18 +94,19 @@ export class StickerManager {
       const dataUrl = this.images.get(e.sender.id) || "";
       const menu = Menu.buildFromTemplate([
         {
-          label: "复制",
+          label: mt("electron.stickerCopy"),
           click: () => {
             const img = nativeImage.createFromDataURL(dataUrl);
             if (!img.isEmpty()) clipboard.writeImage(img);
           },
         },
         {
-          label: "保存…",
+          label: mt("electron.stickerSave"),
           click: async () => {
             const now = new Date();
             const p = (n: number) => String(n).padStart(2, "0");
-            const name = `Umbra截图-${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}.png`;
+            const time = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`;
+            const name = `${mt("electron.shotFilename", { time })}.png`;
             const { canceled, filePath } = await dialog.showSaveDialog(win, { defaultPath: path.join(app.getPath("pictures"), name), filters: [{ name: "PNG", extensions: ["png"] }] });
             if (canceled || !filePath) return;
             const img = nativeImage.createFromDataURL(dataUrl);
@@ -112,8 +114,8 @@ export class StickerManager {
           },
         },
         { type: "separator" },
-        { label: "关闭贴图", click: () => win.close() },
-        { label: "关闭全部贴图", click: () => this.closeAll() },
+        { label: mt("electron.stickerClose"), click: () => win.close() },
+        { label: mt("electron.stickerCloseAll"), click: () => this.closeAll() },
       ]);
       menu.popup({ window: win });
     });

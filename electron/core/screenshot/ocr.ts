@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { mt, getMainLocale } from "../../i18n";
 
 export interface OcrResult {
   ok: boolean;
@@ -49,7 +50,7 @@ function run() {
 `;
 
 export async function ocrImage(dataUrl: string): Promise<OcrResult> {
-  if (process.platform !== "darwin") return { ok: false, error: "当前系统暂不支持 OCR（仅 macOS）" };
+  if (process.platform !== "darwin") return { ok: false, error: mt("electron.ocrUnsupported", undefined, getMainLocale()) };
   let imgPath = "";
   let scriptPath = "";
   try {
@@ -91,10 +92,11 @@ export async function translateImage(dataUrl: string, apiKey: string): Promise<T
   const ocr = await ocrImage(dataUrl);
   if (!ocr.ok) return { ok: false, error: ocr.error };
   const source = ocr.text || "";
-  if (!source.trim()) return { ok: false, error: "未识别到文字" };
-  if (!apiKey) return { ok: false, error: "未配置智谱 API Key（设置 → 截图 → 翻译 Key）" };
+  if (!source.trim()) return { ok: false, error: mt("electron.ocrNoText", undefined, getMainLocale()) };
+  if (!apiKey) return { ok: false, error: mt("electron.glmKeyMissing", undefined, getMainLocale()) };
 
-  const target = targetLang(source) === "en" ? "英文" : "中文";
+  const loc = getMainLocale();
+  const target = targetLang(source) === "en" ? mt("electron.translatePromptEn", undefined, loc) : mt("electron.translatePromptZh", undefined, loc);
   const prompt = `把下面的文本翻译成${target}，只输出译文，保持原有分行，不要任何解释或额外内容：\n\n${source}`;
   try {
     const resp = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
@@ -104,12 +106,12 @@ export async function translateImage(dataUrl: string, apiKey: string): Promise<T
     });
     if (!resp.ok) {
       const t = await resp.text().catch(() => "");
-      return { ok: false, source, error: `翻译请求失败(${resp.status})：${t.slice(0, 200)}` };
+      return { ok: false, source, error: mt("electron.translateRequestFailed", { status: resp.status, detail: t.slice(0, 200) }, loc) };
     }
     const data = (await resp.json()) as { choices?: { message?: { content?: string } }[] };
     const translation = data.choices?.[0]?.message?.content?.trim() || "";
     return { ok: true, source, translation };
   } catch (e) {
-    return { ok: false, source, error: (e as Error).message || "翻译失败" };
+    return { ok: false, source, error: (e as Error).message || mt("electron.translateFailed", undefined, loc) };
   }
 }

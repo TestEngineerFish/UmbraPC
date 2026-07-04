@@ -1,5 +1,6 @@
 // 截图覆盖窗（React）· 无感打开 + 框选 + 六种工具(对象化) + 选中/移动/手柄缩放·旋转 + 文字(IME) + 马赛克 + 复制/保存。
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Obj, Point, Selection, Tool, TextObj, COLORS, FONT_SIZES, uid } from "./types";
 import { drawObj, buildMosaicBase } from "./draw";
 import {
@@ -62,6 +63,7 @@ interface TextEdit {
 }
 
 export function App() {
+  const { t } = useTranslation();
   const [imgSrc, setImgSrc] = useState("");
   const [tool, setTool] = useState<Tool>("rect");
   const [colorIdx, setColorIdx] = useState(0);
@@ -71,7 +73,7 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>("wait");
   const [editing, setEditing] = useState<TextEdit | null>(null);
-  const [result, setResult] = useState<{ loading: boolean; title: string; text: string; error?: string } | null>(null);
+  const [result, setResult] = useState<{ loading: boolean; title: string; text: string; error?: string; kind?: "ocr" | "translate" } | null>(null);
 
   const imgRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -531,16 +533,16 @@ export function App() {
   async function doOcr() {
     const url = compositeClean();
     if (!url) return;
-    setResult({ loading: true, title: "OCR 文字识别", text: "" });
+    setResult({ loading: true, title: t("screenshot.ocrTitle"), text: "", kind: "ocr" });
     const r = await shot.ocr(url);
-    setResult({ loading: false, title: "OCR 文字识别", text: r.ok ? r.text || "" : "", error: r.ok ? undefined : r.error || "识别失败" });
+    setResult({ loading: false, title: t("screenshot.ocrTitle"), text: r.ok ? r.text || "" : "", error: r.ok ? undefined : r.error || t("screenshot.ocrError"), kind: "ocr" });
   }
   async function doTranslate() {
     const url = compositeClean();
     if (!url) return;
-    setResult({ loading: true, title: "翻译", text: "" });
+    setResult({ loading: true, title: t("screenshot.translateTitle"), text: "", kind: "translate" });
     const r = await shot.translate(url);
-    setResult({ loading: false, title: "翻译", text: r.ok ? r.translation || "" : "", error: r.ok ? undefined : r.error || "翻译失败" });
+    setResult({ loading: false, title: t("screenshot.translateTitle"), text: r.ok ? r.translation || "" : "", error: r.ok ? undefined : r.error || t("screenshot.translateError"), kind: "translate" });
   }
 
   function finish() {
@@ -622,7 +624,8 @@ export function App() {
 }
 
 // OCR/翻译结果面板（选区上方；加载/文本可选中/复制全部/错误/空）。
-function ResultPanel({ sel, data, onClose }: { sel: Selection; data: { loading: boolean; title: string; text: string; error?: string }; onClose: () => void }) {
+function ResultPanel({ sel, data, onClose }: { sel: Selection; data: { loading: boolean; title: string; text: string; error?: string; kind?: "ocr" | "translate" }; onClose: () => void }) {
+  const { t } = useTranslation();
   const w = Math.max(280, Math.min(460, sel.w));
   const gap = 10;
   const panelH = 220;
@@ -634,12 +637,12 @@ function ResultPanel({ sel, data, onClose }: { sel: Selection; data: { loading: 
       <div style={{ display: "flex", alignItems: "center", padding: "8px 12px", borderBottom: "1px solid #3a3a3e", fontSize: 13, fontWeight: 600 }}>
         <span style={{ flex: 1 }}>{data.title}</span>
         {!data.loading && !data.error && data.text ? (
-          <button style={{ border: "none", background: "transparent", color: "#fff", cursor: "pointer", padding: "2px 8px", fontSize: 12 }} onClick={() => navigator.clipboard.writeText(data.text)}>复制全部</button>
+          <button style={{ border: "none", background: "transparent", color: "#fff", cursor: "pointer", padding: "2px 8px", fontSize: 12 }} onClick={() => navigator.clipboard.writeText(data.text)}>{t("common.copyAll")}</button>
         ) : null}
         <button style={{ border: "none", background: "transparent", color: "#fff", cursor: "pointer", padding: "2px 8px", fontSize: 14 }} onClick={onClose}>✕</button>
       </div>
       <div style={{ padding: 12, maxHeight: 260, overflow: "auto", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", userSelect: "text" }}>
-        {data.loading ? <span style={{ color: "#aaa" }}>识别中…</span> : data.error ? <span style={{ color: "#FF6961" }}>{data.error}</span> : data.text ? data.text : <span style={{ color: "#aaa" }}>未识别到文字</span>}
+        {data.loading ? <span style={{ color: "#aaa" }}>{data.kind === "translate" ? t("screenshot.translating") : t("screenshot.recognizing")}</span> : data.error ? <span style={{ color: "#FF6961" }}>{data.error}</span> : data.text ? data.text : <span style={{ color: "#aaa" }}>{t("screenshot.noText")}</span>}
       </div>
     </div>
   );
@@ -668,6 +671,7 @@ function SizeBadge({ get }: { get: () => Selection | null }) {
 
 // 光标放大镜 + 取色信息框（微信截图式）：跟随光标，显示放大像素+十字线、LOC 坐标、HEX、复制提示。
 function Magnifier({ getCursor, sample, colorAt }: { getCursor: () => Point; sample: () => { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; ratio: number } | null; colorAt: (x: number, y: number) => string }) {
+  const { t } = useTranslation();
   const cvRef = useRef<HTMLCanvasElement>(null);
   const [tick, setTick] = useState(0);
   useEffect(() => {
@@ -728,7 +732,7 @@ function Magnifier({ getCursor, sample, colorAt }: { getCursor: () => Point; sam
             {hex}
           </span>
         </div>
-        <div style={{ color: "#aaa", marginTop: 2, fontSize: 10 }}>Press ⌘+C 复制颜色</div>
+        <div style={{ color: "#aaa", marginTop: 2, fontSize: 10 }}>{t("screenshot.copyColorHint")}</div>
       </div>
     </div>
   );
@@ -808,16 +812,14 @@ const TOOL_ICON: Record<Tool, React.ReactNode> = {
   ),
 };
 const TOOL_ORDER: Tool[] = ["rect", "ellipse", "arrow", "pen", "mosaic", "text"];
-const TOOL_TIP: Record<Tool, string> = {
-  rect: "矩形",
-  ellipse: "椭圆",
-  arrow: "箭头",
-  pen: "画笔",
-  mosaic: "马赛克",
-  text: "文字",
+const TOOL_TIP_KEY: Record<Tool, string> = {
+  rect: "screenshot.toolRect",
+  ellipse: "screenshot.toolEllipse",
+  arrow: "screenshot.toolArrow",
+  pen: "screenshot.toolPen",
+  mosaic: "screenshot.toolMosaic",
+  text: "screenshot.toolText",
 };
-const SIZE_TIP = ["小", "中", "大"] as const;
-const COLOR_TIP = ["红色", "黄色", "蓝色"] as const;
 
 const ICON = {
   undo: <Ic d="M9 14 4 9l5-5|M4 9h11a5 5 0 1 1 0 10h-3" />,
@@ -856,7 +858,10 @@ function Toolbar(props: {
   onTranslate: () => void;
   onPin: () => void;
 }) {
+  const { t } = useTranslation();
   const { sel, tool } = props;
+  const sizeTip = [t("common.sizeSmall"), t("common.sizeMedium"), t("common.sizeLarge")] as const;
+  const colorTip = [t("common.colorRed"), t("common.colorYellow"), t("common.colorBlue")] as const;
   const gap = 10;
   const barW = 440;
   let top = sel.y + sel.h + gap;
@@ -871,34 +876,34 @@ function Toolbar(props: {
     <div style={{ position: "absolute", left, top, zIndex: 10 }} onMouseDown={(e) => e.stopPropagation()}>
       <div className="tb-bar">
         {TOOL_ORDER.map((k) => (
-          <button key={k} className={`tb-btn tb-tip ${tool === k ? "on" : ""}`} data-tip={TOOL_TIP[k]} onClick={() => props.onTool(k)}>
+          <button key={k} className={`tb-btn tb-tip ${tool === k ? "on" : ""}`} data-tip={t(TOOL_TIP_KEY[k])} onClick={() => props.onTool(k)}>
             {TOOL_ICON[k]}
           </button>
         ))}
         <span className="tb-sep" />
-        <button className="tb-btn tb-tip" data-tip="撤销" onClick={props.onUndo}>{ICON.undo}</button>
-        <button className="tb-btn tb-tip" data-tip="取消" onClick={props.onCancel}>{ICON.cancel}</button>
-        <button className="tb-btn tb-tip" data-tip="保存" onClick={props.onSave}>{ICON.save}</button>
-        <button className="tb-btn tb-tip" data-tip="贴图钉桌面" onClick={props.onPin}>{ICON.pin}</button>
-        <button className="tb-btn tb-tip" data-tip="OCR 文字识别" onClick={props.onOcr}>{ICON.ocr}</button>
-        <button className="tb-btn tb-tip tb-txt" data-tip="翻译" onClick={props.onTranslate}>文A</button>
-        <button className="tb-btn tb-tip tb-check" data-tip="完成 / 复制" onClick={props.onFinish}>{ICON.check}</button>
+        <button className="tb-btn tb-tip" data-tip={t("screenshot.undo")} onClick={props.onUndo}>{ICON.undo}</button>
+        <button className="tb-btn tb-tip" data-tip={t("screenshot.cancel")} onClick={props.onCancel}>{ICON.cancel}</button>
+        <button className="tb-btn tb-tip" data-tip={t("screenshot.save")} onClick={props.onSave}>{ICON.save}</button>
+        <button className="tb-btn tb-tip" data-tip={t("screenshot.pin")} onClick={props.onPin}>{ICON.pin}</button>
+        <button className="tb-btn tb-tip" data-tip={t("screenshot.ocr")} onClick={props.onOcr}>{ICON.ocr}</button>
+        <button className="tb-btn tb-tip tb-txt" data-tip={t("screenshot.translate")} onClick={props.onTranslate}>文A</button>
+        <button className="tb-btn tb-tip tb-check" data-tip={t("screenshot.finish")} onClick={props.onFinish}>{ICON.check}</button>
       </div>
       <div className="tb-panel">
         {isText
           ? FONT_SIZES.map((fs, i) => (
-              <button key={fs} className={`tb-font tb-tip ${props.sizeIdx === i ? "on" : ""}`} data-tip={`字号 ${fs}`} onClick={() => props.onSize(i as 0 | 1 | 2)}>
+              <button key={fs} className={`tb-font tb-tip ${props.sizeIdx === i ? "on" : ""}`} data-tip={t("screenshot.fontSize", { size: fs })} onClick={() => props.onSize(i as 0 | 1 | 2)}>
                 <span style={{ fontSize: 11 + i * 4, lineHeight: 1 }}>A</span>
               </button>
             ))
           : [0, 1, 2].map((i) => (
-              <button key={i} className={`tb-dot tb-tip ${props.sizeIdx === i ? "on" : ""}`} data-tip={`${isMosaic ? "马赛克" : "粗细"} · ${SIZE_TIP[i]}`} onClick={() => props.onSize(i as 0 | 1 | 2)}>
+              <button key={i} className={`tb-dot tb-tip ${props.sizeIdx === i ? "on" : ""}`} data-tip={`${isMosaic ? t("screenshot.mosaicSize") : t("screenshot.thickness")} · ${sizeTip[i]}`} onClick={() => props.onSize(i as 0 | 1 | 2)}>
                 <span style={{ display: "block", width: (isMosaic ? 6 : 4) + i * 3, height: (isMosaic ? 6 : 4) + i * 3, borderRadius: isMosaic ? 2 : "50%", background: "currentColor" }} />
               </button>
             ))}
         <span className="tb-sep" />
         {COLORS.map((c, i) => (
-          <button key={c} className={`tb-swatch tb-tip ${props.colorIdx === i ? "on" : ""}`} style={{ background: c }} data-tip={COLOR_TIP[i]} onClick={() => props.onColor(i)} />
+          <button key={c} className={`tb-swatch tb-tip ${props.colorIdx === i ? "on" : ""}`} style={{ background: c }} data-tip={colorTip[i]} onClick={() => props.onColor(i)} />
         ))}
       </div>
     </div>

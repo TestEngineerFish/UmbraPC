@@ -1,5 +1,5 @@
 // 剪贴板历史面板窗口入口。
-import { createRoot } from "react-dom/client";
 import { Panel } from "./ClipboardPanel";
+import { mountApp } from "../../i18n/bootstrap";
 
-createRoot(document.getElementById("clip-root")!).render(<Panel />);
+void mountApp(document.getElementById("clip-root")!, <Panel />);
