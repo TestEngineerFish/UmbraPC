@@ -590,17 +590,9 @@ export function App() {
   }
 
   // ── 渲染 ──
-  const TOOLS: { key: Tool; label: string }[] = [
-    { key: "rect", label: "▭" },
-    { key: "ellipse", label: "◯" },
-    { key: "arrow", label: "↗" },
-    { key: "pen", label: "✎" },
-    { key: "mosaic", label: "▦" },
-    { key: "text", label: "T" },
-  ];
-
   return (
     <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }}>
+      <style>{TOOLBAR_CSS}</style>
       {imgSrc ? <img ref={imgRef} src={imgSrc} onLoad={onImgLoad} draggable={false} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} alt="" /> : null}
       <canvas ref={canvasRef} onMouseDown={onCanvasDown} onDoubleClick={onCanvasDbl} style={{ position: "absolute", inset: 0, cursor: phase === "select" ? "crosshair" : "default" }} />
       {(phase === "select" || phase === "annotate") && (selection || g.current.mode === "select") ? <SizeBadge get={() => (g.current.mode === "select" ? currentSel() : selection)} /> : null}
@@ -612,7 +604,6 @@ export function App() {
           tool={tool}
           colorIdx={colorIdx}
           sizeIdx={sizeIdx}
-          tools={TOOLS}
           onTool={setTool}
           onColor={applyColor}
           onSize={applySize}
@@ -643,9 +634,9 @@ function ResultPanel({ sel, data, onClose }: { sel: Selection; data: { loading: 
       <div style={{ display: "flex", alignItems: "center", padding: "8px 12px", borderBottom: "1px solid #3a3a3e", fontSize: 13, fontWeight: 600 }}>
         <span style={{ flex: 1 }}>{data.title}</span>
         {!data.loading && !data.error && data.text ? (
-          <button style={{ ...plain, width: "auto", padding: "2px 8px", fontSize: 12 }} onClick={() => navigator.clipboard.writeText(data.text)}>复制全部</button>
+          <button style={{ border: "none", background: "transparent", color: "#fff", cursor: "pointer", padding: "2px 8px", fontSize: 12 }} onClick={() => navigator.clipboard.writeText(data.text)}>复制全部</button>
         ) : null}
-        <button style={{ ...plain, width: "auto", padding: "2px 8px", fontSize: 14 }} onClick={onClose}>✕</button>
+        <button style={{ border: "none", background: "transparent", color: "#fff", cursor: "pointer", padding: "2px 8px", fontSize: 14 }} onClick={onClose}>✕</button>
       </div>
       <div style={{ padding: 12, maxHeight: 260, overflow: "auto", fontSize: 13, lineHeight: 1.6, whiteSpace: "pre-wrap", userSelect: "text" }}>
         {data.loading ? <span style={{ color: "#aaa" }}>识别中…</span> : data.error ? <span style={{ color: "#FF6961" }}>{data.error}</span> : data.text ? data.text : <span style={{ color: "#aaa" }}>未识别到文字</span>}
@@ -782,12 +773,78 @@ function TextEditor({ edit, onChange, onBlurCommit, taRef }: { edit: TextEdit; o
 }
 
 // 工具栏 + 二级面板
+// SVG 图标（stroke=currentColor，随按钮颜色/主题变化）。
+function Ic({ d, fill }: { d: string; fill?: boolean }) {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill={fill ? "currentColor" : "none"} stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      {d.split("|").map((p, i) => (
+        <path key={i} d={p} />
+      ))}
+    </svg>
+  );
+}
+const TOOL_ICON: Record<Tool, React.ReactNode> = {
+  rect: <Ic d="M4 6.5h16v11H4z" />,
+  ellipse: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
+      <ellipse cx="12" cy="12" rx="8.5" ry="6.5" />
+    </svg>
+  ),
+  arrow: <Ic d="M6 18L18 6|10 6h8v8" />,
+  pen: <Ic d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19l-4 1z" />,
+  mosaic: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+      <rect x="4" y="4" width="7" height="7" rx="1" />
+      <rect x="13" y="4" width="7" height="7" rx="1" />
+      <rect x="4" y="13" width="7" height="7" rx="1" />
+      <rect x="13" y="13" width="7" height="7" rx="1" />
+    </svg>
+  ),
+  text: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 5h14" />
+      <path d="M12 5v14" />
+    </svg>
+  ),
+};
+const TOOL_ORDER: Tool[] = ["rect", "ellipse", "arrow", "pen", "mosaic", "text"];
+const TOOL_TIP: Record<Tool, string> = {
+  rect: "矩形",
+  ellipse: "椭圆",
+  arrow: "箭头",
+  pen: "画笔",
+  mosaic: "马赛克",
+  text: "文字",
+};
+const SIZE_TIP = ["小", "中", "大"] as const;
+const COLOR_TIP = ["红色", "黄色", "蓝色"] as const;
+
+const ICON = {
+  undo: <Ic d="M9 14 4 9l5-5|M4 9h11a5 5 0 1 1 0 10h-3" />,
+  cancel: <Ic d="M18 6 6 18|M6 6l12 12" />,
+  save: <Ic d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4|M7 10l5 5 5-5|M12 15V3" />,
+  pin: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 4H16L15 7.5L18 15H6L9 7.5L8 4Z" />
+      <path d="M12 15V21" />
+    </svg>
+  ),
+  ocr: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="4" width="16" height="16" rx="1.5" />
+      <text x="12" y="12.5" textAnchor="middle" dominantBaseline="middle" fill="currentColor" stroke="none" fontSize="11" fontWeight="600" fontFamily="system-ui,-apple-system,'PingFang SC','Microsoft YaHei',sans-serif">
+        文
+      </text>
+    </svg>
+  ),
+  check: <Ic d="M20 6 9 17l-5-5" />,
+};
+
 function Toolbar(props: {
   sel: Selection;
   tool: Tool;
   colorIdx: number;
   sizeIdx: 0 | 1 | 2;
-  tools: { key: Tool; label: string }[];
   onTool: (t: Tool) => void;
   onColor: (i: number) => void;
   onSize: (i: 0 | 1 | 2) => void;
@@ -801,7 +858,7 @@ function Toolbar(props: {
 }) {
   const { sel, tool } = props;
   const gap = 10;
-  const barW = 430;
+  const barW = 440;
   let top = sel.y + sel.h + gap;
   const above = top + 100 > window.innerHeight;
   if (above) top = Math.max(gap, sel.y - 104);
@@ -812,58 +869,78 @@ function Toolbar(props: {
 
   return (
     <div style={{ position: "absolute", left, top, zIndex: 10 }} onMouseDown={(e) => e.stopPropagation()}>
-      <div style={bar}>
-        {props.tools.map((t) => (
-          <button key={t.key} title={t.key} style={toolBtn(tool === t.key)} onClick={() => props.onTool(t.key)}>
-            {t.label}
+      <div className="tb-bar">
+        {TOOL_ORDER.map((k) => (
+          <button key={k} className={`tb-btn tb-tip ${tool === k ? "on" : ""}`} data-tip={TOOL_TIP[k]} onClick={() => props.onTool(k)}>
+            {TOOL_ICON[k]}
           </button>
         ))}
-        <span style={sepV} />
-        <button style={plain} title="撤销" onClick={props.onUndo}>↶</button>
-        <button style={plain} title="OCR 文字识别" onClick={props.onOcr}>字</button>
-        <button style={plain} title="翻译" onClick={props.onTranslate}>译</button>
-        <button style={plain} title="贴图钉桌面" onClick={props.onPin}>📌</button>
-        <button style={plain} title="取消" onClick={props.onCancel}>✕</button>
-        <button style={plain} title="保存" onClick={props.onSave}>⇩</button>
-        <button style={{ ...plain, color: "#34C759" }} title="完成/复制" onClick={props.onFinish}>✓</button>
+        <span className="tb-sep" />
+        <button className="tb-btn tb-tip" data-tip="撤销" onClick={props.onUndo}>{ICON.undo}</button>
+        <button className="tb-btn tb-tip" data-tip="取消" onClick={props.onCancel}>{ICON.cancel}</button>
+        <button className="tb-btn tb-tip" data-tip="保存" onClick={props.onSave}>{ICON.save}</button>
+        <button className="tb-btn tb-tip" data-tip="贴图钉桌面" onClick={props.onPin}>{ICON.pin}</button>
+        <button className="tb-btn tb-tip" data-tip="OCR 文字识别" onClick={props.onOcr}>{ICON.ocr}</button>
+        <button className="tb-btn tb-tip tb-txt" data-tip="翻译" onClick={props.onTranslate}>文A</button>
+        <button className="tb-btn tb-tip tb-check" data-tip="完成 / 复制" onClick={props.onFinish}>{ICON.check}</button>
       </div>
-      <div style={panel}>
-        {isText ? (
-          FONT_SIZES.map((fs, i) => (
-            <button key={fs} onClick={() => props.onSize(i as 0 | 1 | 2)} style={fontBtn(props.sizeIdx === i)}>
-              <span style={{ fontSize: 10 + i * 4 }}>A</span>
-            </button>
-          ))
-        ) : (
-          [0, 1, 2].map((i) => (
-            <button key={i} onClick={() => props.onSize(i as 0 | 1 | 2)} style={dotBtn(props.sizeIdx === i)}>
-              <span style={{ display: "block", width: (isMosaic ? 6 : 4) + i * 3, height: (isMosaic ? 6 : 4) + i * 3, borderRadius: isMosaic ? 2 : "50%", background: props.sizeIdx === i ? "#fff" : "#bbb" }} />
-            </button>
-          ))
-        )}
-        <span style={sepV} />
+      <div className="tb-panel">
+        {isText
+          ? FONT_SIZES.map((fs, i) => (
+              <button key={fs} className={`tb-font tb-tip ${props.sizeIdx === i ? "on" : ""}`} data-tip={`字号 ${fs}`} onClick={() => props.onSize(i as 0 | 1 | 2)}>
+                <span style={{ fontSize: 11 + i * 4, lineHeight: 1 }}>A</span>
+              </button>
+            ))
+          : [0, 1, 2].map((i) => (
+              <button key={i} className={`tb-dot tb-tip ${props.sizeIdx === i ? "on" : ""}`} data-tip={`${isMosaic ? "马赛克" : "粗细"} · ${SIZE_TIP[i]}`} onClick={() => props.onSize(i as 0 | 1 | 2)}>
+                <span style={{ display: "block", width: (isMosaic ? 6 : 4) + i * 3, height: (isMosaic ? 6 : 4) + i * 3, borderRadius: isMosaic ? 2 : "50%", background: "currentColor" }} />
+              </button>
+            ))}
+        <span className="tb-sep" />
         {COLORS.map((c, i) => (
-          <button key={c} onClick={() => props.onColor(i)} style={swatch(c, props.colorIdx === i)} />
+          <button key={c} className={`tb-swatch tb-tip ${props.colorIdx === i ? "on" : ""}`} style={{ background: c }} data-tip={COLOR_TIP[i]} onClick={() => props.onColor(i)} />
         ))}
       </div>
     </div>
   );
 }
 
-// ── 样式 ──
-const bar: React.CSSProperties = { display: "flex", alignItems: "center", gap: 4, background: "#2b2b2e", borderRadius: 9, padding: "5px 8px", boxShadow: "0 6px 20px rgba(0,0,0,.35)" };
-const panel: React.CSSProperties = { display: "flex", alignItems: "center", gap: 6, background: "#2b2b2e", borderRadius: 9, padding: "6px 8px", marginTop: 6, boxShadow: "0 6px 20px rgba(0,0,0,.35)", width: "fit-content" };
-const sepV: React.CSSProperties = { width: 1, height: 18, background: "#4a4a4e", margin: "0 3px" };
-function toolBtn(active: boolean): React.CSSProperties {
-  return { width: 30, height: 28, borderRadius: 6, border: "none", cursor: "pointer", fontSize: 15, background: active ? "#0A84FF" : "transparent", color: "#fff" };
+// 主题感知样式：跟随系统浅/深色（prefers-color-scheme）。参考微信截图工具栏。
+const TOOLBAR_CSS = `
+:root{
+  --tb-bg:#ffffff; --tb-fg:#3b3f45; --tb-sep:#e6e3dc; --tb-hover:#f1efeb;
+  --tb-active-bg:#FFF1E6; --tb-active-fg:#E8590C; --tb-shadow:0 6px 22px rgba(0,0,0,.16);
+  --tb-dot:#9aa0a6; --tb-dot-on:#E8590C;
 }
-const plain: React.CSSProperties = { width: 30, height: 28, borderRadius: 6, border: "none", cursor: "pointer", fontSize: 15, background: "transparent", color: "#fff" };
-function swatch(c: string, active: boolean): React.CSSProperties {
-  return { width: 20, height: 20, borderRadius: "50%", border: active ? "2px solid #fff" : "2px solid transparent", background: c, cursor: "pointer", padding: 0 };
+@media (prefers-color-scheme: dark){
+  :root{
+    --tb-bg:#2b2b2e; --tb-fg:#e6e6ea; --tb-sep:#4a4a4e; --tb-hover:#3a3a3e;
+    --tb-active-bg:rgba(232,89,12,.24); --tb-active-fg:#F5A66A; --tb-shadow:0 6px 22px rgba(0,0,0,.4);
+    --tb-dot:#8a8f96; --tb-dot-on:#F5A66A;
+  }
 }
-function dotBtn(active: boolean): React.CSSProperties {
-  return { width: 26, height: 26, borderRadius: 6, border: "none", background: active ? "#4a4a4e" : "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
+.tb-bar,.tb-panel{display:flex;align-items:center;gap:4px;background:var(--tb-bg);border-radius:11px;padding:5px 8px;box-shadow:var(--tb-shadow);}
+.tb-panel{margin-top:8px;width:fit-content;gap:6px;}
+.tb-sep{width:1px;height:20px;background:var(--tb-sep);margin:0 4px;}
+.tb-btn{width:32px;height:30px;border-radius:8px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;background:transparent;color:var(--tb-fg);transition:background .12s,color .12s;}
+.tb-btn:hover{background:var(--tb-hover);}
+.tb-btn.on{background:var(--tb-active-bg);color:var(--tb-active-fg);}
+.tb-btn.tb-txt{font-size:13px;font-weight:600;}
+.tb-btn.tb-check{color:var(--tb-active-fg);}
+.tb-btn.tb-check:hover{background:var(--tb-active-bg);}
+.tb-dot,.tb-font{min-width:28px;height:28px;border-radius:7px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;background:transparent;color:var(--tb-dot);transition:background .12s;}
+.tb-dot:hover,.tb-font:hover{background:var(--tb-hover);}
+.tb-dot.on,.tb-font.on{background:var(--tb-active-bg);color:var(--tb-dot-on);}
+.tb-swatch{width:20px;height:20px;border-radius:50%;border:2px solid transparent;cursor:pointer;padding:0;box-shadow:0 0 0 1px rgba(0,0,0,.08) inset;}
+.tb-swatch.on{border-color:var(--tb-fg);box-shadow:0 0 0 2px var(--tb-bg) inset;}
+.tb-tip{position:relative;}
+.tb-tip::after{
+  content:attr(data-tip);position:absolute;left:50%;transform:translateX(-50%);
+  padding:4px 8px;border-radius:6px;background:var(--tb-fg);color:var(--tb-bg);
+  font-size:11px;line-height:1.3;white-space:nowrap;pointer-events:none;opacity:0;
+  transition:opacity .12s;z-index:20;box-shadow:0 2px 8px rgba(0,0,0,.18);
 }
-function fontBtn(active: boolean): React.CSSProperties {
-  return { minWidth: 26, height: 26, borderRadius: 6, border: "none", background: active ? "#4a4a4e" : "transparent", color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
-}
+.tb-bar .tb-tip::after{bottom:calc(100% + 6px);}
+.tb-panel .tb-tip::after{top:calc(100% + 6px);}
+.tb-tip:hover::after,.tb-tip:focus-visible::after{opacity:1;}
+`;
