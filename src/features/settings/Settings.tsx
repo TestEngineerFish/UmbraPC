@@ -1,9 +1,9 @@
 // 设置页（React + Tailwind）。受控输入，不再整页重建 → 根治失焦 / 滚动跳顶。
 // 业务逻辑复用 server.ts / desktop.ts 与 main.ts 导出的处理器。
 import { useState } from "react";
-import { chatConn, getServerUrl, getDeviceName } from "../services/server";
-import * as desktop from "../services/desktop";
-import * as legacy from "../app/shell";
+import { chatConn, getServerUrl, getDeviceName } from "../../services/server";
+import * as desktop from "../../services/desktop";
+import * as legacy from "../../app/shell";
 
 const hasClip = typeof (window as unknown as { umbraClip?: unknown }).umbraClip !== "undefined";
 const hasShot = typeof (window as unknown as { umbraShot?: unknown }).umbraShot !== "undefined";

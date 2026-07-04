@@ -1,7 +1,7 @@
 // 实时操作页（React + Tailwind）。桌面态：computer-use 开关/权限状态 + 原子动作历史。
-import * as desktop from "../services/desktop";
-import { chatConn } from "../services/server";
-import * as legacy from "../app/shell";
+import * as desktop from "../../services/desktop";
+import { chatConn } from "../../services/server";
+import * as legacy from "../../app/shell";
 
 const SKILL_LABEL: Record<string, string> = { click: "点击", type: "输入", key: "按键", scroll: "滚动", open_app: "打开应用", screenshot: "截图", operate: "自主操作" };
 const statusColor = (s: string) => (s === "error" ? "text-danger" : s === "ok" ? "text-success" : "text-orange");

@@ -1,6 +1,6 @@
 // 任务页（React + Tailwind）。列表 + 刷新（轮询由 legacy setNav 驱动 → 触发 React 重渲染）+ 详情抽屉。
-import * as legacy from "../app/shell";
-import type { Job, JobDetail, Subtask } from "../services/server";
+import * as legacy from "../../app/shell";
+import type { Job, JobDetail, Subtask } from "../../services/server";
 
 type Kind = "ok" | "run" | "wait" | "fail" | "off";
 const STATUS: Record<string, [string, Kind]> = {

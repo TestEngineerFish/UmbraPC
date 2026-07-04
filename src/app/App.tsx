@@ -2,11 +2,11 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
 import * as legacy from "./shell";
 import type { Nav } from "./shell";
-import { Settings } from "../pages/Settings";
-import { Logs } from "../pages/Logs";
-import { Realtime } from "../pages/Realtime";
-import { Tasks } from "../pages/Tasks";
-import { Abilities } from "../pages/Abilities";
+import { Settings } from "../features/settings/Settings";
+import { Logs } from "../features/logs/Logs";
+import { Realtime } from "../features/realtime/Realtime";
+import { Tasks } from "../features/tasks/Tasks";
+import { Abilities } from "../features/abilities/Abilities";
 
 // 把 legacy 生成的 HTML 挂进一个 div，挂载后还原滚动位置 / 触发回调（如挂载聊天子树）。
 function LegacyHost({ html, onMounted, style }: { html: string; onMounted?: () => void; style?: React.CSSProperties }) {
