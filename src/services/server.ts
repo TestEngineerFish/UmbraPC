@@ -160,6 +160,23 @@ export async function fetchJobs(limit = 30): Promise<Job[]> {
   }
 }
 
+// 批量删除任务（全选/多选）。返回实际删除数量。
+export async function deleteJobs(ids: string[]): Promise<number> {
+  if (!ids.length) return 0;
+  try {
+    const r = await fetch(`${getServerUrl()}/jobs/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    if (!r.ok) return 0;
+    const data = await r.json();
+    return typeof data?.deleted === "number" ? data.deleted : 0;
+  } catch {
+    return 0;
+  }
+}
+
 // 单个任务详情（子任务 + 事件时间线）。
 export async function fetchJobDetail(id: string): Promise<JobDetail | null> {
   try {
