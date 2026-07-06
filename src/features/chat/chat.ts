@@ -56,6 +56,8 @@ let forceScroll = false;
 let loadingOlder = false;
 // 输入草稿：切换模块/重挂载后仍保留，避免已输入内容丢失。
 let draftText = "";
+// 正在清空历史：清空期间禁发消息，避免新消息被服务端的会话重置一起删掉。
+let clearing = false;
 
 function newConvState(): ConvState {
   return {
@@ -504,6 +506,7 @@ function send(): void {
   if (!container) return;
   const ta = container.querySelector("#draft") as HTMLTextAreaElement | null;
   if (!ta) return;
+  if (clearing) return; // 清空历史进行中，暂不发送，避免与会话重置竞争
   const text = ta.value.trim();
   if (!text) return;
   ta.value = "";
@@ -536,13 +539,19 @@ function switchConv(id: string): void {
   if (!s.loaded) loadConvHistory(id);
 }
 
-// 清空主会话历史（你↔秘书）：调服务端删除 + 本地清空。设备会话不动。
+// 清空主会话历史（你↔秘书）：先本地立即清空（乐观），再后台调服务端删除。设备会话不动。
 async function clearMainHistory(): Promise<void> {
+  if (clearing) return;
   if (!window.confirm(t("chat.clearConfirm"))) return;
-  await clearHistory();
+  clearing = true;
   resetMainConv();
   if (activeConv !== MAIN) switchConv(MAIN);
   else renderMessages();
+  try {
+    await clearHistory();
+  } finally {
+    clearing = false;
+  }
 }
 
 function resetMainConv(): void {
