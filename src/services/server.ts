@@ -72,6 +72,18 @@ export async function fetchHistory(
   }
 }
 
+// 清空主会话历史（你↔秘书）。返回删除条数。
+export async function clearHistory(): Promise<number> {
+  try {
+    const r = await fetch(`${getServerUrl()}/history/clear`, { method: "POST" });
+    if (!r.ok) return 0;
+    const data = await r.json();
+    return typeof data?.deleted === "number" ? data.deleted : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export interface ConversationRow {
   conversation: string;
   last_role: string;

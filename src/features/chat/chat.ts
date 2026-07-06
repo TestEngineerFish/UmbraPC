@@ -10,6 +10,7 @@ import {
   fetchHistory,
   fetchConversations,
   fetchDevices,
+  clearHistory,
   getServerUrl,
   getAllowDeviceSend,
 } from "../../services/server";
@@ -53,6 +54,8 @@ let appRerender: (() => void) | null = null;
 let stick = true;
 let forceScroll = false;
 let loadingOlder = false;
+// 输入草稿：切换模块/重挂载后仍保留，避免已输入内容丢失。
+let draftText = "";
 
 function newConvState(): ConvState {
   return {
@@ -104,7 +107,7 @@ function fmtMsgTime(ts?: string | number): string {
   const now = new Date();
   const sod = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const days = Math.round((sod(now) - sod(d)) / 86400000);
-  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
   if (days <= 0) return hm;
   if (days === 1) return t("time.yesterdayAt", { time: hm });
   if (d.getFullYear() === now.getFullYear()) return t("time.monthDayAt", { month: d.getMonth() + 1, day: d.getDate(), time: hm });
@@ -272,6 +275,15 @@ function onMessage(msg: any): void {
       resolveConfirm(msg.task_id || "", Boolean(msg.approved)); // 跨会话统一更新
       renderConvBar();
       return;
+    case "history_cleared": {
+      // 其它端清空了主会话历史 → 本端同步清空。
+      const conv = convOf(msg);
+      const s = cs(conv);
+      s.blocks = []; s.assistantIdx = null; s.jobMap = {}; s.doneJobs.clear();
+      s.oldestId = null; s.hasMore = false;
+      if (conv === activeConv) renderMessages();
+      return;
+    }
     case "chat_message": {
       const s = cs(MAIN);
       if (msg.role === "user") s.blocks.push({ kind: "user", text: msg.text || "", ts: Date.now() });
@@ -476,6 +488,8 @@ function refreshComposer(): void {
       </div>`;
     wrap.querySelector("#sendbtn")!.addEventListener("click", send);
     const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
+    ta.value = draftText; // 恢复草稿（切模块/重挂载后不丢）
+    ta.addEventListener("input", () => { draftText = ta.value; });
     ta.addEventListener("keydown", (e) => {
       if (e.isComposing || e.keyCode === 229) return;
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
@@ -493,6 +507,7 @@ function send(): void {
   const text = ta.value.trim();
   if (!text) return;
   ta.value = "";
+  draftText = "";
   stick = true;
   forceScroll = true; // 自己发的消息总是滚到底
   // 发送始终由秘书处理（服务端才是与设备对话的一方），故落在主会话。
@@ -521,8 +536,16 @@ function switchConv(id: string): void {
   if (!s.loaded) loadConvHistory(id);
 }
 
-function newSession(): void {
-  // 仅重置主会话（设备会话由服务端编排，不清空）。
+// 清空主会话历史（你↔秘书）：调服务端删除 + 本地清空。设备会话不动。
+async function clearMainHistory(): Promise<void> {
+  if (!window.confirm(t("chat.clearConfirm"))) return;
+  await clearHistory();
+  resetMainConv();
+  if (activeConv !== MAIN) switchConv(MAIN);
+  else renderMessages();
+}
+
+function resetMainConv(): void {
   const s = cs(MAIN);
   s.blocks = [];
   s.assistantIdx = null;
@@ -530,9 +553,7 @@ function newSession(): void {
   s.doneJobs.clear();
   s.oldestId = null;
   s.hasMore = false;
-  chatConn.sendMessage("/new");
-  if (activeConv !== MAIN) switchConv(MAIN);
-  else renderMessages();
+  s.loaded = true; // 已清空，无需再拉历史
 }
 
 // 把聊天屏渲染进 container；只在首次写入外壳，事件只刷新消息区（保留输入框焦点）。
@@ -541,9 +562,9 @@ let chatShellEl: HTMLElement | null = null;
 function refreshChatShell(el: HTMLElement): void {
   const h1 = el.querySelector("h1");
   if (h1) h1.textContent = t("nav.chat");
-  const newsess = el.querySelector("#newsess");
-  if (newsess) {
-    newsess.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>${esc(t("chat.newSession"))}`;
+  const clearBtn = el.querySelector("#clearhist");
+  if (clearBtn) {
+    clearBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path></svg>${esc(t("chat.clearHistory"))}`;
   }
 }
 
@@ -561,7 +582,7 @@ export function mount(el: HTMLElement): void {
     <div style="display:flex;flex-direction:column;height:100%;min-height:0;position:relative;">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--border);flex:none;">
         <h1 style="margin:0;font-size:16px;font-weight:600;">${esc(t("nav.chat"))}</h1>
-        <button id="newsess" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>${esc(t("chat.newSession"))}</button>
+        <button id="clearhist" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path></svg>${esc(t("chat.clearHistory"))}</button>
       </div>
       <div id="uconvbar" style="display:none;gap:8px;padding:10px 18px;border-bottom:1px solid var(--border);flex:none;overflow-x:auto;"></div>
       <div id="umsgs" style="flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:16px;min-height:0;"></div>
@@ -569,7 +590,7 @@ export function mount(el: HTMLElement): void {
       <div id="ulightbox"></div>
     </div>`;
 
-  el.querySelector("#newsess")!.addEventListener("click", newSession);
+  el.querySelector("#clearhist")!.addEventListener("click", clearMainHistory);
   const barEl = el.querySelector("#uconvbar") as HTMLElement;
   barEl.addEventListener("click", (e) => {
     const btn = (e.target as HTMLElement).closest("[data-conv]") as HTMLElement | null;

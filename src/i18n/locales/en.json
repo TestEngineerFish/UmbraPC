@@ -214,6 +214,8 @@
     "done": "Task complete",
     "viewResults": "View results",
     "newSession": "New chat",
+    "clearHistory": "Clear chat",
+    "clearConfirm": "Clear your chat history with the Secretary? This cannot be undone (device conversations are unaffected).",
     "send": "Send",
     "emptyHint": "Start chatting with Umbra",
     "toolTrace": "Tool trace · {{count}} steps",
