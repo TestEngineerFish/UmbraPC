@@ -13,6 +13,8 @@ export interface RegisterInfo {
   platform: string;
   token: string;
   providers: Manifest[];
+  timezone: string;
+  locale: string;
 }
 
 export class TaskExecutor extends EventEmitter {
@@ -38,12 +40,23 @@ export class TaskExecutor extends EventEmitter {
   async getRegisterInfo(): Promise<RegisterInfo> {
     const cfg = this.store.get();
     const providers = await (await this.refreshRegistry()).providers();
+    // 上报本机时区/语言，供服务端 AI 推断用户所在地/时区（如 Asia/Shanghai、zh-CN）。
+    let timezone = "";
+    let locale = "";
+    try {
+      timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+      locale = Intl.DateTimeFormat().resolvedOptions().locale || "";
+    } catch {
+      /* ignore */
+    }
     return {
       deviceId: cfg.deviceId,
       deviceName: cfg.deviceName,
       platform: process.platform,
       token: cfg.token,
       providers,
+      timezone,
+      locale,
     };
   }
 

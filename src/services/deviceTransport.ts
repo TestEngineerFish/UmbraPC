@@ -123,6 +123,8 @@ function connect(): void {
         platform: info.platform,
         providers: info.providers,
         token: info.token,
+        timezone: info.timezone,
+        locale: info.locale,
       });
     } catch (e) {
       log(`获取注册信息失败：${String(e)}`);

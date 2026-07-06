@@ -33,7 +33,7 @@ interface UmbraBridge {
   platform: string;
   getConfig(): Promise<PublicConfig>;
   setConfig(patch: Record<string, unknown>): Promise<PublicConfig>;
-  getRegisterInfo(): Promise<{ deviceId: string; deviceName: string; platform: string; token: string; providers: ProviderManifest[] }>;
+  getRegisterInfo(): Promise<{ deviceId: string; deviceName: string; platform: string; token: string; providers: ProviderManifest[]; timezone: string; locale: string }>;
   getProviders(): Promise<ProviderManifest[]>;
   runTask(taskId: string, provider: string, skill: string, params: Record<string, unknown>): Promise<unknown>;
   confirmResponse(taskId: string, approved: boolean): Promise<void>;
