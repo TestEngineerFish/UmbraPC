@@ -49,18 +49,72 @@ export interface HistoryRow {
   role: string;
   content: string;
   created_at?: string;
+  conversation?: string;
 }
 
-// 拉历史：limit 条；传 beforeId 取更早一页（上拉加载）。
-export async function fetchHistory(limit = 20, beforeId?: number): Promise<HistoryRow[]> {
+// 拉历史：limit 条；传 beforeId 取更早一页（上拉加载）；conversation 指定会话
+// （默认 'assistant' 主会话；'device:<id>' 取某设备的只读会话）。
+export async function fetchHistory(
+  limit = 20,
+  beforeId?: number,
+  conversation = "assistant",
+): Promise<HistoryRow[]> {
   try {
-    const q = `?limit=${limit}` + (beforeId ? `&before_id=${beforeId}` : "");
+    const q =
+      `?limit=${limit}` +
+      (beforeId ? `&before_id=${beforeId}` : "") +
+      `&conversation=${encodeURIComponent(conversation)}`;
     const r = await fetch(`${getServerUrl()}/history${q}`);
     if (!r.ok) return [];
     return await r.json();
   } catch {
     return [];
   }
+}
+
+export interface ConversationRow {
+  conversation: string;
+  last_role: string;
+  last_content: string;
+  last_at?: string;
+  count: number;
+}
+
+// 会话列表：'assistant'=你↔秘书；'device:<id>'=服务端↔某设备（只读）。
+export async function fetchConversations(): Promise<ConversationRow[]> {
+  try {
+    const r = await fetch(`${getServerUrl()}/conversations`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch {
+    return [];
+  }
+}
+
+export interface DeviceInfo {
+  device_id: string;
+  device_name: string;
+  platform?: string;
+}
+
+// 在线设备列表：用于给每个设备恒显示一个会话房间（哪怕还没有交互记录）。
+export async function fetchDevices(): Promise<DeviceInfo[]> {
+  try {
+    const r = await fetch(`${getServerUrl()}/devices`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch {
+    return [];
+  }
+}
+
+// 聊天设置：是否允许向设备会话发送消息（默认关，设备会话仅查看）。
+const LS_ALLOW_DEVICE_SEND = "umbra.allowDeviceSend";
+export function getAllowDeviceSend(): boolean {
+  return localStorage.getItem(LS_ALLOW_DEVICE_SEND) === "1";
+}
+export function setAllowDeviceSend(v: boolean): void {
+  localStorage.setItem(LS_ALLOW_DEVICE_SEND, v ? "1" : "0");
 }
 
 export interface Job {

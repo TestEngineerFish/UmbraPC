@@ -2,7 +2,7 @@
 // 业务逻辑复用 server.ts / desktop.ts 与 main.ts 导出的处理器。
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { chatConn, getServerUrl, getDeviceName } from "../../services/server";
+import { chatConn, getServerUrl, getDeviceName, getAllowDeviceSend, setAllowDeviceSend } from "../../services/server";
 import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/locale";
@@ -54,6 +54,7 @@ export function Settings() {
   const [token, setToken] = useState("");
   const [device, setDevice] = useState(getDeviceName());
   const [glmKey, setGlmKey] = useState("");
+  const [allowDeviceSend, setAllowDeviceSendState] = useState(getAllowDeviceSend());
 
   const isDesk = desktop.isDesktop();
   const cs = chatConn.status as "online" | "connecting" | "offline";
@@ -136,6 +137,23 @@ export function Settings() {
             </Row>
           </Card>
         ) : null}
+
+        <Card title={t("nav.chat")}>
+          <div className="flex items-center gap-3 py-1">
+            <div className="flex-1">
+              <div className="text-[13.5px]">{t("chat.allowDeviceSend")}</div>
+              <div className="text-[11.5px] text-muted mt-px">{t("chat.allowDeviceSendHint")}</div>
+            </div>
+            <Toggle
+              on={allowDeviceSend}
+              onClick={() => {
+                const next = !allowDeviceSend;
+                setAllowDeviceSend(next);
+                setAllowDeviceSendState(next);
+              }}
+            />
+          </div>
+        </Card>
 
         <Card title={t("settings.device")}>
           <Row label={t("settings.deviceId")}>

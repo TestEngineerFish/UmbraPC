@@ -209,7 +209,12 @@
     "newSession": "新会话",
     "send": "发送",
     "emptyHint": "开始和 Umbra 聊天",
-    "toolTrace": "工具轨迹 · {{count}} 步"
+    "toolTrace": "工具轨迹 · {{count}} 步",
+    "secretary": "秘书",
+    "deviceConvReadonly": "只读：服务端与该设备的对话。可在设置中开启发送。",
+    "deviceEmptyHint": "服务端与该设备的对话会显示在这里",
+    "allowDeviceSend": "允许向设备发送消息",
+    "allowDeviceSendHint": "关闭时，设备会话仅供查看；仅“与秘书”可发送。"
   },
   "clipboard": {
     "searchPh": "搜索剪贴板…",

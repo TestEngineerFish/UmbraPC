@@ -1,37 +1,99 @@
 // 实时聊天：连接 /ws/chat，按现有协议驱动设计稿里的聊天组件
 // （流式回复、工具轨迹、任务进度卡、执行前确认、完成通知、图片预览、跨端同步）。
-import { chatConn, fetchHistory, getServerUrl } from "../../services/server";
+//
+// 多会话（Phase 2）：
+//   - 'assistant'  = 你↔秘书主会话（可发送）
+//   - 'device:<id>' = 服务端↔某设备的编排流（默认只读，设置里可开启发送）
+//   顶部会话条切换；每个会话各自维护消息/分页/未读；服务端推送按 msg.conversation 路由。
+import {
+  chatConn,
+  fetchHistory,
+  fetchConversations,
+  fetchDevices,
+  getServerUrl,
+  getAllowDeviceSend,
+} from "../../services/server";
 import { t } from "../../i18n";
 
 type Block =
   | { kind: "user"; text: string; ts?: string | number }
   | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number }
+  | { kind: "device"; text: string; ts?: string | number }
   | { kind: "job"; jobId: string; goal: string; pct: number; status: string; message: string; confirmTaskId?: string; results?: { title: string; url: string }[] }
   | { kind: "done"; goal: string; results: { title: string; url: string }[] }
   | { kind: "confirm"; taskId: string; summary: string; detail?: unknown; resolved?: "approved" | "denied" }
   | { kind: "error"; text: string };
 
-let blocks: Block[] = [];
-let assistantIdx: number | null = null;
-const jobMap: Record<string, number> = {};
-const doneJobs = new Set<string>();
+// 每个会话的独立状态。
+interface ConvState {
+  blocks: Block[];
+  assistantIdx: number | null;
+  jobMap: Record<string, number>;
+  doneJobs: Set<string>;
+  oldestId: number | null;
+  hasMore: boolean;
+  loaded: boolean; // 首屏历史是否已拉过
+  loading: boolean; // 首屏历史加载中
+  unread: boolean;
+}
+
+const MAIN = "assistant";
+const PAGE = 20;
+
+const convs: Record<string, ConvState> = {};
+let convOrder: string[] = [MAIN]; // 会话条显示顺序（主会话恒在首位）
+let activeConv = MAIN;
+// 设备会话友好名：convId → 设备名（如 device:pc-… → MacBook-Pro-2.local）。
+const convNames: Record<string, string> = {};
+
 let container: HTMLElement | null = null;
 let started = false;
 let appRerender: (() => void) | null = null;
-// 滚动策略：贴底时才跟随新消息，上滑查看历史时不打扰；forceScroll 用于发送/首次加载强制到底。
+// 滚动策略：贴底时才跟随新消息，上滑查看历史时不打扰；forceScroll 用于发送/切换/首次加载强制到底。
 let stick = true;
 let forceScroll = false;
-let historyLoading = false;
-// 分页游标：oldestId 为已加载最早消息的 id；hasMore 表示可能还有更早的；loadingOlder 防并发。
-const PAGE = 20;
-let oldestId: number | null = null;
-let hasMore = false;
 let loadingOlder = false;
 
+function newConvState(): ConvState {
+  return {
+    blocks: [],
+    assistantIdx: null,
+    jobMap: {},
+    doneJobs: new Set<string>(),
+    oldestId: null,
+    hasMore: false,
+    loaded: false,
+    loading: false,
+    unread: false,
+  };
+}
+
+function cs(id: string): ConvState {
+  let s = convs[id];
+  if (!s) {
+    s = convs[id] = newConvState();
+    if (!convOrder.includes(id)) convOrder.push(id);
+  }
+  return s;
+}
+
+// 设备会话是否只读（非主会话且未开启“允许向设备发送”）。
+function isReadonly(id: string): boolean {
+  return id !== MAIN && !getAllowDeviceSend();
+}
+
+// 会话展示名：'assistant'→秘书；设备优先用友好名，否则退回 id。
+function convLabel(id: string): string {
+  if (id === MAIN) return t("chat.secretary");
+  if (convNames[id]) return convNames[id];
+  if (id.startsWith("device:")) return id.slice("device:".length);
+  return id;
+}
+
 function rowToBlock(m: { role: string; content: string; created_at?: string }): Block {
-  return m.role === "user"
-    ? { kind: "user", text: m.content, ts: m.created_at }
-    : { kind: "assistant", thinking: false, streaming: false, text: m.content, trace: [], traceOpen: false, ts: m.created_at };
+  if (m.role === "user") return { kind: "user", text: m.content, ts: m.created_at };
+  if (m.role === "device") return { kind: "device", text: m.content, ts: m.created_at };
+  return { kind: "assistant", thinking: false, streaming: false, text: m.content, trace: [], traceOpen: false, ts: m.created_at };
 }
 
 // IM 风格消息时间：今天→HH:MM，昨天→昨天 HH:MM，今年→M月D日 HH:MM，更早→YYYY年M月D日 HH:MM。
@@ -67,50 +129,91 @@ function ensureStarted(): void {
     onMessage: onMessage,
   });
   chatConn.connect();
-  historyLoading = true;
-  renderMessages();
-  fetchHistory(PAGE)
-    .then((rows) => {
-      historyLoading = false;
-      if (rows.length && blocks.length === 0) {
-        for (const m of rows) blocks.push(rowToBlock(m));
-        oldestId = rows[0].id;
-        hasMore = rows.length >= PAGE;
-      }
-      forceScroll = true;
-      renderMessages();
-    })
-    .catch(() => {
-      historyLoading = false;
-      renderMessages();
-    });
+  // 拉会话列表（含历史设备会话）+ 在线设备（恒显示房间），并加载主会话首屏历史。
+  loadConversationsList();
+  loadDevices();
+  loadConvHistory(MAIN);
+  // 设备可能稍后上线：定时刷新，让新设备的房间及时出现。
+  window.setInterval(loadDevices, 15000);
 }
 
-// 上拉加载更早一页历史，并保持当前可视位置不跳动。
+// 为每个在线设备恒建一个会话房间（哪怕还没有交互记录），并记录友好名。
+async function loadDevices(): Promise<void> {
+  const devices = await fetchDevices();
+  let changed = false;
+  for (const d of devices) {
+    if (!d.device_id) continue;
+    const id = `device:${d.device_id}`;
+    if (!convOrder.includes(id)) { cs(id); changed = true; }
+    if (d.device_name && convNames[id] !== d.device_name) { convNames[id] = d.device_name; changed = true; }
+  }
+  if (changed) renderConvBar();
+}
+
+async function loadConversationsList(): Promise<void> {
+  const rows = await fetchConversations();
+  for (const r of rows) {
+    if (r.conversation === MAIN) continue;
+    if (!convOrder.includes(r.conversation)) {
+      cs(r.conversation); // 建状态 + 入列
+    }
+  }
+  renderConvBar();
+}
+
+// 拉某会话首屏历史（首次进入时懒加载）。
+async function loadConvHistory(id: string): Promise<void> {
+  const s = cs(id);
+  if (s.loaded || s.loading) return;
+  s.loading = true;
+  if (id === activeConv) renderMessages();
+  const rows = await fetchHistory(PAGE, undefined, id);
+  s.loading = false;
+  s.loaded = true;
+  if (rows.length && s.blocks.length === 0) {
+    for (const m of rows) s.blocks.push(rowToBlock(m));
+    s.oldestId = rows[0].id;
+    s.hasMore = rows.length >= PAGE;
+  }
+  if (id === activeConv) {
+    forceScroll = true;
+    renderMessages();
+  }
+}
+
+// 上拉加载当前会话更早一页历史，并保持当前可视位置不跳动。
 async function loadOlder(): Promise<void> {
-  if (loadingOlder || !hasMore || oldestId == null || !container) return;
+  const s = cs(activeConv);
+  if (loadingOlder || !s.hasMore || s.oldestId == null || !container) return;
   loadingOlder = true;
   const el = container.querySelector("#umsgs") as HTMLElement | null;
   const prevH = el ? el.scrollHeight : 0;
   const prevTop = el ? el.scrollTop : 0;
-  const rows = await fetchHistory(PAGE, oldestId);
+  const rows = await fetchHistory(PAGE, s.oldestId, activeConv);
   loadingOlder = false;
   if (rows.length === 0) {
-    hasMore = false;
+    s.hasMore = false;
     return;
   }
-  if (rows.length < PAGE) hasMore = false;
-  oldestId = rows[0].id;
+  if (rows.length < PAGE) s.hasMore = false;
+  s.oldestId = rows[0].id;
   const n = rows.length;
   // 前置插入后，已有块的索引整体右移，需同步 jobMap 与 assistantIdx。
-  for (const k of Object.keys(jobMap)) jobMap[k] += n;
-  if (assistantIdx != null) assistantIdx += n;
-  blocks = [...rows.map(rowToBlock), ...blocks];
+  for (const k of Object.keys(s.jobMap)) s.jobMap[k] += n;
+  if (s.assistantIdx != null) s.assistantIdx += n;
+  s.blocks = [...rows.map(rowToBlock), ...s.blocks];
   renderMessages(true); // 保留滚动，由下面手动恢复
   if (el) el.scrollTop = prevTop + (el.scrollHeight - prevH);
 }
 
+// 推送归属的会话：job_update 带 conversation；流式/同步消息属于主会话。
+function convOf(msg: any): string {
+  const c = msg && typeof msg.conversation === "string" ? msg.conversation : "";
+  return c || MAIN;
+}
+
 function onMessage(msg: any): void {
+  let target = MAIN;
   switch (msg.type) {
     case "delta": {
       const a = currentAssistant();
@@ -140,60 +243,93 @@ function onMessage(msg: any): void {
     case "reply": {
       const a = currentAssistant();
       if (a) { a.thinking = false; a.streaming = false; a.text = msg.text || a.text; }
-      assistantIdx = null;
+      cs(MAIN).assistantIdx = null;
       break;
     }
-    case "job_update": handleJob(msg); break;
+    case "job_update":
+      target = handleJob(msg);
+      break;
+    case "device_message": {
+      // 服务端↔设备的直接交互（非 Job），落到对应设备会话（只读）。
+      target = convOf(msg);
+      const s = cs(target);
+      const ts = msg.created_at || Date.now();
+      if (msg.role === "device") s.blocks.push({ kind: "device", text: msg.text || "", ts });
+      else s.blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts });
+      break;
+    }
     case "confirm_request":
-      if (msg.task_id && !blocks.some((b) => b.kind === "confirm" && b.taskId === msg.task_id)) {
-        blocks.push({ kind: "confirm", taskId: msg.task_id, summary: msg.summary || t("chat.needConfirm"), detail: msg.detail });
+      // 执行前授权卡：默认落在主会话，供用户处理（Job 路径的确认卡随 job_update 落到设备会话）。
+      target = convOf(msg);
+      if (msg.task_id) {
+        const s = cs(target);
+        if (!s.blocks.some((b) => b.kind === "confirm" && b.taskId === msg.task_id)) {
+          s.blocks.push({ kind: "confirm", taskId: msg.task_id, summary: msg.summary || t("chat.needConfirm"), detail: msg.detail });
+        }
       }
       break;
     case "confirm_resolved":
-      resolveConfirm(msg.task_id || "", Boolean(msg.approved));
+      resolveConfirm(msg.task_id || "", Boolean(msg.approved)); // 跨会话统一更新
+      renderConvBar();
+      return;
+    case "chat_message": {
+      const s = cs(MAIN);
+      if (msg.role === "user") s.blocks.push({ kind: "user", text: msg.text || "", ts: Date.now() });
+      else s.blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts: Date.now() });
       break;
-    case "chat_message":
-      if (msg.role === "user") blocks.push({ kind: "user", text: msg.text || "", ts: Date.now() });
-      else blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts: Date.now() });
+    }
+    case "error": {
+      const s = cs(MAIN);
+      if (s.assistantIdx !== null) { const a = currentAssistant(); if (a) { a.thinking = false; a.streaming = false; } s.assistantIdx = null; }
+      s.blocks.push({ kind: "error", text: msg.message || t("chat.error") });
       break;
-    case "error":
-      if (assistantIdx !== null) { const a = currentAssistant(); if (a) { a.thinking = false; a.streaming = false; } assistantIdx = null; }
-      blocks.push({ kind: "error", text: msg.message || t("chat.error") });
-      break;
-    default: return;
+    }
+    default:
+      return;
   }
-  renderMessages();
+  // 目标会话不是当前查看的 → 标记未读并刷新会话条；否则刷新消息区。
+  if (target !== activeConv) {
+    cs(target).unread = true;
+    renderConvBar();
+  } else {
+    renderMessages();
+  }
 }
 
 function currentAssistant(): Extract<Block, { kind: "assistant" }> | null {
-  if (assistantIdx === null) return null;
-  const b = blocks[assistantIdx];
+  const s = cs(MAIN);
+  if (s.assistantIdx === null) return null;
+  const b = s.blocks[s.assistantIdx];
   return b && b.kind === "assistant" ? b : null;
 }
 
-function handleJob(msg: any): void {
+// 返回该 job_update 归属的会话 id（供 onMessage 决定是否刷新/标未读）。
+function handleJob(msg: any): string {
   const id = msg.job_id;
-  if (!id) return;
+  const conv = convOf(msg);
+  if (!id) return conv;
+  const s = cs(conv);
   const overall = typeof msg.overall === "number" ? msg.overall : msg.status === "done" ? 1 : 0;
   const pct = Math.max(0, Math.min(100, Math.round(overall * 100)));
-  let idx = jobMap[id];
+  let idx = s.jobMap[id];
   if (idx === undefined) {
-    blocks.push({ kind: "job", jobId: id, goal: msg.goal || t("chat.task"), pct, status: msg.status || "running", message: msg.message || "" });
-    idx = blocks.length - 1;
-    jobMap[id] = idx;
+    s.blocks.push({ kind: "job", jobId: id, goal: msg.goal || t("chat.task"), pct, status: msg.status || "running", message: msg.message || "" });
+    idx = s.blocks.length - 1;
+    s.jobMap[id] = idx;
   }
-  const b = blocks[idx];
-  if (b.kind !== "job") return;
+  const b = s.blocks[idx];
+  if (b.kind !== "job") return conv;
   b.pct = pct;
   b.status = msg.status || b.status;
   b.message = msg.message || b.message;
   if (msg.goal) b.goal = msg.goal;
   b.confirmTaskId = msg.event === "confirm" && msg.needs_confirm ? msg.confirm_task_id : undefined;
   if (msg.results) b.results = msg.results;
-  if (msg.status === "done" && !doneJobs.has(id)) {
-    doneJobs.add(id);
-    blocks.push({ kind: "done", goal: b.goal, results: msg.results || b.results || [] });
+  if (msg.status === "done" && !s.doneJobs.has(id)) {
+    s.doneJobs.add(id);
+    s.blocks.push({ kind: "done", goal: b.goal, results: msg.results || b.results || [] });
   }
+  return conv;
 }
 
 // ── 渲染 ────────────────────────────────────────────────────────────────────
@@ -218,6 +354,11 @@ function blockHtml(b: Block, i: number): string {
   if (b.kind === "user")
     return `<div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
 
+  if (b.kind === "device") {
+    // 设备上报（服务端↔设备只读流里的“设备”一侧）：靠右、青色气泡区分秘书。
+    return `<div style="align-self:flex-end;max-width:78%;background:var(--track);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
+  }
+
   if (b.kind === "assistant") {
     const trace = b.trace.length
       ? `<div style="align-self:flex-start;max-width:80%;width:100%;">
@@ -231,6 +372,7 @@ function blockHtml(b: Block, i: number): string {
 
   if (b.kind === "job") {
     const color = b.status === "done" ? "var(--success)" : b.status === "failed" ? "var(--danger)" : "var(--orange)";
+    // 授权按钮在任意会话都可点（只读仅限制文本输入，不限制确认操作）。
     const confirm = b.confirmTaskId
       ? `<div style="display:flex;gap:9px;margin-top:11px;"><button data-approve="${esc(b.confirmTaskId)}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approve"))}</button><button data-deny="${esc(b.confirmTaskId)}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.reject"))}</button></div>`
       : "";
@@ -268,28 +410,79 @@ function blockHtml(b: Block, i: number): string {
   return `<div style="align-self:flex-start;max-width:80%;border:1px solid rgba(180,35,24,.3);background:var(--danger-soft);color:var(--danger);padding:11px 14px;border-radius:10px;">${esc(b.text)}</div>`;
 }
 
+// 会话切换条（主会话 + 各设备会话）。
+function renderConvBar(): void {
+  if (!container) return;
+  const bar = container.querySelector("#uconvbar") as HTMLElement | null;
+  if (!bar) return;
+  if (convOrder.length <= 1) {
+    bar.style.display = "none";
+    return;
+  }
+  bar.style.display = "flex";
+  bar.innerHTML = convOrder
+    .map((id) => {
+      const s = convs[id];
+      const on = id === activeConv;
+      const dot = s && s.unread && !on ? `<span style="width:6px;height:6px;border-radius:999px;background:var(--orange);"></span>` : "";
+      const lock = id !== MAIN && isReadonly(id) ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.7;"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>` : "";
+      return `<button data-conv="${esc(id)}" style="display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-size:12.5px;cursor:pointer;white-space:nowrap;border:1px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange-soft)" : "var(--card)"};color:${on ? "var(--orange-text)" : "var(--text)"};font-weight:${on ? 600 : 400};">${lock}${esc(convLabel(id))}${dot}</button>`;
+    })
+    .join("");
+}
+
 function renderMessages(preserve = false): void {
   if (!container) return;
   const el = container.querySelector("#umsgs") as HTMLElement | null;
   if (!el) return;
+  const s = cs(activeConv);
   const prevTop = el.scrollTop;
-  if (blocks.length === 0) {
-    el.innerHTML = historyLoading
+  if (s.blocks.length === 0) {
+    const emptyHint = activeConv === MAIN ? t("chat.emptyHint") : t("chat.deviceEmptyHint");
+    el.innerHTML = s.loading
       ? `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);gap:9px;min-height:300px;font-size:14px;">${dots}<span>${esc(t("common.loading"))}</span></div>`
-      : `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;"><span style="width:46px;height:46px;border-radius:12px;background:var(--orange);color:#fff;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:.92;">U</span><span style="font-size:15px;">${esc(t("chat.emptyHint"))}</span></div>`;
+      : `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;"><span style="width:46px;height:46px;border-radius:12px;background:var(--orange);color:#fff;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:.92;">U</span><span style="font-size:15px;">${esc(emptyHint)}</span></div>`;
   } else {
     // 每条消息包一层 flex:none，避免纵向 flex 在内容（高图片）超高时压缩重叠。
-    el.innerHTML = blocks
+    el.innerHTML = s.blocks
       .map((b, i) => `<div style="flex:none;display:flex;flex-direction:column;gap:8px;">${blockHtml(b, i)}</div>`)
       .join("");
   }
+  refreshComposer();
   if (preserve) return; // 上拉加载：由调用方手动恢复滚动位置
-  // 贴底或强制时滚到底；否则尽量保持原有滚动位置（避免上滑被弹回）。
   if (stick || forceScroll) {
     el.scrollTop = el.scrollHeight;
     forceScroll = false;
   } else {
     el.scrollTop = prevTop;
+  }
+}
+
+// 根据当前会话是否只读，切换输入区（可发送）/只读提示。
+function refreshComposer(): void {
+  if (!container) return;
+  const wrap = container.querySelector("#ucomposer") as HTMLElement | null;
+  if (!wrap) return;
+  if (isReadonly(activeConv)) {
+    wrap.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:12px 16px;color:var(--muted);font-size:12.5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg><span>${esc(t("chat.deviceConvReadonly"))}</span></div>`;
+    return;
+  }
+  // 可发送：若还不是输入框（从只读切过来），重建输入区并绑定事件。
+  if (!wrap.querySelector("#draft")) {
+    wrap.innerHTML = `
+      <div style="display:flex;gap:10px;align-items:flex-end;padding:12px 16px;">
+        <textarea id="draft" placeholder="${esc(t("chat.placeholder"))}" rows="2" style="flex:1;resize:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;padding:9px 12px;font-size:13.5px;line-height:1.5;font-family:inherit;outline:none;max-height:120px;"></textarea>
+        <button id="sendbtn" style="flex:none;display:flex;align-items:center;gap:6px;padding:9px 16px;height:40px;background:var(--orange);color:#fff;border:none;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;align-self:center;">${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
+      </div>`;
+    wrap.querySelector("#sendbtn")!.addEventListener("click", send);
+    const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
+    ta.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+  } else {
+    const ta = wrap.querySelector("#draft") as HTMLTextAreaElement | null;
+    if (ta) ta.placeholder = t("chat.placeholder");
   }
 }
 
@@ -302,26 +495,44 @@ function send(): void {
   ta.value = "";
   stick = true;
   forceScroll = true; // 自己发的消息总是滚到底
+  // 发送始终由秘书处理（服务端才是与设备对话的一方），故落在主会话。
+  const s = cs(MAIN);
   const now = Date.now();
-  blocks.push({ kind: "user", text, ts: now });
-  blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
-  assistantIdx = blocks.length - 1;
+  s.blocks.push({ kind: "user", text, ts: now });
+  s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
+  s.assistantIdx = s.blocks.length - 1;
   if (!chatConn.sendMessage(text)) {
-    blocks.push({ kind: "error", text: t("chat.notConnected") });
-    assistantIdx = null;
+    s.blocks.push({ kind: "error", text: t("chat.notConnected") });
+    s.assistantIdx = null;
   }
+  if (activeConv !== MAIN) switchConv(MAIN);
+  else renderMessages();
+}
+
+function switchConv(id: string): void {
+  if (id === activeConv) return;
+  activeConv = id;
+  const s = cs(id);
+  s.unread = false;
+  stick = true;
+  forceScroll = true;
+  renderConvBar();
   renderMessages();
+  if (!s.loaded) loadConvHistory(id);
 }
 
 function newSession(): void {
-  blocks = [];
-  assistantIdx = null;
-  for (const k of Object.keys(jobMap)) delete jobMap[k];
-  doneJobs.clear();
-  oldestId = null;
-  hasMore = false;
+  // 仅重置主会话（设备会话由服务端编排，不清空）。
+  const s = cs(MAIN);
+  s.blocks = [];
+  s.assistantIdx = null;
+  s.jobMap = {};
+  s.doneJobs.clear();
+  s.oldestId = null;
+  s.hasMore = false;
   chatConn.sendMessage("/new");
-  renderMessages();
+  if (activeConv !== MAIN) switchConv(MAIN);
+  else renderMessages();
 }
 
 // 把聊天屏渲染进 container；只在首次写入外壳，事件只刷新消息区（保留输入框焦点）。
@@ -334,12 +545,6 @@ function refreshChatShell(el: HTMLElement): void {
   if (newsess) {
     newsess.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>${esc(t("chat.newSession"))}`;
   }
-  const ta = el.querySelector("#draft") as HTMLTextAreaElement | null;
-  if (ta) ta.placeholder = t("chat.placeholder");
-  const sendbtn = el.querySelector("#sendbtn");
-  if (sendbtn) {
-    sendbtn.innerHTML = `${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>`;
-  }
 }
 
 export function mount(el: HTMLElement): void {
@@ -347,6 +552,7 @@ export function mount(el: HTMLElement): void {
   ensureStarted();
   if (chatShellEl === el) {
     refreshChatShell(el);
+    renderConvBar();
     renderMessages();
     return;
   }
@@ -357,23 +563,17 @@ export function mount(el: HTMLElement): void {
         <h1 style="margin:0;font-size:16px;font-weight:600;">${esc(t("nav.chat"))}</h1>
         <button id="newsess" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg>${esc(t("chat.newSession"))}</button>
       </div>
+      <div id="uconvbar" style="display:none;gap:8px;padding:10px 18px;border-bottom:1px solid var(--border);flex:none;overflow-x:auto;"></div>
       <div id="umsgs" style="flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:16px;min-height:0;"></div>
-      <div style="flex:none;border-top:1px solid var(--border);background:var(--card);padding:12px 16px;">
-        <div style="display:flex;gap:10px;align-items:flex-end;">
-          <textarea id="draft" placeholder="${esc(t("chat.placeholder"))}" rows="2" style="flex:1;resize:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;padding:9px 12px;font-size:13.5px;line-height:1.5;font-family:inherit;outline:none;max-height:120px;"></textarea>
-          <button id="sendbtn" style="flex:none;display:flex;align-items:center;gap:6px;padding:9px 16px;height:40px;background:var(--orange);color:#fff;border:none;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;align-self:center;">${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
-        </div>
-      </div>
+      <div id="ucomposer" style="flex:none;border-top:1px solid var(--border);background:var(--card);"></div>
       <div id="ulightbox"></div>
     </div>`;
 
-  el.querySelector("#sendbtn")!.addEventListener("click", send);
   el.querySelector("#newsess")!.addEventListener("click", newSession);
-  const ta = el.querySelector("#draft") as HTMLTextAreaElement;
-  ta.addEventListener("keydown", (e) => {
-    // 输入法选词/组字过程中按回车是确认候选，不应发送（isComposing / keyCode 229）。
-    if (e.isComposing || e.keyCode === 229) return;
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  const barEl = el.querySelector("#uconvbar") as HTMLElement;
+  barEl.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest("[data-conv]") as HTMLElement | null;
+    if (btn && btn.dataset.conv) switchConv(btn.dataset.conv);
   });
   const msgsEl = el.querySelector("#umsgs") as HTMLElement;
   msgsEl.addEventListener("click", onMsgsClick);
@@ -383,6 +583,7 @@ export function mount(el: HTMLElement): void {
     if (msgsEl.scrollTop < 60) loadOlder(); // 滚到顶附近 → 加载更早历史
   });
   forceScroll = true; // 首次挂载滚到底
+  renderConvBar();
   renderMessages();
 }
 
@@ -390,26 +591,31 @@ function onMsgsClick(e: Event): void {
   const t = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-deny],[data-img]") as HTMLElement | null;
   if (!t) return;
   if (t.dataset.trace !== undefined) {
-    const b = blocks[Number(t.dataset.trace)];
+    const b = cs(activeConv).blocks[Number(t.dataset.trace)];
     if (b && b.kind === "assistant") { b.traceOpen = !b.traceOpen; renderMessages(); }
   } else if (t.dataset.approve) {
     chatConn.sendConfirm(t.dataset.approve, true);
     resolveConfirm(t.dataset.approve, true);
+    renderMessages();
   } else if (t.dataset.deny) {
     chatConn.sendConfirm(t.dataset.deny, false);
     resolveConfirm(t.dataset.deny, false);
+    renderMessages();
   } else if (t.dataset.img) {
     openLightbox(t.dataset.img);
   }
 }
 
-// 标记某个确认已被处理（Job 卡片 + 独立确认卡片都更新）。
+// 标记某个确认已被处理（所有会话里的 Job 卡片 + 独立确认卡片都更新）。
 function resolveConfirm(taskId: string, approved: boolean): void {
-  for (const b of blocks) {
-    if (b.kind === "job" && b.confirmTaskId === taskId) { b.confirmTaskId = undefined; b.message = approved ? t("chat.approved") : t("chat.denied"); }
-    if (b.kind === "confirm" && b.taskId === taskId) { b.resolved = approved ? "approved" : "denied"; }
+  for (const id of convOrder) {
+    const s = convs[id];
+    if (!s) continue;
+    for (const b of s.blocks) {
+      if (b.kind === "job" && b.confirmTaskId === taskId) { b.confirmTaskId = undefined; b.message = approved ? t("chat.approved") : t("chat.denied"); }
+      if (b.kind === "confirm" && b.taskId === taskId) { b.resolved = approved ? "approved" : "denied"; }
+    }
   }
-  renderMessages();
 }
 
 function openLightbox(src: string): void {

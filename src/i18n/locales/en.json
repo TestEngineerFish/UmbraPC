@@ -209,7 +209,12 @@
     "newSession": "New chat",
     "send": "Send",
     "emptyHint": "Start chatting with Umbra",
-    "toolTrace": "Tool trace · {{count}} steps"
+    "toolTrace": "Tool trace · {{count}} steps",
+    "secretary": "Secretary",
+    "deviceConvReadonly": "Read-only: the server's conversation with this device. Enable sending in Settings.",
+    "deviceEmptyHint": "The server's conversation with this device will appear here",
+    "allowDeviceSend": "Allow sending to devices",
+    "allowDeviceSendHint": "When off, device conversations are view-only; only \"Secretary\" can send."
   },
   "clipboard": {
     "searchPh": "Search clipboard…",
