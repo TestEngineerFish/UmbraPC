@@ -135,6 +135,65 @@ async function appExists(params: Record<string, any>): Promise<unknown> {
   return { exists: matches.length > 0, matches: matches.slice(0, 10) };
 }
 
+// AX 探针：dump 指定应用前台窗口的 Accessibility 元素树，并单独列出文本输入框与按钮。
+// 用于判断能否走「AX 精确操作」（找到输入框/发送键）而不是靠视觉猜坐标。
+async function axDump(params: Record<string, any>): Promise<unknown> {
+  if (process.platform !== "darwin") throw new Error("ax_dump 仅支持 macOS");
+  const app = String(params.app || "").trim();
+  if (!app) throw new Error("缺少 app 名称");
+  const maxDepth = Math.max(1, Math.min(Number(params.max_depth || 10), 14));
+  // JXA：遍历 AX 树，收集角色/名字/值/位置，并把文本框、按钮拎成扁平列表。
+  const jxa = `
+    function run() {
+      const appName = ${JSON.stringify(app)};
+      const MAX_DEPTH = ${maxDepth}, MAX_NODES = 500;
+      const se = Application('System Events');
+      let count = 0, truncated = false;
+      const inputs = [], buttons = [];
+      const safe = (fn) => { try { return fn(); } catch(e) { return null; } };
+      function node(el, depth) {
+        if (count >= MAX_NODES) { truncated = true; return null; }
+        count++;
+        const role = safe(() => el.role());
+        const name = safe(() => el.name()) || safe(() => el.title()) || safe(() => el.description());
+        let value = safe(() => el.value());
+        if (typeof value === 'string') value = value.slice(0, 100);
+        const pos = safe(() => el.position()); const size = safe(() => el.size());
+        const focused = safe(() => el.focused());
+        const flat = { role, name, value, pos, size, focused };
+        if (role === 'AXTextField' || role === 'AXTextArea' || role === 'AXComboBox' || role === 'AXSearchField') inputs.push(flat);
+        if (role === 'AXButton' && name) buttons.push({ role, name, pos, size });
+        const o = { role, subrole: safe(() => el.subrole()), name, value, focused };
+        if (depth < MAX_DEPTH) {
+          const kids = safe(() => el.uiElements()) || [];
+          const arr = [];
+          for (let i = 0; i < kids.length; i++) {
+            if (count >= MAX_NODES) { truncated = true; break; }
+            const c = node(kids[i], depth + 1);
+            if (c) arr.push(c);
+          }
+          if (arr.length) o.children = arr;
+        }
+        return o;
+      }
+      let proc;
+      try { proc = se.processes.byName(appName); proc.name(); }
+      catch (e) { return JSON.stringify({ error: '找不到进程：' + appName + '（应用是否已打开？名字是否正确？）' }); }
+      const wins = safe(() => proc.windows()) || [];
+      if (!wins.length) return JSON.stringify({ error: appName + ' 没有可见窗口（未打开或最小化）' });
+      const tree = node(wins[0], 0);
+      return JSON.stringify({ app: appName, window: safe(() => wins[0].name()), nodeCount: count, truncated, inputs, buttons, tree });
+    }
+  `;
+  const res = await run("osascript", ["-l", "JavaScript", "-e", jxa], { timeoutMs: 20000 });
+  if (res.code !== 0) throw new Error(`ax_dump 失败（可能缺辅助功能权限）：${res.output.slice(-300)}`);
+  try {
+    return JSON.parse(res.output.trim());
+  } catch {
+    return { raw: res.output.slice(0, 6000) };
+  }
+}
+
 async function capture(cfg: UmbraConfig): Promise<unknown> {
   const tmp = path.join(os.tmpdir(), `umbra-shot-${Date.now()}.png`);
   const plat = process.platform;
@@ -160,6 +219,7 @@ const SHOT_SKILLS: Manifest["skills"] = {
 };
 const APP_SKILLS: Manifest["skills"] = {
   app_exists: { description: "检查某个应用是否已安装（返回 exists 与匹配路径）", params: { app: "应用名，如 Claude" } },
+  ax_dump: { description: "导出某应用前台窗口的界面元素结构(Accessibility)，含输入框与按钮列表，用于判断能否精确操作", params: { app: "应用名，如 Claude", max_depth: "可选，遍历深度(默认10)" } },
 };
 
 // 注册 system Provider 到 registry。
@@ -176,6 +236,7 @@ export function registerSystem(r: Registry, cfg: UmbraConfig): void {
   r.register(manifest, async (skill, params) => {
     if (skill === "capture") return capture(cfg);
     if (skill === "app_exists") return appExists(params);
+    if (skill === "ax_dump") return axDump(params);
     if (skill in FS_SKILLS || skill in FS_ALIASES) return fileSystem(skill, params, cfg);
     throw new Error(`system 不支持技能：${skill}`);
   });
