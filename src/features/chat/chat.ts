@@ -15,6 +15,7 @@ import {
   getAllowDeviceSend,
   getAutoApproveOperate,
 } from "../../services/server";
+import { getDesktopConfig } from "../../services/desktop";
 import { t } from "../../i18n";
 
 type Block =
@@ -220,9 +221,15 @@ function convOf(msg: any): string {
 
 // 已自动批准过的 task，避免重复发送。
 const autoApproved = new Set<string>();
-// 若开启「自动批准电脑操作」，收到确认请求就自动批准，不再每次询问。
+// 是否自动批准电脑操作：开了「自动批准」开关，或把核心动作(打开/点击/输入/按键)都设成了「总是允许」。
+function operateAutoApprove(): boolean {
+  if (getAutoApproveOperate()) return true;
+  const pol = getDesktopConfig()?.computerSkillPolicy || {};
+  return ["open_app", "click", "type", "key"].every((k) => pol[k] === "allow");
+}
+// 满足自动批准条件时，收到确认请求就自动批准，不再每次询问。
 function autoApproveIfEnabled(taskId: string | undefined): void {
-  if (!taskId || autoApproved.has(taskId) || !getAutoApproveOperate()) return;
+  if (!taskId || autoApproved.has(taskId) || !operateAutoApprove()) return;
   autoApproved.add(taskId);
   chatConn.sendConfirm(taskId, true);
   resolveConfirm(taskId, true);
