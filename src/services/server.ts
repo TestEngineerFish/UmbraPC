@@ -72,10 +72,14 @@ export async function fetchHistory(
   }
 }
 
-// 清空主会话历史（你↔秘书）。返回删除条数。
-export async function clearHistory(): Promise<number> {
+// 清空指定会话历史（默认主会话；传 device:<id> 清某设备房间）。返回删除条数。
+export async function clearHistory(conversation = "assistant"): Promise<number> {
   try {
-    const r = await fetch(`${getServerUrl()}/history/clear`, { method: "POST" });
+    const r = await fetch(`${getServerUrl()}/history/clear`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversation }),
+    });
     if (!r.ok) return 0;
     const data = await r.json();
     return typeof data?.deleted === "number" ? data.deleted : 0;
@@ -127,6 +131,15 @@ export function getAllowDeviceSend(): boolean {
 }
 export function setAllowDeviceSend(v: boolean): void {
   localStorage.setItem(LS_ALLOW_DEVICE_SEND, v ? "1" : "0");
+}
+
+// 设置：自动批准电脑操作授权（默认关；开启后确认卡自动批准，不再每次询问）。
+const LS_AUTO_APPROVE_OPERATE = "umbra.autoApproveOperate";
+export function getAutoApproveOperate(): boolean {
+  return localStorage.getItem(LS_AUTO_APPROVE_OPERATE) === "1";
+}
+export function setAutoApproveOperate(v: boolean): void {
+  localStorage.setItem(LS_AUTO_APPROVE_OPERATE, v ? "1" : "0");
 }
 
 export interface Job {

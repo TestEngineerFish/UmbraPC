@@ -193,8 +193,25 @@ function Drawer({ detailId, detail, onClose }: { detailId: string; detail: JobDe
   );
 }
 
+// 把任务详情序列化成纯文本，方便一键复制发出去调试。
+function detailToText(d: JobDetail): string {
+  const subs = [...d.subtasks].sort((a, b) => a.seq - b.seq);
+  const lines: string[] = [];
+  lines.push(`任务：${d.job.goal}`);
+  lines.push(`状态：${d.job.status}`);
+  if (d.job.result_summary) lines.push(`结果：${d.job.result_summary}`);
+  lines.push("", "步骤：");
+  subs.forEach((s) =>
+    lines.push(`  ${s.seq + 1}. [${s.status}] ${s.title || `${s.provider || ""}.${s.skill || ""}`}${s.error ? ` — 错误：${s.error}` : ""}`),
+  );
+  lines.push("", "事件时间线：");
+  d.events.forEach((e) => lines.push(`  [${(e.created_at || "").replace("T", " ").slice(0, 19)}] ${e.message || e.type}`));
+  return lines.join("\n");
+}
+
 function DrawerBody({ d, onClose }: { d: JobDetail; onClose: () => void }) {
   const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
   const subs = [...d.subtasks].sort((a, b) => a.seq - b.seq);
   const doneN = subs.filter((s) => s.status === "done").length;
   const pct = subs.length ? Math.round((doneN / subs.length) * 100) : d.job.status === "done" ? 100 : 0;
@@ -208,9 +225,22 @@ function DrawerBody({ d, onClose }: { d: JobDetail; onClose: () => void }) {
             <Badge status={d.job.status} />
           </div>
         </div>
-        <button onClick={onClose} className="border-0 bg-transparent text-muted cursor-pointer text-[20px] leading-none shrink-0">
-          ×
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(detailToText(d)).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              });
+            }}
+            className="px-[10px] py-[5px] border border-border bg-card text-text rounded-lg text-[12px] cursor-pointer"
+          >
+            {copied ? t("tasks.copied") : t("tasks.copyDetail")}
+          </button>
+          <button onClick={onClose} className="border-0 bg-transparent text-muted cursor-pointer text-[20px] leading-none">
+            ×
+          </button>
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto p-[18px_20px] flex flex-col gap-5">
         <div>

@@ -55,6 +55,8 @@
   },
   "settings": {
     "title": "Settings",
+    "autoApproveOperate": "Auto-approve computer control",
+    "autoApproveOperateHint": "When on, computer-control (operate) approval cards are auto-approved instead of asking each time. Use with care.",
     "language": "Language",
     "langZh": "中文",
     "langEn": "English",
@@ -145,7 +147,9 @@
     "deleteN": "Delete ({{count}})",
     "confirmDelete": "Delete {{count}} selected task(s)? This cannot be undone.",
     "confirmDeleteBtn": "Delete",
-    "deleteEmpty": "Select tasks to delete first"
+    "deleteEmpty": "Select tasks to delete first",
+    "copyDetail": "Copy details",
+    "copied": "Copied"
   },
   "abilities": {
     "title": "Abilities",
@@ -216,6 +220,7 @@
     "newSession": "New chat",
     "clearHistory": "Clear chat",
     "clearConfirm": "Clear your chat history with the Secretary? This cannot be undone (device conversations are unaffected).",
+    "clearConfirmDevice": "Clear the conversation record for \"{{name}}\"? This cannot be undone.",
     "send": "Send",
     "emptyHint": "Start chatting with Umbra",
     "toolTrace": "Tool trace · {{count}} steps",

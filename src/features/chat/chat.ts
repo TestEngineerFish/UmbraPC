@@ -13,6 +13,7 @@ import {
   clearHistory,
   getServerUrl,
   getAllowDeviceSend,
+  getAutoApproveOperate,
 } from "../../services/server";
 import { t } from "../../i18n";
 
@@ -217,6 +218,16 @@ function convOf(msg: any): string {
   return c || MAIN;
 }
 
+// 已自动批准过的 task，避免重复发送。
+const autoApproved = new Set<string>();
+// 若开启「自动批准电脑操作」，收到确认请求就自动批准，不再每次询问。
+function autoApproveIfEnabled(taskId: string | undefined): void {
+  if (!taskId || autoApproved.has(taskId) || !getAutoApproveOperate()) return;
+  autoApproved.add(taskId);
+  chatConn.sendConfirm(taskId, true);
+  resolveConfirm(taskId, true);
+}
+
 function onMessage(msg: any): void {
   let target = MAIN;
   switch (msg.type) {
@@ -271,6 +282,7 @@ function onMessage(msg: any): void {
         if (!s.blocks.some((b) => b.kind === "confirm" && b.taskId === msg.task_id)) {
           s.blocks.push({ kind: "confirm", taskId: msg.task_id, summary: msg.summary || t("chat.needConfirm"), detail: msg.detail });
         }
+        autoApproveIfEnabled(msg.task_id);
       }
       break;
     case "confirm_resolved":
@@ -338,6 +350,7 @@ function handleJob(msg: any): string {
   b.message = msg.message || b.message;
   if (msg.goal) b.goal = msg.goal;
   b.confirmTaskId = msg.event === "confirm" && msg.needs_confirm ? msg.confirm_task_id : undefined;
+  if (b.confirmTaskId) autoApproveIfEnabled(b.confirmTaskId);
   if (msg.results) b.results = msg.results;
   if (msg.status === "done" && !s.doneJobs.has(id)) {
     s.doneJobs.add(id);
@@ -539,23 +552,24 @@ function switchConv(id: string): void {
   if (!s.loaded) loadConvHistory(id);
 }
 
-// 清空主会话历史（你↔秘书）：先本地立即清空（乐观），再后台调服务端删除。设备会话不动。
-async function clearMainHistory(): Promise<void> {
+// 清空【当前会话】历史：先本地立即清空（乐观），再后台调服务端删除。
+async function clearActiveHistory(): Promise<void> {
   if (clearing) return;
-  if (!window.confirm(t("chat.clearConfirm"))) return;
+  const conv = activeConv;
+  const confirmMsg = conv === MAIN ? t("chat.clearConfirm") : t("chat.clearConfirmDevice", { name: convLabel(conv) });
+  if (!window.confirm(confirmMsg)) return;
   clearing = true;
-  resetMainConv();
-  if (activeConv !== MAIN) switchConv(MAIN);
-  else renderMessages();
+  resetConv(conv);
+  renderMessages();
   try {
-    await clearHistory();
+    await clearHistory(conv);
   } finally {
     clearing = false;
   }
 }
 
-function resetMainConv(): void {
-  const s = cs(MAIN);
+function resetConv(convId: string): void {
+  const s = cs(convId);
   s.blocks = [];
   s.assistantIdx = null;
   s.jobMap = {};
@@ -599,7 +613,7 @@ export function mount(el: HTMLElement): void {
       <div id="ulightbox"></div>
     </div>`;
 
-  el.querySelector("#clearhist")!.addEventListener("click", clearMainHistory);
+  el.querySelector("#clearhist")!.addEventListener("click", clearActiveHistory);
   const barEl = el.querySelector("#uconvbar") as HTMLElement;
   barEl.addEventListener("click", (e) => {
     const btn = (e.target as HTMLElement).closest("[data-conv]") as HTMLElement | null;

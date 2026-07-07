@@ -55,6 +55,8 @@
   },
   "settings": {
     "title": "设置",
+    "autoApproveOperate": "自动批准电脑操作",
+    "autoApproveOperateHint": "开启后，电脑操作(operate)的授权卡会自动批准，不再每次询问。请谨慎开启。",
     "language": "界面语言",
     "langZh": "中文",
     "langEn": "English",
@@ -145,7 +147,9 @@
     "deleteN": "删除 ({{count}})",
     "confirmDelete": "确认删除选中的 {{count}} 项任务？此操作不可撤销。",
     "confirmDeleteBtn": "确认删除",
-    "deleteEmpty": "请先选择要删除的任务"
+    "deleteEmpty": "请先选择要删除的任务",
+    "copyDetail": "复制详情",
+    "copied": "已复制"
   },
   "abilities": {
     "title": "能力",
@@ -216,6 +220,7 @@
     "newSession": "新会话",
     "clearHistory": "清空聊天",
     "clearConfirm": "确认清空与秘书的聊天历史？此操作不可撤销（设备会话不受影响）。",
+    "clearConfirmDevice": "确认清空「{{name}}」设备会话的记录？此操作不可撤销。",
     "send": "发送",
     "emptyHint": "开始和 Umbra 聊天",
     "toolTrace": "工具轨迹 · {{count}} 步",
