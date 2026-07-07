@@ -310,8 +310,8 @@ class ChatConnection {
     return false;
   }
 
-  sendMessage(content: string): boolean {
-    return this.rawSend({ type: "message", content, client_id: getClientId() });
+  sendMessage(content: string, autoApproveOperate = false): boolean {
+    return this.rawSend({ type: "message", content, client_id: getClientId(), auto_approve_operate: autoApproveOperate });
   }
 
   sendConfirm(taskId: string, approved: boolean): boolean {

@@ -548,7 +548,7 @@ function send(): void {
   s.blocks.push({ kind: "user", text, ts: now });
   s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
   s.assistantIdx = s.blocks.length - 1;
-  if (!chatConn.sendMessage(text)) {
+  if (!chatConn.sendMessage(text, operateAutoApprove())) {
     s.blocks.push({ kind: "error", text: t("chat.notConnected") });
     s.assistantIdx = null;
   }
