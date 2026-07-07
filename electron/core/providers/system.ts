@@ -1,5 +1,6 @@
 // system Provider：设备自身（OS 级）能力——截图、文件操作。始终可用。
 // 对齐 Python prov_system.py + file_system.py + screenshot.py。
+import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -145,10 +146,11 @@ async function axDump(params: Record<string, any>): Promise<unknown> {
   // JXA：遍历 AX 树，收集角色/名字/值/位置，并把文本框、按钮拎成扁平列表。
   const jxa = `
     function run() {
+      ObjC.import('Foundation');
       const appName = ${JSON.stringify(app)};
       const MAX_DEPTH = ${maxDepth}, MAX_NODES = 500;
       const se = Application('System Events');
-      let count = 0, truncated = false;
+      let count = 0, truncated = false, a11yEnabled = false;
       const inputs = [], buttons = [];
       const safe = (fn) => { try { return fn(); } catch(e) { return null; } };
       function node(el, depth) {
@@ -179,10 +181,14 @@ async function axDump(params: Record<string, any>): Promise<unknown> {
       let proc;
       try { proc = se.processes.byName(appName); proc.name(); }
       catch (e) { return JSON.stringify({ error: '找不到进程：' + appName + '（应用是否已打开？名字是否正确？）' }); }
+      // 关键：Electron/Chromium 默认不建可访问性树；设这两个属性可强制它按需构建。
+      try { proc.attributes.byName('AXManualAccessibility').value = true; a11yEnabled = true; } catch (e) {}
+      try { proc.attributes.byName('AXEnhancedUserInterface').value = true; a11yEnabled = true; } catch (e) {}
+      $.NSThread.sleepForTimeInterval(1.0);  // 等 Chromium 构建 a11y 树
       const wins = safe(() => proc.windows()) || [];
       if (!wins.length) return JSON.stringify({ error: appName + ' 没有可见窗口（未打开或最小化）' });
       const tree = node(wins[0], 0);
-      return JSON.stringify({ app: appName, window: safe(() => wins[0].name()), nodeCount: count, truncated, inputs, buttons, tree });
+      return JSON.stringify({ app: appName, window: safe(() => wins[0].name()), a11yEnabled, nodeCount: count, truncated, inputs, buttons, tree });
     }
   `;
   const res = await run("osascript", ["-l", "JavaScript", "-e", jxa], { timeoutMs: 20000 });
@@ -192,6 +198,69 @@ async function axDump(params: Record<string, any>): Promise<unknown> {
   } catch {
     return { raw: res.output.slice(0, 6000) };
   }
+}
+
+// 带坐标的 OCR（macOS Vision）：返回每段文字 + 归一化中心坐标(0-1000, 左上原点)。
+// 用于 Set-of-Mark：让视觉模型「按编号选文字」而不是猜像素。
+const OCR_BOXES_JXA = `
+ObjC.import('Vision'); ObjC.import('AppKit');
+function run() {
+  var p = $.NSProcessInfo.processInfo.environment.objectForKey('UMBRA_OCR_PATH').js;
+  var img = $.NSImage.alloc.initWithContentsOfFile(p);
+  if (!img) return '[]';
+  var rep = $.NSBitmapImageRep.imageRepWithData(img.TIFFRepresentation);
+  var cg = rep.CGImage;
+  var req = $.VNRecognizeTextRequest.alloc.init;
+  req.recognitionLevel = 1; req.usesLanguageCorrection = true;
+  req.recognitionLanguages = $(['zh-Hans','zh-Hant','ja','en']);
+  var handler = $.VNImageRequestHandler.alloc.initWithCGImageOptions(cg, $({}));
+  if (!handler.performRequestsError($([req]), null)) return '[]';
+  var results = req.results, out = [];
+  for (var i = 0; i < results.count; i++) {
+    var obs = results.objectAtIndex(i);
+    var cand = obs.topCandidates(1);
+    if (cand.count === 0) continue;
+    var text = cand.objectAtIndex(0).string.js;
+    var bb = obs.boundingBox;  // 归一化, 左下原点
+    var cx = bb.origin.x + bb.size.width / 2;
+    var cyBottom = bb.origin.y + bb.size.height / 2;
+    out.push({ text: text, nx: Math.round(cx * 1000), ny: Math.round((1 - cyBottom) * 1000) });
+  }
+  return JSON.stringify(out);
+}
+`;
+
+async function ocrBoxes(imgPath: string): Promise<{ text: string; nx: number; ny: number }[]> {
+  const scriptPath = path.join(os.tmpdir(), `umbra-ocrbox-${Date.now()}.js`);
+  await fs.writeFile(scriptPath, OCR_BOXES_JXA, "utf-8");
+  try {
+    const out = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "osascript",
+        ["-l", "JavaScript", scriptPath],
+        { timeout: 20000, env: { ...process.env, UMBRA_OCR_PATH: imgPath }, maxBuffer: 8 * 1024 * 1024 },
+        (err, stdout, stderr) => (err ? reject(new Error(stderr || err.message)) : resolve(stdout || "[]")),
+      );
+    });
+    return JSON.parse(out.trim() || "[]");
+  } catch {
+    return [];
+  } finally {
+    fs.rm(scriptPath, { force: true }).catch(() => {});
+  }
+}
+
+// 截屏 + 带坐标 OCR：返回截图链接/file_id + 文字元素列表（供 Set-of-Mark 视觉定位）。
+async function ocrScreen(cfg: UmbraConfig): Promise<unknown> {
+  if (process.platform !== "darwin") throw new Error("ocr_screen 仅支持 macOS");
+  const tmp = path.join(os.tmpdir(), `umbra-ocrshot-${Date.now()}.png`);
+  const res = await run("screencapture", ["-x", tmp]);
+  if (res.code !== 0) throw new Error(`截图失败：${res.output.slice(-200)}`);
+  const items = await ocrBoxes(tmp);              // 全分辨率 OCR 更准
+  await run("sips", ["-Z", "1600", tmp]).catch(() => undefined);  // 下采样再上传/喂视觉
+  const up = await uploadFile(httpBase(cfg), cfg.token, tmp, "screen.png", "image/png");
+  fs.unlink(tmp).catch(() => {});
+  return { ...up, count: items.length, items };
 }
 
 async function capture(cfg: UmbraConfig): Promise<unknown> {
@@ -216,6 +285,7 @@ const FS_SKILLS: Manifest["skills"] = {
 };
 const SHOT_SKILLS: Manifest["skills"] = {
   capture: { description: "截取整个屏幕，上传后返回图片链接", params: {} },
+  ocr_screen: { description: "截屏 + 带坐标 OCR：返回图片链接与每段文字的归一化中心坐标，用于精确定位", params: {} },
 };
 const APP_SKILLS: Manifest["skills"] = {
   app_exists: { description: "检查某个应用是否已安装（返回 exists 与匹配路径）", params: { app: "应用名，如 Claude" } },
@@ -235,6 +305,7 @@ export function registerSystem(r: Registry, cfg: UmbraConfig): void {
   };
   r.register(manifest, async (skill, params) => {
     if (skill === "capture") return capture(cfg);
+    if (skill === "ocr_screen") return ocrScreen(cfg);
     if (skill === "app_exists") return appExists(params);
     if (skill === "ax_dump") return axDump(params);
     if (skill in FS_SKILLS || skill in FS_ALIASES) return fileSystem(skill, params, cfg);
