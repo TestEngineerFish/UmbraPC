@@ -56,6 +56,9 @@ export function Settings() {
   const [glmKey, setGlmKey] = useState("");
   const [allowDeviceSend, setAllowDeviceSendState] = useState(getAllowDeviceSend());
   const [autoApprove, setAutoApproveState] = useState(getAutoApproveOperate());
+  const [skillPolicy, setSkillPolicy] = useState<Record<string, "allow" | "deny">>(
+    desktop.getDesktopConfig()?.computerSkillPolicy || {},
+  );
 
   const isDesk = desktop.isDesktop();
   const cs = chatConn.status as "online" | "connecting" | "offline";
@@ -169,6 +172,43 @@ export function Settings() {
             />
           </div>
         </Card>
+
+        {isDesk && cuOn ? (
+          <Card title={t("settings.computerAuth")} sub={t("settings.computerAuthSub")}>
+            {([
+              ["open_app", t("settings.skillOpenApp")],
+              ["click", t("settings.skillClick")],
+              ["type", t("settings.skillType")],
+              ["key", t("settings.skillKey")],
+              ["scroll", t("settings.skillScroll")],
+            ] as const).map(([key, label]) => {
+              const cur = skillPolicy[key] || "ask";
+              const set = (v: "ask" | "allow" | "deny") => {
+                const next = { ...skillPolicy };
+                if (v === "ask") delete next[key];
+                else next[key] = v;
+                setSkillPolicy(next);
+                void desktop.pushConfig({ computerSkillPolicy: next });
+              };
+              return (
+                <div key={key} className="flex items-center gap-3 py-1.5">
+                  <span className="flex-1 text-[13.5px]">{label}</span>
+                  <div className="flex border border-border rounded-lg overflow-hidden">
+                    {(["ask", "allow", "deny"] as const).map((v, i) => (
+                      <button
+                        key={v}
+                        onClick={() => set(v)}
+                        className={`px-[11px] py-1.5 text-[12px] ${i < 2 ? "border-r border-border" : ""} ${cur === v ? (v === "deny" ? "bg-danger text-white" : v === "allow" ? "bg-orange text-white" : "bg-card text-text") + " font-semibold" : "bg-transparent text-text"}`}
+                      >
+                        {t(`settings.policy_${v}`)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </Card>
+        ) : null}
 
         <Card title={t("settings.device")}>
           <Row label={t("settings.deviceId")}>

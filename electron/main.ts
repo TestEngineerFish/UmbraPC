@@ -130,6 +130,7 @@ function publicConfig(c: UmbraConfig) {
     providersFile: c.providersFile,
     computerUseEnabled: c.computerUseEnabled,
     computerConfirm: c.computerConfirm,
+    computerSkillPolicy: c.computerSkillPolicy || {},
     disabledProviders: c.disabledProviders || [],
     locale: resolveLocale(c.locale),
   };
@@ -153,6 +154,8 @@ function registerIpc(): void {
     if (patch.token === "" || patch.token === undefined) delete (patch as Record<string, unknown>).token;
     const prevLocale = resolveLocale(store.get().locale);
     await store.save(patch);
+    // 重建能力注册表，让新配置（如电脑动作授权策略）对后续任务立即生效，无需重连。
+    await executor.refreshRegistry().catch(() => undefined);
     const cfg = store.get();
     const nextLocale = resolveLocale(cfg.locale);
     if (patch.locale && nextLocale !== prevLocale) {

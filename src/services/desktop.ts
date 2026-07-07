@@ -16,6 +16,7 @@ interface PublicConfig {
   providersFile: string;
   computerUseEnabled: boolean;
   computerConfirm: boolean;
+  computerSkillPolicy: Record<string, "allow" | "deny">;
   disabledProviders: string[];
   locale: string;
 }

@@ -22,6 +22,8 @@ export interface UmbraConfig {
   // ── computer-use（GUI 自动化，高权限，默认关）──
   computerUseEnabled: boolean;   // 总开关：关则 computer Provider 不注册、不可用
   computerConfirm: boolean;      // 关键动作(type/key/open_app)执行前需用户确认
+  // 每个电脑动作的授权策略：'allow'=总是允许(跳过确认)，'deny'=禁止执行；未列出=按 computerConfirm 询问。
+  computerSkillPolicy: Record<string, "allow" | "deny">;
   computerBlacklist: string[];   // 禁止操作的应用名（子串匹配，前台应用命中即拒绝）
   disabledProviders: string[];   // 用户在能力页手动停用的程序名（即使安装/可用也不上报、不可执行）
   // ── 剪贴板历史 ──
@@ -64,6 +66,7 @@ function defaults(configDir: string): UmbraConfig {
     computerUseEnabled: envBool("UMBRA_COMPUTER_USE", false),
     // 默认关：operate 在服务端做"方案确认 + 红线确认"，不在设备端逐个动作确认（太吵）。
     computerConfirm: envBool("UMBRA_COMPUTER_CONFIRM", false),
+    computerSkillPolicy: {},
     computerBlacklist: [
       "terminal", "iterm", "console",
       "keychain", "钥匙串", "1password", "bitwarden", "lastpass",

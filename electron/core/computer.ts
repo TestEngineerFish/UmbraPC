@@ -77,6 +77,12 @@ const KEYMAP: Record<string, string> = {
 };
 
 async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraConfig, report: Report, confirm: Confirm): Promise<unknown> {
+  // 每动作授权策略：deny=禁止；allow=跳过确认；未设=按 computerConfirm 询问。
+  const policy = (cfg.computerSkillPolicy || {})[skill];
+  if (policy === "deny") throw new Error(mt("electron.skillDenied", { skill }, getMainLocale()));
+  // 是否需要执行前确认：开了 computerConfirm 且该动作未被设为「总是允许」。
+  const needConfirm = cfg.computerConfirm && policy !== "allow";
+
   if (skill === "screenshot") {
     await requireScreen();
     return shoot(cfg);
@@ -89,7 +95,7 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     if (!app) throw new Error(mt("electron.appMissing", undefined, loc));
     if (blacklisted(app, cfg.computerBlacklist)) throw new Error(mt("electron.blacklistApp", { app }, loc));
     const urlPart = url ? mt("electron.openAppWithUrl", { url }, loc) : "";
-    if (cfg.computerConfirm && !(await confirm(mt("electron.openAppConfirm", { app, urlPart }, loc), { app, url: url || undefined }))) {
+    if (needConfirm && !(await confirm(mt("electron.openAppConfirm", { app, urlPart }, loc), { app, url: url || undefined }))) {
       throw new Error(mt("electron.userDenied", undefined, loc));
     }
     const args = url ? ["-a", app, url] : ["-a", app];
@@ -137,7 +143,7 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     const loc = getMainLocale();
     const appName = front || mt("electron.currentApp", undefined, loc);
     const displayText = `${text.slice(0, 40)}${text.length > 40 ? "…" : ""}`;
-    if (cfg.computerConfirm && !(await confirm(mt("electron.typeConfirm", { app: appName, text: displayText }, loc), {}))) {
+    if (needConfirm && !(await confirm(mt("electron.typeConfirm", { app: appName, text: displayText }, loc), {}))) {
       throw new Error(mt("electron.userDenied", undefined, loc));
     }
     await keyboard.type(text);
@@ -151,7 +157,7 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     const mapped = keys.map((k) => Key[KEYMAP[k.toLowerCase()] || (k.length === 1 ? k.toUpperCase() : k)]).filter((v: unknown) => v !== undefined);
     const loc = getMainLocale();
     if (!mapped.length) throw new Error(mt("electron.keyUnknown", { keys: keys.join("+") }, loc));
-    if (cfg.computerConfirm && !(await confirm(mt("electron.keyConfirm", { keys: keys.join(" + ") }, loc), {}))) {
+    if (needConfirm && !(await confirm(mt("electron.keyConfirm", { keys: keys.join(" + ") }, loc), {}))) {
       throw new Error(mt("electron.userDenied", undefined, loc));
     }
     await keyboard.pressKey(...mapped);
