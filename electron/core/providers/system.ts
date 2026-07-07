@@ -106,6 +106,35 @@ async function fileSystem(action: string, params: Record<string, any>, cfg: Umbr
   throw new Error(`未知 file_system action：${action}`);
 }
 
+// 查某个应用是否已安装（供 operate 规划时预检）。macOS 用 mdfind + 标准目录；其它平台尽力而为。
+async function appExists(params: Record<string, any>): Promise<unknown> {
+  const name = String(params.app || "").trim();
+  if (!name) throw new Error("缺少 app 名称");
+  const plat = process.platform;
+  const matches: string[] = [];
+  const push = (p: string) => { const s = p.trim(); if (s && !matches.includes(s)) matches.push(s); };
+
+  if (plat === "darwin") {
+    // 1) 按应用包文件名精确找
+    let res = await run("mdfind", [`kMDItemContentType == 'com.apple.application-bundle' && kMDItemFSName == '${name}.app'c`]);
+    if (res.code === 0) res.output.split("\n").forEach(push);
+    // 2) 找不到再按显示名模糊找
+    if (matches.length === 0) {
+      res = await run("mdfind", [`kMDItemContentType == 'com.apple.application-bundle' && kMDItemDisplayName == '${name}*'c`]);
+      if (res.code === 0) res.output.split("\n").slice(0, 10).forEach(push);
+    }
+    // 3) 标准目录兜底
+    for (const base of ["/Applications", path.join(os.homedir(), "Applications")]) {
+      const p = path.join(base, `${name}.app`);
+      try { await fs.access(p); push(p); } catch { /* not there */ }
+    }
+  } else {
+    const res = await run(plat === "win32" ? "where" : "which", [name]);
+    if (res.code === 0) res.output.split("\n").forEach(push);
+  }
+  return { exists: matches.length > 0, matches: matches.slice(0, 10) };
+}
+
 async function capture(cfg: UmbraConfig): Promise<unknown> {
   const tmp = path.join(os.tmpdir(), `umbra-shot-${Date.now()}.png`);
   const plat = process.platform;
@@ -129,6 +158,9 @@ const FS_SKILLS: Manifest["skills"] = {
 const SHOT_SKILLS: Manifest["skills"] = {
   capture: { description: "截取整个屏幕，上传后返回图片链接", params: {} },
 };
+const APP_SKILLS: Manifest["skills"] = {
+  app_exists: { description: "检查某个应用是否已安装（返回 exists 与匹配路径）", params: { app: "应用名，如 Claude" } },
+};
 
 // 注册 system Provider 到 registry。
 export function registerSystem(r: Registry, cfg: UmbraConfig): void {
@@ -139,10 +171,11 @@ export function registerSystem(r: Registry, cfg: UmbraConfig): void {
     available: true,
     unavailable_reason: "",
     version: null,
-    skills: { ...SHOT_SKILLS, ...FS_SKILLS },
+    skills: { ...SHOT_SKILLS, ...FS_SKILLS, ...APP_SKILLS },
   };
   r.register(manifest, async (skill, params) => {
     if (skill === "capture") return capture(cfg);
+    if (skill === "app_exists") return appExists(params);
     if (skill in FS_SKILLS || skill in FS_ALIASES) return fileSystem(skill, params, cfg);
     throw new Error(`system 不支持技能：${skill}`);
   });
