@@ -224,6 +224,7 @@
     "loadOlder": "Load older messages…",
     "thinking": "Thinking…",
     "approve": "Approve",
+    "approveAlways": "Always allow",
     "reject": "Reject",
     "done": "Task complete",
     "viewResults": "View results",

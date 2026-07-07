@@ -14,6 +14,7 @@ import {
   getServerUrl,
   getAllowDeviceSend,
   getAutoApproveOperate,
+  setAutoApproveOperate,
 } from "../../services/server";
 import { getDesktopConfig } from "../../services/desktop";
 import { t } from "../../i18n";
@@ -384,6 +385,16 @@ const timeLine = (ts: string | number | undefined, align: "flex-start" | "flex-e
   return s ? `<div style="align-self:${align};font-size:10.5px;color:var(--muted);padding:0 4px;">${s}</div>` : "";
 };
 
+// 授权卡按钮：批准 / 总是允许 / 拒绝。「总是允许」= 打开自动批准 + 批准本次。
+function confirmButtons(taskId: string): string {
+  const tid = esc(taskId);
+  return `<div style="display:flex;gap:9px;margin-top:11px;flex-wrap:wrap;">`
+    + `<button data-approve="${tid}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approve"))}</button>`
+    + `<button data-approve-always="${tid}" style="padding:7px 15px;background:var(--orange-soft);color:var(--orange-text);border:1px solid var(--orange);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approveAlways"))}</button>`
+    + `<button data-deny="${tid}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.reject"))}</button>`
+    + `</div>`;
+}
+
 function blockHtml(b: Block, i: number): string {
   if (b.kind === "user")
     return `<div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
@@ -407,9 +418,7 @@ function blockHtml(b: Block, i: number): string {
   if (b.kind === "job") {
     const color = b.status === "done" ? "var(--success)" : b.status === "failed" ? "var(--danger)" : "var(--orange)";
     // 授权按钮在任意会话都可点（只读仅限制文本输入，不限制确认操作）。
-    const confirm = b.confirmTaskId
-      ? `<div style="display:flex;gap:9px;margin-top:11px;"><button data-approve="${esc(b.confirmTaskId)}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approve"))}</button><button data-deny="${esc(b.confirmTaskId)}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.reject"))}</button></div>`
-      : "";
+    const confirm = b.confirmTaskId ? confirmButtons(b.confirmTaskId) : "";
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-left:3px solid ${color};border-radius:10px;padding:13px 15px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;"><span style="font-weight:600;">${esc(b.goal)}</span><span style="font-size:12px;color:var(--orange-text);font-weight:600;">${b.pct}%</span></div>
         <div style="height:6px;border-radius:999px;background:var(--track);overflow:hidden;margin-bottom:8px;"><div style="height:100%;width:${b.pct}%;background:${color};border-radius:999px;"></div></div>
@@ -432,7 +441,7 @@ function blockHtml(b: Block, i: number): string {
     const detail = b.detail != null ? (typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail)) : "";
     const foot = b.resolved
       ? `<div style="font-size:12.5px;font-weight:600;margin-top:9px;color:${b.resolved === "approved" ? "var(--success)" : "var(--danger)"};">${b.resolved === "approved" ? `✅ ${esc(t("chat.approved"))}` : `🚫 ${esc(t("chat.denied"))}`}</div>`
-      : `<div style="display:flex;gap:9px;margin-top:11px;"><button data-approve="${esc(b.taskId)}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approve"))}</button><button data-deny="${esc(b.taskId)}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.reject"))}</button></div>`;
+      : confirmButtons(b.taskId);
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--orange-soft);border:1px solid var(--orange);border-radius:10px;padding:13px 15px;">
         <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>${esc(t("chat.needConfirm"))}</div>
         <div style="font-size:13px;line-height:1.55;color:var(--text);">${esc(b.summary)}</div>
@@ -639,11 +648,17 @@ export function mount(el: HTMLElement): void {
 }
 
 function onMsgsClick(e: Event): void {
-  const t = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-deny],[data-img]") as HTMLElement | null;
+  const t = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img]") as HTMLElement | null;
   if (!t) return;
   if (t.dataset.trace !== undefined) {
     const b = cs(activeConv).blocks[Number(t.dataset.trace)];
     if (b && b.kind === "assistant") { b.traceOpen = !b.traceOpen; renderMessages(); }
+  } else if (t.dataset.approveAlways) {
+    // 总是允许：打开「自动批准电脑操作」（设置里同步）+ 批准本次。
+    setAutoApproveOperate(true);
+    chatConn.sendConfirm(t.dataset.approveAlways, true);
+    resolveConfirm(t.dataset.approveAlways, true);
+    renderMessages();
   } else if (t.dataset.approve) {
     chatConn.sendConfirm(t.dataset.approve, true);
     resolveConfirm(t.dataset.approve, true);
