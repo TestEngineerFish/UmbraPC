@@ -146,7 +146,19 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     if (needConfirm && !(await confirm(mt("electron.typeConfirm", { app: appName, text: displayText }, loc), {}))) {
       throw new Error(mt("electron.userDenied", undefined, loc));
     }
-    await keyboard.type(text);
+    // 中文/emoji 等非 ASCII 无法用 nut-js 逐字键入（会卡住直到超时），改用「剪贴板 + Cmd+V」粘贴。
+    if (/[^\x00-\x7F]/.test(text)) {
+      const { clipboard } = await import("electron");
+      const prev = clipboard.readText();          // 尽量恢复用户原有剪贴板
+      clipboard.writeText(text);
+      await new Promise((r) => setTimeout(r, 60)); // 等剪贴板就绪
+      await keyboard.pressKey(Key.LeftCmd, Key.V);
+      await keyboard.releaseKey(Key.LeftCmd, Key.V);
+      await new Promise((r) => setTimeout(r, 60));
+      if (prev) clipboard.writeText(prev);
+    } else {
+      await keyboard.type(text);
+    }
     await report(mt("electron.typedChars", { count: text.length }, loc), {});
     return { typed: text.length };
   }
