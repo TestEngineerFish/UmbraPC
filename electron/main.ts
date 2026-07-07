@@ -1,7 +1,7 @@
 // Electron 主进程：开窗 + 任务执行器 + IPC。
 // 设备 WebSocket 由渲染层(Chromium)承载（主进程网络在部分环境被代理/WAF RST）；
 // 主进程只做能力探测与任务执行，经 IPC 与渲染层桥接。
-import { app, BrowserWindow, globalShortcut, ipcMain, shell, systemPreferences } from "electron";
+import { app, BrowserWindow, globalShortcut, ipcMain, Menu, nativeImage, shell, systemPreferences, Tray } from "electron";
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
@@ -11,7 +11,7 @@ import { requestStop } from "./core/computer";
 import { initRpc } from "./core/shared/rpc";
 import { ClipboardManager } from "./core/clipboard";
 import { ScreenshotManager } from "./core/screenshot";
-import { resolveLocale, setMainLocale } from "./i18n";
+import { getMainLocale, resolveLocale, setMainLocale } from "./i18n";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
 
@@ -44,6 +44,9 @@ let store: ConfigStore;
 let executor: TaskExecutor;
 let clipboard: ClipboardManager;
 let screenshot: ScreenshotManager;
+let mainWindow: BrowserWindow | null = null; // 显式跟踪主窗口：剪贴板/截图的隐藏窗口会让 getAllWindows() 恒 >0，不能靠它判断
+let tray: Tray | null = null;
+let quitting = false; // true 时才真正退出（关窗默认只隐藏）
 
 // 截图与剪贴板共用 globalShortcut：任何一方改快捷键，都先全清再各自重注册，避免互相覆盖。
 function reregisterShortcuts(): void {
@@ -98,7 +101,48 @@ function createWindow(): void {
   // 让主进程能把需要 Chromium 网络的活（上传等）交给这个窗口的渲染层。
   initRpc(win.webContents);
 
+  // 关窗默认只隐藏（macOS）：保留窗口与 Dock 图标，便于从 Dock/托盘再次唤起；
+  // 只有用户显式退出（quitting=true）时才真正销毁。
+  win.on("close", (e) => {
+    if (process.platform === "darwin" && !quitting) {
+      e.preventDefault();
+      win.hide();
+    }
+  });
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
+  });
+
+  mainWindow = win;
   loadRenderer(win);
+}
+
+// 唤起主窗口：存在就显示+聚焦，销毁了就重建。
+function showMainWindow(): void {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) mainWindow.show();
+    mainWindow.focus();
+  } else {
+    createWindow();
+  }
+}
+
+// 菜单栏（状态栏）托盘图标：关窗后仍可从这里再次唤起。
+function createTray(): void {
+  if (tray) return;
+  const loc = getMainLocale();
+  const t = (zh: string, en: string) => (loc.startsWith("zh") ? zh : en);
+  // 用空图标 + 标题文字，避免依赖打包资源；标题短，占位小。
+  tray = new Tray(nativeImage.createEmpty());
+  tray.setToolTip("Umbra");
+  tray.setTitle("Umbra");
+  const menu = Menu.buildFromTemplate([
+    { label: t("显示主窗口", "Show Umbra"), click: () => showMainWindow() },
+    { type: "separator" },
+    { label: t("退出", "Quit"), click: () => { quitting = true; app.quit(); } },
+  ]);
+  tray.setContextMenu(menu);
+  tray.on("click", () => showMainWindow()); // 左键直接唤起（右键出菜单）
 }
 
 // dev：连 Vite（带重试）；否则加载打包好的 dist。
@@ -245,6 +289,7 @@ app.whenReady().then(async () => {
   executor = new TaskExecutor(store);
   registerIpc();
   createWindow();
+  createTray(); // 菜单栏常驻图标：关窗后仍可唤起
 
   // 剪贴板历史 + 截图：均复用主窗口的 preload；快捷键统一注册。
   const winOpts = {
@@ -258,9 +303,14 @@ app.whenReady().then(async () => {
     .then(() => reregisterShortcuts()) // 两者就绪后统一注册各自快捷键
     .catch((e) => console.error("剪贴板/截图初始化失败", e));
 
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
+  // 点 Dock 图标：唤起主窗口（不能靠 getAllWindows().length===0 判断，
+  // 剪贴板/截图的隐藏窗口会让它恒 >0）。
+  app.on("activate", () => showMainWindow());
+});
+
+// 显式退出前置标记，让 close 处理器放行真正销毁。
+app.on("before-quit", () => {
+  quitting = true;
 });
 
 app.on("will-quit", () => {
