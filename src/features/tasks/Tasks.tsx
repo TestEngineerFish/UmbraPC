@@ -5,6 +5,10 @@ import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
 import { deleteJobs, getServerUrl } from "../../services/server";
 import type { Job, JobDetail, Subtask } from "../../services/server";
+import { ImageViewer } from "../../components/ImageViewer";
+
+// 全局图片预览：任意 Step 图片点击后打开（避免逐层透传 onClick）。
+let openPreview: (src: string, alt?: string) => void = () => {};
 
 // 从子任务结果里取截图 URL（相对路径拼服务端地址）。
 function stepShot(s: Subtask): string | null {
@@ -49,6 +53,8 @@ export function Tasks() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState<{ src: string; alt?: string } | null>(null);
+  openPreview = (src, alt) => setPreview({ src, alt });
 
   const ids = tasks.list.map((j) => j.id);
   const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
@@ -142,6 +148,7 @@ export function Tasks() {
 
       </div>
       {tasks.detailId && !selectMode ? <Drawer detailId={tasks.detailId} detail={tasks.detail} onClose={() => legacy.closeJob()} /> : null}
+      <ImageViewer src={preview?.src ?? null} alt={preview?.alt} onClose={() => setPreview(null)} />
     </div>
   );
 }
@@ -316,10 +323,14 @@ function Step({ s }: { s: Subtask }) {
         <span className="truncate">{title}</span>
       </div>
       {shot ? (
-        // 该步「完成后」状态截图：直接内联显示，点击在新标签打开大图（不弹下载框）。
-        <a href={shot} target="_blank" rel="noopener noreferrer" title={title} className="ml-[27px]">
-          <img src={shot} alt={title} className="block max-w-full rounded-lg border border-border" />
-        </a>
+        // 该步「完成后」状态截图：内联显示，点击打开预览器（放大/缩小/下载），不再弹下载框。
+        <img
+          src={shot}
+          alt={title}
+          title={title}
+          onClick={() => openPreview(shot, title)}
+          className="block max-w-full rounded-lg border border-border ml-[27px] cursor-zoom-in"
+        />
       ) : null}
     </div>
   );

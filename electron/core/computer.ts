@@ -149,13 +149,18 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     // 中文/emoji 等非 ASCII 无法用 nut-js 逐字键入（会卡住直到超时），改用「剪贴板 + Cmd+V」粘贴。
     if (/[^\x00-\x7F]/.test(text)) {
       const { clipboard } = await import("electron");
-      const prev = clipboard.readText();          // 尽量恢复用户原有剪贴板
+      const prev = clipboard.readText();          // 稍后恢复用户原有剪贴板
       clipboard.writeText(text);
-      await new Promise((r) => setTimeout(r, 60)); // 等剪贴板就绪
+      await new Promise((r) => setTimeout(r, 150)); // 等剪贴板写入生效（慢应用需要更久）
       await keyboard.pressKey(Key.LeftCmd, Key.V);
       await keyboard.releaseKey(Key.LeftCmd, Key.V);
-      await new Promise((r) => setTimeout(r, 60));
-      if (prev) clipboard.writeText(prev);
+      // 关键修复：Electron 等较慢的应用「读剪贴板执行粘贴」是异步的，会晚于按键。
+      // 若过早把剪贴板恢复成上一次内容，粘进去的就会是旧内容（如输“你好”却粘出“Umbra”）。
+      // 因此这里先等目标应用把剪贴板读走，再延迟(fire-and-forget)恢复，彻底避开竞态。
+      await new Promise((r) => setTimeout(r, 350));
+      if (prev && prev !== text) {
+        setTimeout(() => { try { clipboard.writeText(prev); } catch { /* ignore */ } }, 800);
+      }
     } else {
       await keyboard.type(text);
     }
