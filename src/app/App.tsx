@@ -6,6 +6,7 @@ import { Settings } from "../features/settings/Settings";
 import { Logs } from "../features/logs/Logs";
 import { Realtime } from "../features/realtime/Realtime";
 import { Tasks } from "../features/tasks/Tasks";
+import { Inspirations } from "../features/inspiration/Inspirations";
 import { Abilities } from "../features/abilities/Abilities";
 import { subscribeLocale } from "../i18n";
 
@@ -53,6 +54,8 @@ export function App() {
             <Realtime />
           ) : nav === "tasks" ? (
             <Tasks />
+          ) : nav === "inspiration" ? (
+            <Inspirations />
           ) : nav === "abilities" ? (
             <Abilities />
           ) : (

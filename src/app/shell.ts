@@ -5,11 +5,12 @@
 
 import { chatConn, getServerUrl, setServerUrl, setToken, getToken, getDeviceName, setDeviceName } from "../services/server";
 import { fetchJobs, fetchJobDetail, type Job, type JobDetail } from "../services/server";
+import { fetchInspirations, type Inspiration } from "../services/server";
 import * as chat from "../features/chat/chat";
 import * as desktop from "../services/desktop";
 import { t } from "../i18n";
 
-export type Nav = "chat" | "tasks" | "abilities" | "realtime" | "logs" | "settings";
+export type Nav = "chat" | "tasks" | "inspiration" | "abilities" | "realtime" | "logs" | "settings";
 
 const state = {
   nav: "chat" as Nav,
@@ -22,6 +23,12 @@ const state = {
     refreshing: false,
     detailId: null as string | null,
     detail: null as JobDetail | null,
+  },
+  insp: {
+    list: [] as Inspiration[],
+    loading: false,
+    refreshing: false,
+    filter: "" as "" | "open" | "done" | "archived",
   },
   // 剪贴板历史设置
   clip: {
@@ -83,6 +90,7 @@ const shotBridge: ShotBridge | undefined = (window as unknown as { umbraShot?: S
 const SVG = {
   chat: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.4 8.4 0 0 1-11.9 7.6L4 20l1-4.6A8.4 8.4 0 1 1 21 11.5z"></path></svg>`,
   tasks: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"></path><path d="M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2"></path></svg>`,
+  inspiration: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18h6M10 21h4"></path><path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.1.7h5.2l.1-.7c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3z"></path></svg>`,
   abilities: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"></rect><rect x="14" y="3" width="7" height="7" rx="1.5"></rect><rect x="3" y="14" width="7" height="7" rx="1.5"></rect><rect x="14" y="14" width="7" height="7" rx="1.5"></rect></svg>`,
   realtime: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg>`,
   logs: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"></rect><path d="M6.5 9l3 2.5-3 2.5M12 15h5"></path></svg>`,
@@ -150,6 +158,7 @@ function sidebar(): string {
     </div>
     ${navItem("chat", t("nav.chat"), SVG.chat)}
     ${navItem("tasks", t("nav.tasks"), SVG.tasks)}
+    ${navItem("inspiration", t("nav.inspiration"), SVG.inspiration)}
     ${navItem("abilities", t("nav.abilities"), SVG.abilities)}
     ${navItem("realtime", t("nav.realtime"), SVG.realtime)}
     ${navItem("logs", t("nav.logs"), SVG.logs)}
@@ -370,6 +379,13 @@ export function navigate(n: Nav): void {
 export function getTasksState() {
   return state.tasks;
 }
+export function getInspState() {
+  return state.insp;
+}
+export function setInspFilter(f: "" | "open" | "done" | "archived"): void {
+  state.insp.filter = f;
+  loadInspirations();
+}
 // React 能力页：写入/删除自定义程序（复用 providers.json 持久化逻辑）。
 export function saveCustomProviderEntry(entry: desktop.CustomProviderCfg, original: string | null): void {
   const list = [...desktop.getCustomProviders()];
@@ -440,6 +456,32 @@ function stopTasksPolling(): void {
   tasksTimer = undefined;
 }
 
+// ── 灵感页数据（/inspirations）───────────────────────────────────────────────
+let inspTimer: number | undefined;
+
+async function loadInspirations(): Promise<void> {
+  if (state.insp.list.length === 0) state.insp.loading = true;
+  state.insp.list = await fetchInspirations(state.insp.filter || undefined);
+  state.insp.loading = false;
+  if (state.nav === "inspiration") render();
+}
+async function manualRefreshInsp(): Promise<void> {
+  state.insp.refreshing = true;
+  render();
+  await Promise.all([loadInspirations(), new Promise((r) => setTimeout(r, 400))]);
+  state.insp.refreshing = false;
+  render();
+}
+function startInspPolling(): void {
+  loadInspirations();
+  if (inspTimer) clearInterval(inspTimer);
+  inspTimer = window.setInterval(loadInspirations, 5000);
+}
+function stopInspPolling(): void {
+  if (inspTimer) clearInterval(inspTimer);
+  inspTimer = undefined;
+}
+
 async function openJob(id: string): Promise<void> {
   state.tasks.detailId = id;
   state.tasks.detail = null;
@@ -461,6 +503,8 @@ function setNav(nav: Nav): void {
   state.nav = nav;
   if (nav === "tasks") startTasksPolling();
   else stopTasksPolling();
+  if (nav === "inspiration") startInspPolling();
+  else stopInspPolling();
   if (nav === "settings") {
     loadClipSettings();
     loadShotSettings();
@@ -508,3 +552,5 @@ export { titlebar, sidebar, currentScreen };
 export { setCodingMode, toggleComputerUse, computerEnabled, tokenPlaceholder, deviceIdLabel, toggleClipEnabled, clearClipHistory, toggleShotEnabled, beginShortcutRecording, loadClipSettings, loadShotSettings };
 // 供 React 任务页复用。
 export { openJob, closeJob, manualRefresh, fmtTime, fmtListTime };
+// 供 React 灵感页复用。
+export { manualRefreshInsp };

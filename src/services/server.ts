@@ -213,6 +213,82 @@ export async function fetchJobDetail(id: string): Promise<JobDetail | null> {
   }
 }
 
+// ── 灵感速记（/inspirations）────────────────────────────────────────────────
+export interface Inspiration {
+  id: number;
+  raw: string;
+  title: string;
+  summary: string;
+  tags: string[];
+  status: string; // open/done/archived
+  source_channel?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function fetchInspirations(status?: string): Promise<Inspiration[]> {
+  try {
+    const q = status ? `?status=${encodeURIComponent(status)}` : "";
+    const r = await fetch(`${getServerUrl()}/inspirations${q}`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch {
+    return [];
+  }
+}
+
+export async function createInspiration(body: {
+  raw: string;
+  title?: string;
+  summary?: string;
+  tags?: string[];
+}): Promise<Inspiration | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/inspirations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function updateInspiration(
+  id: number,
+  patch: Partial<Pick<Inspiration, "raw" | "title" | "summary" | "tags" | "status">>,
+): Promise<Inspiration | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/inspirations/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function deleteInspirations(ids: number[]): Promise<number> {
+  if (!ids.length) return 0;
+  try {
+    const r = await fetch(`${getServerUrl()}/inspirations/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    if (!r.ok) return 0;
+    const data = await r.json();
+    return typeof data?.deleted === "number" ? data.deleted : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export interface ChatHandlers {
   onStatus?: (s: ConnStatus) => void;
   onMessage?: (msg: any) => void;
