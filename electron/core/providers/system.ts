@@ -108,6 +108,13 @@ async function fileSystem(action: string, params: Record<string, any>, cfg: Umbr
 }
 
 // 查某个应用是否已安装（供 operate 规划时预检）。macOS 用 mdfind + 标准目录；其它平台尽力而为。
+// 当前前台应用名（供服务端在 open 后轮询等待应用真正到前台/初始化好再操作）。
+async function frontmostApp(): Promise<unknown> {
+  if (process.platform !== "darwin") return { app: "" };
+  const res = await run("osascript", ["-e", 'tell application "System Events" to name of first application process whose frontmost is true'], { timeoutMs: 4000 });
+  return { app: (res.output || "").trim() };
+}
+
 async function appExists(params: Record<string, any>): Promise<unknown> {
   const name = String(params.app || "").trim();
   if (!name) throw new Error("缺少 app 名称");
@@ -289,6 +296,7 @@ const SHOT_SKILLS: Manifest["skills"] = {
 };
 const APP_SKILLS: Manifest["skills"] = {
   app_exists: { description: "检查某个应用是否已安装（返回 exists 与匹配路径）", params: { app: "应用名，如 Claude" } },
+  frontmost_app: { description: "返回当前前台应用名（{app}），用于判断某应用是否已在前台/初始化就绪", params: {} },
   ax_dump: { description: "导出某应用前台窗口的界面元素结构(Accessibility)，含输入框与按钮列表，用于判断能否精确操作", params: { app: "应用名，如 Claude", max_depth: "可选，遍历深度(默认10)" } },
 };
 
@@ -307,6 +315,7 @@ export function registerSystem(r: Registry, cfg: UmbraConfig): void {
     if (skill === "capture") return capture(cfg);
     if (skill === "ocr_screen") return ocrScreen(cfg);
     if (skill === "app_exists") return appExists(params);
+    if (skill === "frontmost_app") return frontmostApp();
     if (skill === "ax_dump") return axDump(params);
     if (skill in FS_SKILLS || skill in FS_ALIASES) return fileSystem(skill, params, cfg);
     throw new Error(`system 不支持技能：${skill}`);
