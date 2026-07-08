@@ -3,8 +3,18 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
-import { deleteJobs } from "../../services/server";
+import { deleteJobs, getServerUrl } from "../../services/server";
 import type { Job, JobDetail, Subtask } from "../../services/server";
+
+// 从子任务结果里取截图 URL（相对路径拼服务端地址）。
+function stepShot(s: Subtask): string | null {
+  if (!s.result_json) return null;
+  try {
+    const r = JSON.parse(s.result_json);
+    if (r && typeof r.url === "string" && r.url) return r.url.startsWith("http") ? r.url : getServerUrl() + r.url;
+  } catch { /* ignore */ }
+  return null;
+}
 
 type Kind = "ok" | "run" | "wait" | "fail" | "off";
 const STATUS_KEYS: Record<string, [string, Kind]> = {
@@ -67,7 +77,9 @@ export function Tasks() {
 
   const btn = "px-3 py-1.5 border border-border bg-card text-text rounded-lg text-[12.5px] cursor-pointer";
   return (
-    <div className="h-full overflow-y-auto p-[18px_22px] relative">
+    // 外层不滚动、只做定位上下文；滚动放到内层——这样详情抽屉(absolute)不会跟着列表滚动、底部不再割裂。
+    <div className="h-full relative">
+      <div className="h-full overflow-y-auto p-[18px_22px]">
       <div className="flex items-center justify-between mb-4">
         <h1 className="m-0 text-[16px] font-semibold">{t("tasks.title")}</h1>
         <div className="flex items-center gap-2">
@@ -128,6 +140,7 @@ export function Tasks() {
         )}
       </div>
 
+      </div>
       {tasks.detailId && !selectMode ? <Drawer detailId={tasks.detailId} detail={tasks.detail} onClose={() => legacy.closeJob()} /> : null}
     </div>
   );
@@ -294,10 +307,20 @@ function Step({ s }: { s: Subtask }) {
     ) : (
       <span className="w-[18px] h-[18px] rounded-full border-2 border-border shrink-0" />
     );
+  const title = s.title || `${s.provider || ""}.${s.skill || ""}`;
+  const shot = stepShot(s);
   return (
-    <div className={`flex items-center gap-[9px] text-[13px] ${s.status === "pending" ? "text-muted" : "text-text"}`}>
-      {icon}
-      <span className="truncate">{s.title || `${s.provider || ""}.${s.skill || ""}`}</span>
+    <div className="flex flex-col gap-1.5">
+      <div className={`flex items-center gap-[9px] text-[13px] ${s.status === "pending" ? "text-muted" : "text-text"}`}>
+        {icon}
+        <span className="truncate">{title}</span>
+      </div>
+      {shot ? (
+        // 该步「完成后」状态截图：直接内联显示，点击在新标签打开大图（不弹下载框）。
+        <a href={shot} target="_blank" rel="noopener noreferrer" title={title} className="ml-[27px]">
+          <img src={shot} alt={title} className="block max-w-full rounded-lg border border-border" />
+        </a>
+      ) : null}
     </div>
   );
 }
@@ -307,6 +330,7 @@ function Results({ subs }: { subs: Subtask[] }) {
   const items: React.ReactNode[] = [];
   subs.forEach((s, i) => {
     if (!s.result_json) return;
+    if (s.skill === "plan_step") return;  // 计划步骤的截图已在步骤下方内联显示，不再重复列在「生成结果」
     let r: { url?: string; filename?: string; project_dir?: string; path?: string; changed_files?: string[] };
     try {
       r = JSON.parse(s.result_json);
