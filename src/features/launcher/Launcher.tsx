@@ -11,7 +11,7 @@ interface LauncherResult {
 }
 interface LauncherAPI {
   query(q: string): Promise<LauncherResult[]>;
-  run(id: string, mod?: string): Promise<boolean>;
+  run(id: string, mod?: string): Promise<string>;
   hide(): Promise<void>;
   resize(h: number): Promise<void>;
   onShown(cb: () => void): () => void;
@@ -23,9 +23,11 @@ const CSS = `
 *{box-sizing:border-box;}
 html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;color:var(--text);}
 .wrap{height:100vh;padding:10px;}
-.box{background:var(--bg);border:1px solid var(--border);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.28);overflow:hidden;display:flex;flex-direction:column;}
-.search{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border);}
+.box{position:relative;background:var(--bg);border:1px solid var(--border);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.28);overflow:hidden;display:flex;flex-direction:column;}
+.search{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border);-webkit-app-region:drag;}
+.search .q,.search .hint{-webkit-app-region:no-drag;}
 .search .q{flex:1;border:none;outline:none;background:transparent;font-size:22px;color:var(--text);}
+.toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:var(--orange);color:#fff;font-size:12.5px;padding:6px 14px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.25);}
 .search .q::placeholder{color:var(--muted);}
 .hint{color:var(--muted);font-size:12px;white-space:nowrap;}
 .list{overflow-y:auto;padding:6px;max-height:520px;}
@@ -46,6 +48,7 @@ export function Launcher() {
   const [q, setQ] = useState("");
   const [results, setResults] = useState<LauncherResult[]>([]);
   const [sel, setSel] = useState(0);
+  const [toast, setToast] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<number | undefined>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
@@ -91,7 +94,9 @@ export function Launcher() {
   const runAt = useCallback(async (i: number, mod = "") => {
     const r = results[i];
     if (!r) return;
-    await api.run(r.id, mod);
+    const msg = await api.run(r.id, mod);
+    // 有提示文案（复制/脚本/发秘书/记灵感等静默动作）→ 弹 toast 反馈后再关闭；否则窗口已由主进程隐藏。
+    if (msg) { setToast(msg); setTimeout(() => { setToast(""); void api.hide(); }, 850); }
   }, [results]);
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -141,6 +146,7 @@ export function Launcher() {
             ))}
           </div>
         ) : null}
+        {toast ? <div className="toast">{toast}</div> : null}
       </div>
     </div>
   );

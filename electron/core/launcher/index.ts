@@ -91,6 +91,8 @@ export class LauncherManager {
     });
     // floating 层级：压住主窗口即可；不要更高（如 pop-up-menu），否则会盖住系统输入法候选窗。
     win.setAlwaysOnTop(true, "floating");
+    // 在「当前所在的桌面/屏幕」直接显示，不要切换到窗口原来所在的 Space（否则会跳屏）。
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     // 刚弹出瞬间主窗口可能被激活抢走焦点（macOS 激活 app 会带出其它窗口）→ 忽略这段时间的 blur 并夺回焦点。
     win.on("blur", () => {
       if (Date.now() - this.shownAt < 600) { if (!win.isDestroyed()) win.focus(); return; }
@@ -350,61 +352,58 @@ export class LauncherManager {
   }
 
   // mod：''=主动作；'assistant'=发给秘书；'inspiration'=记为灵感。
-  private async runResult(id: string, mod = ""): Promise<boolean> {
+  // 返回：空字符串=已隐藏窗口(无需提示)；非空=提示文案(渲染层弹 toast 后再隐藏)。
+  private async runResult(id: string, mod = ""): Promise<string> {
     const r = this.cache.get(id);
-    if (!r) return false;
+    if (!r) return "";
     this.noteUse(id);  // 学习：这次在该 query 下选了它
+    const clip = async (text: string) => { const { clipboard } = await import("electron"); clipboard.writeText(text); };
 
     if (mod === "assistant") {
       await this.sendToServer("/web/message", { content: this.resultText(r), client_id: "pc-launcher" });
-      await this.hide(true);
-      return true;
+      return "已发给秘书 ✓";
     }
     if (mod === "inspiration") {
       await this.sendToServer("/inspirations", { raw: this.resultText(r) });
-      await this.hide(true);
-      return true;
+      return "已记为灵感 ✓";
     }
 
     const a = r.action;
     if (a.kind === "open_app") {
       await run("open", [String(a.payload.path)]);
       await this.hide(false);
-      return true;
+      return "";
     }
     if (a.kind === "open_path") {
       const p = expandHome(String(a.payload.path));
       const app = String(a.payload.app || "");
       await run("open", app ? ["-a", app, p] : [p]);
       await this.hide(false);
-      return true;
+      return "";
     }
     if (a.kind === "copy") {
-      const { clipboard } = await import("electron");
-      clipboard.writeText(String(a.payload.text || ""));
-      await this.hide(true);
-      return true;
+      await clip(String(a.payload.text || ""));
+      return "已复制 ✓";
     }
     if (a.kind === "run_script") {
       const cmd = String(a.payload.command || "");
       const input = String(a.payload.input || "");
-      await this.hide(true);
       const res = await run("bash", ["-lc", cmd, "umbra", input], { timeoutMs: 20000 });
-      if ((a.payload.output || "copy") === "copy" && res.output) {
-        const { clipboard } = await import("electron");
-        clipboard.writeText(res.output.trim());
-      }
-      return res.code === 0;
+      const out = (res.output || "").trim();
+      if (res.code !== 0) return `脚本出错：${out.slice(0, 40) || "非零退出"}`;
+      if ((a.payload.output || "copy") === "copy" && out) { await clip(out); return `已复制：${out.slice(0, 30)}`; }
+      return "已执行 ✓";
     }
     if (a.kind === "paste_clip") {
       const it = this.clipStore.get(Number(a.payload.id));
-      if (!it) return false;
+      if (!it) return "";
       await writeToClipboard(it);
       await this.hide(true);                       // 隐藏并把焦点还给原应用
       await new Promise((rr) => setTimeout(rr, 180));
-      return await simulatePaste();
+      await simulatePaste();
+      return "";
     }
-    return false;
+    return "";
   }
 
   async setFolders(folders: LauncherFolder[]): Promise<void> {
