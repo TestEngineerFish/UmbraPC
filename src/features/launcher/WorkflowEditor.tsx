@@ -6,7 +6,7 @@ export interface WFNode { id: string; type: string; x: number; y: number; config
 export interface WFConn { from: string; to: string; mod?: string }
 export interface WF { id: string; name: string; icon?: string; desc?: string; enabled: boolean; variables?: Record<string, string>; nodes: WFNode[]; connections: WFConn[] }
 
-interface LauncherAPI { getWorkflows(): Promise<WF[]>; setWorkflows(w: WF[]): Promise<void> }
+interface LauncherAPI { getWorkflows(): Promise<WF[]>; setWorkflows(w: WF[]): Promise<void>; pickPath(): Promise<string>; pickApp(): Promise<string> }
 const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
 
 const NODE_W = 168;
@@ -22,13 +22,15 @@ const CATALOG: { cat: string; items: { type: string; label: string; emoji: strin
   ] },
   { cat: "输入 Inputs", items: [
     { type: "input.scriptfilter", label: "Script Filter", emoji: "🔎" },
+    { type: "input.translate", label: "有道翻译", emoji: "🌐" },
   ] },
   { cat: "动作 Actions", items: [
+    { type: "action.launch", label: "Launch Apps / Files", emoji: "🚀" },
+    { type: "action.openfile", label: "Open File（打开文件/书签）", emoji: "📂" },
+    { type: "action.openurl", label: "打开网址", emoji: "🔗" },
     { type: "action.script", label: "Run Script", emoji: "📜" },
     { type: "action.copy", label: "复制到剪贴板", emoji: "📋" },
     { type: "action.paste", label: "粘贴到前台", emoji: "📥" },
-    { type: "action.openurl", label: "打开网址", emoji: "🔗" },
-    { type: "action.openfile", label: "打开文件", emoji: "📂" },
     { type: "action.assistant", label: "发给秘书", emoji: "💬" },
     { type: "action.inspiration", label: "记为灵感", emoji: "💡" },
   ] },
@@ -50,6 +52,7 @@ function defaultConfig(type: string): Record<string, unknown> {
     case "action.script": return { script: "", cwd: "", output: "none" };
     case "action.openurl": return { url: "{query}" };
     case "action.openfile": return { path: "{query}", app: "" };
+    case "action.launch": return { paths: [], toggleVisibility: false };
     default: return {};
   }
 }
@@ -356,6 +359,8 @@ function nodeSummary(n: WFNode): string {
     case "action.script": return c.script ? c.script.slice(0, 40) : "未设脚本";
     case "action.openurl": return String(c.url || "{query}");
     case "action.openfile": return String(c.path || "{query}");
+    case "action.launch": { const p = (n.config.paths as string[]) || []; return p.length ? `${p.length} 个 App/文件` : "未选择 App/文件"; }
+    case "input.translate": return "有道翻译（密钥在工作流变量）";
     default: return TYPE_META[n.type]?.label || n.type;
   }
 }
@@ -425,11 +430,27 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
             <div><span className={lab}>网址（{"{query}"}=arg）</span><input className={`${inp} font-mono`} value={String(c.url || "")} onChange={(e) => set("url", e.target.value)} placeholder="https://example.com/?q={query}" /></div>
           ) : null}
           {node.type === "action.openfile" ? (<>
-            <div><span className={lab}>路径（{"{query}"}=arg，支持 ~）</span><input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} /></div>
-            <div><span className={lab}>用哪个应用打开（可选）</span><input className={inp} value={String(c.app || "")} onChange={(e) => set("app", e.target.value)} placeholder="Visual Studio Code" /></div>
+            <div className="text-[11.5px] text-muted">打开上游传入的文件/文件夹；下方可设固定路径（文件夹书签）与用哪个应用打开。</div>
+            <div className="flex gap-1.5"><input className={`flex-1 ${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query} 或固定路径（支持 ~）" />
+              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const p = await api.pickPath(); if (p) set("path", p); }}>选择</button></div>
+            <div className="flex gap-1.5"><input className={`flex-1 ${inp}`} value={String(c.app || "")} onChange={(e) => set("app", e.target.value)} placeholder="用哪个应用打开（可选）" />
+              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const a = await api.pickApp(); if (a) set("app", a); }}>选择 App</button></div>
           </>) : null}
+          {node.type === "action.launch" ? (<>
+            <span className={lab}>要启动的 App / 文件（每行一个，支持 ~）</span>
+            <textarea className={`${inp} font-mono h-[110px] resize-y`} value={((c.paths as string[]) || []).join("\n")}
+              onChange={(e) => set("paths", e.target.value.split("\n").map((s) => s.trim()).filter(Boolean))} placeholder={"/Applications/Safari.app\n~/Documents/todo.md"} />
+            <div className="flex gap-1.5">
+              <button className="px-[10px] py-[6px] border border-border rounded-lg text-[12px]" onClick={async () => { const a = await api.pickApp(); if (a) set("paths", [...((c.paths as string[]) || []), `/Applications/${a}.app`]); }}>＋ 选 App</button>
+              <button className="px-[10px] py-[6px] border border-border rounded-lg text-[12px]" onClick={async () => { const p = await api.pickPath(); if (p) set("paths", [...((c.paths as string[]) || []), p]); }}>＋ 选文件</button>
+            </div>
+            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.toggleVisibility} onChange={(e) => set("toggleVisibility", e.target.checked)} />切换可见性：若某 App 已在前台则隐藏它</label>
+          </>) : null}
+          {node.type === "input.translate" ? (
+            <div className="text-[12px] text-muted">有道翻译：输入词句返回译文/释义（回车复制）。密钥在顶栏「变量」里填 <code>youdaoAppKey</code> / <code>youdaoSecret</code>。</div>
+          ) : null}
           {["action.copy", "action.paste", "action.assistant", "action.inspiration", "output.notify", "output.largetype"].includes(node.type) ? (
-            <div className="text-[12px] text-muted">此动作无需额外配置，直接使用上游传入的内容（arg）。</div>
+            <div className="text-[12px] text-muted">{node.type === "output.largetype" ? "大字显示：把上游内容放大居中显示在半透明浮层里。" : "此动作无需额外配置，直接使用上游传入的内容（arg）。"}</div>
           ) : null}
         </div>
         <div className="flex justify-end gap-2 mt-5">

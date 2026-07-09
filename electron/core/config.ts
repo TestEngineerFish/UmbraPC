@@ -29,6 +29,7 @@ export interface UmbraConfig {
   // ── 剪贴板历史 ──
   clipboardEnabled: boolean;     // 后台监听剪贴板开关
   clipboardShortcut: string;     // 唤起面板的全局快捷键（Electron Accelerator）
+  clipboardAutoPaste: boolean;   // 选中历史后自动粘贴到前台应用（默认关，只复制）
   // ── 截图 ──
   screenshotEnabled: boolean;    // 截图功能开关（关则不注册快捷键）
   screenshotShortcut: string;    // 截图全局快捷键
@@ -40,6 +41,7 @@ export interface UmbraConfig {
   launcherScripts: LauncherScript[]; // 自定义脚本（旧；加载时迁移为工作流）
   launcherWorkflows: Workflow[];     // 工作流编排（类 Alfred Workflow）
   launcherScriptsMigrated?: boolean; // 迁移标记：launcherScripts 已转成工作流（幂等）
+  launcherMigratedV2?: boolean;      // 迁移标记 V2：文件夹书签 + 有道 已转成工作流
   youdaoAppKey: string;          // 有道翻译 appKey（Phase 2 用）
   youdaoSecret: string;          // 有道翻译 secret（Phase 2 用）
   locale?: string;               // 界面语言（zh-CN | en）；缺省时由主进程按系统语言初始化
@@ -134,6 +136,7 @@ function defaults(configDir: string): UmbraConfig {
     disabledProviders: [],
     clipboardEnabled: envBool("UMBRA_CLIPBOARD_ENABLED", true),
     clipboardShortcut: process.env.UMBRA_CLIPBOARD_SHORTCUT || "Command+Shift+V",
+    clipboardAutoPaste: envBool("UMBRA_CLIPBOARD_AUTOPASTE", false),
     screenshotEnabled: envBool("UMBRA_SCREENSHOT_ENABLED", true),
     screenshotShortcut: process.env.UMBRA_SCREENSHOT_SHORTCUT || "Command+Control+A",
     glmApiKey: process.env.UMBRA_GLM_API_KEY || "",

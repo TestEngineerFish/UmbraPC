@@ -114,6 +114,8 @@
     "clipHistoryKept": "Off (history kept)",
     "clipShortcut": "Panel shortcut",
     "pressShortcut": "Press shortcut… (Esc to cancel)",
+    "clipAutoPaste": "Auto-paste",
+    "clipAutoPasteDesc": "Auto-paste into the front app after picking an item (off = copy only, paste with ⌘V)",
     "clipClear": "Clear history",
     "clipClearDesc": "Delete all non-favorite entries (favorites kept)",
     "clipClearBtn": "Clear",

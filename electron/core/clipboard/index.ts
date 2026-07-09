@@ -165,6 +165,8 @@ export class ClipboardManager {
       this.store.touch(id);
       this.broadcast("clipboard:history:changed");
       await this.hidePanel(true); // 隐藏面板并把焦点还给原应用
+      // 自动粘贴开关（默认关）：关时只复制，用户自行 Cmd+V。
+      if (!this.cfg.get().clipboardAutoPaste) return false;
       await new Promise((r) => setTimeout(r, 180)); // 等焦点切换完成
       return await simulatePaste();
     });
@@ -210,8 +212,9 @@ export class ClipboardManager {
     });
 
     // 设置页
-    ipcMain.handle("clip:getSettings", () => ({ enabled: this.cfg.get().clipboardEnabled, shortcut: this.cfg.get().clipboardShortcut }));
+    ipcMain.handle("clip:getSettings", () => ({ enabled: this.cfg.get().clipboardEnabled, shortcut: this.cfg.get().clipboardShortcut, autoPaste: this.cfg.get().clipboardAutoPaste }));
     ipcMain.handle("clip:setEnabled", (_e, enabled: boolean) => this.setEnabled(!!enabled));
     ipcMain.handle("clip:setShortcut", (_e, acc: string) => this.setShortcut(acc));
+    ipcMain.handle("clip:setAutoPaste", (_e, on: boolean) => this.cfg.save({ clipboardAutoPaste: !!on }));
   }
 }

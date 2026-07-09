@@ -20,6 +20,7 @@ export default defineConfig({
         sticker: "sticker.html",
         launcher: "launcher.html",
         workflow: "workflow.html",
+        largetype: "largetype.html",
       },
     },
   },

@@ -78,6 +78,7 @@ contextBridge.exposeInMainWorld("umbraClip", {
   getSettings: () => ipcRenderer.invoke("clip:getSettings"),
   setEnabled: (enabled: boolean) => ipcRenderer.invoke("clip:setEnabled", enabled),
   setShortcut: (acc: string) => ipcRenderer.invoke("clip:setShortcut", acc),
+  setAutoPaste: (on: boolean) => ipcRenderer.invoke("clip:setAutoPaste", on),
   onHistoryChanged: (cb: () => void) => {
     const l = () => cb();
     ipcRenderer.on("clipboard:history:changed", l);
@@ -112,6 +113,17 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
     const l = () => cb();
     ipcRenderer.on("launcher:shown", l);
     return () => ipcRenderer.removeListener("launcher:shown", l);
+  },
+});
+
+// 大字显示浮层桥。
+contextBridge.exposeInMainWorld("umbraLarge", {
+  ready: () => ipcRenderer.invoke("largetype:ready"),
+  close: () => ipcRenderer.invoke("largetype:close"),
+  onText: (cb: (text: string) => void) => {
+    const l = (_e: unknown, text: string) => cb(text);
+    ipcRenderer.on("largetype:text", l);
+    return () => ipcRenderer.removeListener("largetype:text", l);
   },
 });
 

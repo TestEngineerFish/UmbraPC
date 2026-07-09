@@ -56,11 +56,16 @@ export function Settings() {
   const [token, setToken] = useState("");
   const [device, setDevice] = useState(getDeviceName());
   const [glmKey, setGlmKey] = useState("");
+  const [clipAutoPaste, setClipAutoPaste] = useState(false);
   const [allowDeviceSend, setAllowDeviceSendState] = useState(getAllowDeviceSend());
   const [autoApprove, setAutoApproveState] = useState(getAutoApproveOperate());
   const [skillPolicy, setSkillPolicy] = useState<Record<string, "allow" | "deny">>(
     desktop.getDesktopConfig()?.computerSkillPolicy || {},
   );
+  useEffect(() => {
+    if (!hasClip) return;
+    void (window as unknown as { umbraClip?: { getSettings(): Promise<{ autoPaste?: boolean }> } }).umbraClip?.getSettings().then((s) => setClipAutoPaste(!!s.autoPaste));
+  }, []);
 
   const isDesk = desktop.isDesktop();
   const cs = chatConn.status as "online" | "connecting" | "offline";
@@ -265,6 +270,10 @@ export function Settings() {
                 {t("common.reset")}
               </button>
             </Row>
+            <Row label={t("settings.clipAutoPaste")}>
+              <span className="flex-1 text-[12px] text-muted">{t("settings.clipAutoPasteDesc")}</span>
+              <Toggle on={clipAutoPaste} onClick={() => { const n = !clipAutoPaste; setClipAutoPaste(n); void (window as unknown as { umbraClip: { setAutoPaste(on: boolean): Promise<unknown> } }).umbraClip.setAutoPaste(n); }} />
+            </Row>
             <Row label={t("settings.clipClear")}>
               <span className="flex-1 text-[12px] text-muted">{t("settings.clipClearDesc")}</span>
               <button className="px-[13px] py-[6px] border border-danger text-danger bg-transparent rounded-lg text-[12.5px]" onClick={() => legacy.clearClipHistory()}>
@@ -350,28 +359,15 @@ function LauncherCard() {
   const [enabled, setEnabled] = useState(true);
   const [shortcut, setShortcut] = useState("Alt+Space");
   const [recording, setRecording] = useState(false);
-  const [folders, setFolders] = useState<LauncherFolder[]>([]);
-  const [draft, setDraft] = useState<LauncherFolder>({ name: "", path: "", app: "" });
-  const [ydKey, setYdKey] = useState("");
-  const [ydSecret, setYdSecret] = useState("");
-  const [ydSet, setYdSet] = useState(false);
   const [wfCount, setWfCount] = useState(0);
 
   useEffect(() => {
-    void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); setFolders(s.folders || []); setYdSet(s.youdaoConfigured); });
+    void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); });
     const refreshWf = () => void api.getWorkflows().then((w) => setWfCount(w.length));
     refreshWf();
     window.addEventListener("focus", refreshWf);  // 从编辑器窗口切回时刷新计数
     return () => window.removeEventListener("focus", refreshWf);
   }, []);
-
-  // 拖拽文件夹/文件/App 进来即添加为书签。
-  const onDropFolders = (e: React.DragEvent) => {
-    e.preventDefault();
-    const dropped = Array.from(e.dataTransfer.files) as unknown as { path: string }[];
-    const adds = dropped.map((f) => f.path).filter(Boolean).map((p) => ({ name: p.split("/").pop() || p, path: p, app: p.endsWith(".app") ? "" : "" }));
-    if (adds.length) saveFolders([...folders, ...adds]);
-  };
 
   // 录制快捷键：按下组合键即保存；Esc 取消。
   useEffect(() => {
@@ -387,18 +383,6 @@ function LauncherCard() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [recording]);
 
-  const saveFolders = (list: LauncherFolder[]) => { setFolders(list); void api.setFolders(list); };
-  const addFolder = () => {
-    if (!draft.path.trim()) return;
-    saveFolders([...folders, { name: draft.name.trim() || draft.path.split("/").pop() || draft.path.trim(), path: draft.path.trim(), app: draft.app?.trim() || "" }]);
-    setDraft({ name: "", path: "", app: "" });
-  };
-  const pickPath = async () => { const p = await api.pickPath(); if (p) setDraft((d) => ({ ...d, path: p, name: d.name || (p.split("/").pop() || "") })); };
-  const pickApp = async () => { const a = await api.pickApp(); if (a) setDraft((d) => ({ ...d, app: a })); };
-
-  const inputCls = "border border-border rounded-lg px-[10px] py-[6px] text-[12.5px] bg-bg text-text";
-  // 选择按钮嵌在输入框右侧内部，避免和相邻输入框混淆。
-  const pickBtn = "absolute right-[4px] top-1/2 -translate-y-1/2 px-[8px] py-[3px] border border-border bg-card text-text rounded-md text-[11.5px] whitespace-nowrap";
   return (
     <Card title={t("settings.launcher")}>
       <Row label={t("settings.launcherEnable")}>
@@ -416,48 +400,13 @@ function LauncherCard() {
           {t("common.reset")}
         </button>
       </Row>
-      <div className="pt-2" onDragOver={(e) => e.preventDefault()} onDrop={onDropFolders}>
-        <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherFolders")} <span className="text-[11px] text-muted font-normal">· {t("settings.launcherDropHint")}</span></div>
-        <div className="flex flex-col gap-1.5 mb-2">
-          {folders.length ? folders.map((f, i) => (
-            <div key={i} className="flex items-center gap-2 text-[12.5px] bg-bg border border-border rounded-lg px-[10px] py-[7px]">
-              <span className="font-medium">{f.name}</span>
-              <span className="text-muted truncate flex-1">{(f.app ? `↳ ${f.app} · ` : "") + f.path}</span>
-              <button className="text-danger text-[12px]" onClick={() => saveFolders(folders.filter((_, j) => j !== i))}>{t("common.delete")}</button>
-            </div>
-          )) : <div className="text-[12px] text-muted">{t("settings.launcherFoldersEmpty")}</div>}
-        </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder={t("settings.launcherFolderName")} className={`w-[110px] ${inputCls}`} />
-          <div className="relative flex-1 min-w-[190px]">
-            <input value={draft.path} onChange={(e) => setDraft({ ...draft, path: e.target.value })} placeholder={t("settings.launcherFolderPath")} className={`w-full pr-[54px] ${inputCls} font-mono`} />
-            <button className={pickBtn} onClick={pickPath}>{t("settings.launcherChoose")}</button>
-          </div>
-          <div className="relative w-[170px]">
-            <input value={draft.app} onChange={(e) => setDraft({ ...draft, app: e.target.value })} placeholder={t("settings.launcherFolderApp")} className={`w-full pr-[54px] ${inputCls}`} />
-            <button className={pickBtn} onClick={pickApp}>{t("settings.launcherChoose")}</button>
-          </div>
-          <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={addFolder}>{t("common.add")}</button>
-        </div>
-      </div>
-      <div className="pt-3 mt-1 border-t border-border">
+      <div className="pt-2">
         <div className="flex items-center gap-2 mb-1.5">
           <div className="text-[12.5px] font-semibold flex-1">{t("settings.launcherWorkflows")}</div>
           <span className="text-[11.5px] text-muted">{t("settings.launcherWorkflowsCount", { count: wfCount })}</span>
           <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => void api.openWorkflowEditor()}>{t("settings.launcherWorkflowsOpen")}</button>
         </div>
         <div className="text-[11px] text-muted">{t("settings.launcherWorkflowsHint")}</div>
-      </div>
-      <div className="pt-3 mt-1 border-t border-border">
-        <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherYoudao")}</div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <input value={ydKey} onChange={(e) => setYdKey(e.target.value)} placeholder={ydSet ? t("settings.launcherYoudaoSet") : "appKey"} className={`w-[180px] ${inputCls} font-mono`} />
-          <input type="password" value={ydSecret} onChange={(e) => setYdSecret(e.target.value)} placeholder="secret" className={`flex-1 min-w-[160px] ${inputCls} font-mono`} />
-          <button className="px-[12px] py-[6px] border border-border bg-card text-text rounded-lg text-[12.5px]" onClick={async () => { await api.setYoudao(ydKey.trim(), ydSecret.trim()); setYdSet(!!(ydKey.trim() && ydSecret.trim())); setYdKey(""); setYdSecret(""); }}>
-            {t("common.save")}
-          </button>
-        </div>
-        <div className="text-[11.5px] text-muted mt-1.5">{t("settings.launcherYoudaoHint")}</div>
       </div>
     </Card>
   );

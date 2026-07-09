@@ -114,6 +114,8 @@
     "clipHistoryKept": "已关闭（历史保留）",
     "clipShortcut": "面板快捷键",
     "pressShortcut": "按下快捷键…（Esc 取消）",
+    "clipAutoPaste": "自动粘贴",
+    "clipAutoPasteDesc": "选中历史后自动粘贴到前台应用（关闭时只复制，自行 ⌘V）",
     "clipClear": "清空历史",
     "clipClearDesc": "删除全部非收藏条目（收藏保留）",
     "clipClearBtn": "清空",
