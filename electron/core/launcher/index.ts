@@ -34,6 +34,7 @@ const MAX_RESULTS = 12;
 export class LauncherManager {
   private panel: Electron.BrowserWindow | null = null;
   private appWasActive = false;
+  private shownAt = 0;  // 唤起时刻：刚弹出瞬间的失焦（主窗口被激活抢焦）要忽略，避免立刻收起/来回切换
   private cache = new Map<string, LauncherResult>();  // 本次查询结果，供 run 回查
 
   constructor(private cfg: ConfigStore, private clipStore: ClipStore, private opts: ManagerOpts, private reregister: () => void) {}
@@ -49,7 +50,7 @@ export class LauncherManager {
     const { BrowserWindow } = await import("electron");
     const win = new BrowserWindow({
       width: 720,
-      height: 460,
+      height: 96,            // 初始只放搜索框；有结果后由渲染层上报高度动态放大（launcher:resize）
       frame: false,
       transparent: true,
       resizable: false,
@@ -57,11 +58,16 @@ export class LauncherManager {
       skipTaskbar: true,
       show: false,
       fullscreenable: false,
+      hasShadow: false,      // 阴影交给内部卡片画，避免透明窗留一圈方角暗影
       backgroundColor: "#00000000",
       webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
     });
-    win.setAlwaysOnTop(true, "floating");
-    win.on("blur", () => this.hide(false));
+    win.setAlwaysOnTop(true, "pop-up-menu");  // 高层级：主窗口被激活也压在它下面
+    // 刚弹出瞬间主窗口可能被激活抢走焦点（macOS 激活 app 会带出其它窗口）→ 忽略这段时间的 blur 并夺回焦点。
+    win.on("blur", () => {
+      if (Date.now() - this.shownAt < 600) { if (!win.isDestroyed()) win.focus(); return; }
+      this.hide(false);
+    });
     win.webContents.on("before-input-event", (_e, input) => {
       if (input.type === "keyDown" && input.key === "Escape") this.hide(true);
     });
@@ -87,6 +93,7 @@ export class LauncherManager {
       const [w] = win.getSize();
       win.setPosition(Math.round(wa.x + (wa.width - w) / 2), Math.round(wa.y + wa.height * 0.22));
     } catch { win.center(); }
+    this.shownAt = Date.now();
     win.show();
     win.focus();
     win.webContents.send("launcher:shown");
@@ -241,6 +248,29 @@ export class LauncherManager {
     ipcMain.handle("launcher:query", (_e, q: string) => this.query(q));
     ipcMain.handle("launcher:run", (_e, id: string) => this.runResult(id));
     ipcMain.handle("launcher:hide", () => this.hide(true));
+    // 渲染层上报内容高度 → 窗口贴合内容（顶部锚点不变），消除空白/暗框。
+    ipcMain.handle("launcher:resize", (_e, h: number) => {
+      if (!this.panel || this.panel.isDestroyed()) return;
+      const [w] = this.panel.getSize();
+      const height = Math.max(96, Math.min(Math.round(Number(h) || 96), 720));
+      this.panel.setSize(w, height);
+    });
+    // 选择文件夹/文件（书签路径可为文件夹或具体文件）。
+    ipcMain.handle("launcher:pickPath", async () => {
+      const { dialog } = await import("electron");
+      const r = await dialog.showOpenDialog({ properties: ["openFile", "openDirectory"] });
+      return r.canceled ? "" : (r.filePaths[0] || "");
+    });
+    // 选择用于打开的应用（返回应用名，供 open -a 使用）。
+    ipcMain.handle("launcher:pickApp", async () => {
+      const { dialog } = await import("electron");
+      const r = await dialog.showOpenDialog({
+        properties: ["openFile"], defaultPath: "/Applications",
+        filters: [{ name: "Application", extensions: ["app"] }],
+      });
+      if (r.canceled || !r.filePaths[0]) return "";
+      return path.basename(r.filePaths[0]).replace(/\.app$/i, "");
+    });
     ipcMain.handle("launcher:getSettings", () => {
       const c = this.cfg.get();
       return {

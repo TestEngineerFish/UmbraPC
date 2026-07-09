@@ -135,8 +135,9 @@
     "launcherFolders": "Folder bookmarks (open a folder with a chosen app)",
     "launcherFoldersEmpty": "No folder bookmarks yet",
     "launcherFolderName": "Name",
-    "launcherFolderPath": "Folder path",
-    "launcherFolderApp": "Open with (optional)"
+    "launcherFolderPath": "Folder or file path",
+    "launcherFolderApp": "Open with app (optional)",
+    "launcherChoose": "Choose"
   },
   "logs": {
     "title": "Logs",

@@ -135,8 +135,9 @@
     "launcherFolders": "文件夹书签（用指定软件打开固定文件夹）",
     "launcherFoldersEmpty": "还没有文件夹书签",
     "launcherFolderName": "名称",
-    "launcherFolderPath": "文件夹路径",
-    "launcherFolderApp": "用哪个软件（可空）"
+    "launcherFolderPath": "文件夹或文件路径",
+    "launcherFolderApp": "用哪个软件打开（可空）",
+    "launcherChoose": "选择"
   },
   "logs": {
     "title": "日志",

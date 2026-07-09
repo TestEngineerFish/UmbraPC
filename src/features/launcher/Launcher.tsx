@@ -13,6 +13,7 @@ interface LauncherAPI {
   query(q: string): Promise<LauncherResult[]>;
   run(id: string): Promise<boolean>;
   hide(): Promise<void>;
+  resize(h: number): Promise<void>;
   onShown(cb: () => void): () => void;
 }
 const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
@@ -22,12 +23,13 @@ const CSS = `
 *{box-sizing:border-box;}
 html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;color:var(--text);}
 .wrap{height:100vh;padding:10px;}
-.box{background:var(--bg);border:1px solid var(--border);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.28);overflow:hidden;display:flex;flex-direction:column;max-height:calc(100vh - 20px);}
+.box{background:var(--bg);border:1px solid var(--border);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.28);overflow:hidden;display:flex;flex-direction:column;}
 .search{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border);}
 .search .q{flex:1;border:none;outline:none;background:transparent;font-size:22px;color:var(--text);}
 .search .q::placeholder{color:var(--muted);}
 .hint{color:var(--muted);font-size:12px;white-space:nowrap;}
-.list{overflow-y:auto;padding:6px;}
+.list{overflow-y:auto;padding:6px;max-height:520px;}
+.list:empty{display:none;}
 .row{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:10px;cursor:pointer;}
 .row.sel{background:var(--sel);}
 .ico{width:30px;height:30px;flex:none;display:flex;align-items:center;justify-content:center;font-size:20px;border-radius:7px;overflow:hidden;background:#0000000a;}
@@ -47,6 +49,7 @@ export function Launcher() {
   const inputRef = useRef<HTMLInputElement>(null);
   const timer = useRef<number | undefined>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
 
   // 唤起时：清空、聚焦。
   useEffect(() => {
@@ -75,6 +78,16 @@ export function Launcher() {
     el?.scrollIntoView({ block: "nearest" });
   }, [sel]);
 
+  // 窗口贴合内容高度：搜索框 + 列表内容（+ 内边距），消除空白/暗框。
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      const sh = searchRef.current?.offsetHeight ?? 58;
+      const lh = results.length ? (listRef.current?.scrollHeight ?? 0) : 0;
+      void api.resize(Math.ceil(sh + lh + 22)); // 22 = wrap 上下 padding(20) + 边框(2)
+    });
+    return () => cancelAnimationFrame(id);
+  }, [results]);
+
   const runAt = useCallback(async (i: number) => {
     const r = results[i];
     if (!r) return;
@@ -82,6 +95,8 @@ export function Launcher() {
   }, [results]);
 
   const onKey = (e: React.KeyboardEvent) => {
+    // 输入法组词中（拼音待选未确认）：回车/方向键只用于确认候选，不触发执行/导航。
+    if ((e.nativeEvent as unknown as { isComposing?: boolean }).isComposing || e.keyCode === 229) return;
     if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, Math.max(0, results.length - 1))); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
     else if (e.key === "Enter") { e.preventDefault(); void runAt(sel); }
@@ -93,7 +108,7 @@ export function Launcher() {
     <div className="wrap">
       <style>{CSS}</style>
       <div className="box">
-        <div className="search">
+        <div className="search" ref={searchRef}>
           <span style={{ fontSize: 20 }}>🔍</span>
           <input
             ref={inputRef}
@@ -106,9 +121,9 @@ export function Launcher() {
           />
           <span className="hint">↑↓ 选择 · ↵ 打开 · esc 关闭</span>
         </div>
-        <div className="list" ref={listRef}>
-          {results.length ? (
-            results.map((r, i) => (
+        {results.length ? (
+          <div className="list" ref={listRef}>
+            {results.map((r, i) => (
               <div key={r.id} className={`row ${i === sel ? "sel" : ""}`} onMouseMove={() => setSel(i)} onClick={() => runAt(i)}>
                 <span className="ico">
                   {r.icon && r.icon.startsWith("data:") ? <img src={r.icon} alt="" /> : <span>{r.icon || "•"}</span>}
@@ -119,11 +134,9 @@ export function Launcher() {
                 </div>
                 {i < 9 ? <span className="num">⌘{i + 1}</span> : null}
               </div>
-            ))
-          ) : (
-            <div className="empty">{q ? "没有匹配结果" : "输入以搜索应用 / 文件夹书签 / 剪贴板历史"}</div>
-          )}
-        </div>
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );
