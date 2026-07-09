@@ -12,12 +12,13 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     rollupOptions: {
-      // 三个渲染入口：主窗口 + 剪贴板面板 + 截图窗口
+      // 渲染入口：主窗口 + 剪贴板面板 + 截图窗口 + 贴图 + 快捷入口
       input: {
         main: "index.html",
         panel: "clipboard-panel.html",
         screenshot: "screenshot.html",
         sticker: "sticker.html",
+        launcher: "launcher.html",
       },
     },
   },

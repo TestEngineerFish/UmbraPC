@@ -11,6 +11,7 @@ import { requestStop } from "./core/computer";
 import { initRpc } from "./core/shared/rpc";
 import { ClipboardManager } from "./core/clipboard";
 import { ScreenshotManager } from "./core/screenshot";
+import { LauncherManager } from "./core/launcher";
 import { getMainLocale, resolveLocale, setMainLocale } from "./i18n";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
@@ -44,6 +45,7 @@ let store: ConfigStore;
 let executor: TaskExecutor;
 let clipboard: ClipboardManager;
 let screenshot: ScreenshotManager;
+let launcher: LauncherManager;
 let mainWindow: BrowserWindow | null = null; // 显式跟踪主窗口：剪贴板/截图的隐藏窗口会让 getAllWindows() 恒 >0，不能靠它判断
 let tray: Tray | null = null;
 let quitting = false; // true 时才真正退出（关窗默认只隐藏）
@@ -53,6 +55,7 @@ function reregisterShortcuts(): void {
   globalShortcut.unregisterAll();
   clipboard?.registerShortcut();
   screenshot?.registerShortcut();
+  launcher?.registerShortcut();
 }
 
 // 打包后的 .app 只有极简 PATH（看不到 homebrew/nvm/npm 全局），导致 which(claude/codex/ffmpeg) 找不到。
@@ -299,9 +302,11 @@ app.whenReady().then(async () => {
   };
   clipboard = new ClipboardManager(store, app.getPath("userData"), winOpts, reregisterShortcuts);
   screenshot = new ScreenshotManager(store, winOpts, reregisterShortcuts);
-  Promise.all([clipboard.init(), screenshot.init()])
-    .then(() => reregisterShortcuts()) // 两者就绪后统一注册各自快捷键
-    .catch((e) => console.error("剪贴板/截图初始化失败", e));
+  // 快捷入口：复用剪贴板的存储实例（避免两份读写同一文件）。
+  launcher = new LauncherManager(store, clipboard.getStore(), winOpts, reregisterShortcuts);
+  Promise.all([clipboard.init(), screenshot.init(), launcher.init()])
+    .then(() => reregisterShortcuts()) // 就绪后统一注册各自快捷键
+    .catch((e) => console.error("剪贴板/截图/快捷入口初始化失败", e));
 
   // 点 Dock 图标：唤起主窗口（不能靠 getAllWindows().length===0 判断，
   // 剪贴板/截图的隐藏窗口会让它恒 >0）。

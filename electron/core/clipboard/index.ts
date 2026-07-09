@@ -36,6 +36,11 @@ export class ClipboardManager {
     // 全局快捷键由 main.ts 统一注册（与截图共用 globalShortcut）。
   }
 
+  // 共享剪贴板存储给快捷入口 Launcher（同一实例，避免两份读写同一文件冲突）。
+  getStore(): ClipStore {
+    return this.store;
+  }
+
   // ── 面板窗口 ──
   private async ensurePanel(): Promise<Electron.BrowserWindow> {
     if (this.panel && !this.panel.isDestroyed()) return this.panel;

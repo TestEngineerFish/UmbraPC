@@ -84,6 +84,22 @@ contextBridge.exposeInMainWorld("umbraClip", {
   },
 });
 
+// 快捷入口桥（浮层搜索窗渲染层用）。
+contextBridge.exposeInMainWorld("umbraLauncher", {
+  query: (q: string) => ipcRenderer.invoke("launcher:query", q),
+  run: (id: string) => ipcRenderer.invoke("launcher:run", id),
+  hide: () => ipcRenderer.invoke("launcher:hide"),
+  getSettings: () => ipcRenderer.invoke("launcher:getSettings"),
+  setEnabled: (enabled: boolean) => ipcRenderer.invoke("launcher:setEnabled", enabled),
+  setShortcut: (acc: string) => ipcRenderer.invoke("launcher:setShortcut", acc),
+  setFolders: (folders: unknown) => ipcRenderer.invoke("launcher:setFolders", folders),
+  onShown: (cb: () => void) => {
+    const l = () => cb();
+    ipcRenderer.on("launcher:shown", l);
+    return () => ipcRenderer.removeListener("launcher:shown", l);
+  },
+});
+
 // 截图桥（覆盖窗渲染层与设置页共用）。
 contextBridge.exposeInMainWorld("umbraShot", {
   getCapture: () => ipcRenderer.invoke("screenshot:getCapture"),

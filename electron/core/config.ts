@@ -33,7 +33,20 @@ export interface UmbraConfig {
   screenshotEnabled: boolean;    // 截图功能开关（关则不注册快捷键）
   screenshotShortcut: string;    // 截图全局快捷键
   glmApiKey: string;             // 智谱 GLM API Key（截图翻译直连用；不硬编码，走 env/设置）
+  // ── 快捷入口 Launcher（类 Alfred）──
+  launcherEnabled: boolean;      // 总开关（关则不注册快捷键、不可唤起）
+  launcherShortcut: string;      // 唤起快捷键（Electron Accelerator，默认 ⌥Space = "Alt+Space"）
+  launcherFolders: LauncherFolder[]; // 文件夹书签：用指定软件打开固定文件夹
+  youdaoAppKey: string;          // 有道翻译 appKey（Phase 2 用）
+  youdaoSecret: string;          // 有道翻译 secret（Phase 2 用）
   locale?: string;               // 界面语言（zh-CN | en）；缺省时由主进程按系统语言初始化
+}
+
+// 文件夹书签：在快捷入口里用 app（缺省则系统默认）打开 path。
+export interface LauncherFolder {
+  name: string;   // 显示名
+  path: string;   // 绝对路径（支持 ~）
+  app?: string;   // 用哪个应用打开（如 "Visual Studio Code"、"Finder"）；空=系统默认
 }
 
 const envBool = (k: string, d: boolean) => {
@@ -80,6 +93,11 @@ function defaults(configDir: string): UmbraConfig {
     screenshotEnabled: envBool("UMBRA_SCREENSHOT_ENABLED", true),
     screenshotShortcut: process.env.UMBRA_SCREENSHOT_SHORTCUT || "CommandOrControl+Alt+A",
     glmApiKey: process.env.UMBRA_GLM_API_KEY || "",
+    launcherEnabled: envBool("UMBRA_LAUNCHER_ENABLED", true),
+    launcherShortcut: process.env.UMBRA_LAUNCHER_SHORTCUT || "Alt+Space",
+    launcherFolders: [],
+    youdaoAppKey: process.env.UMBRA_YOUDAO_APPKEY || "",
+    youdaoSecret: process.env.UMBRA_YOUDAO_SECRET || "",
   };
 }
 

@@ -1,6 +1,6 @@
 // 设置页（React + Tailwind）。受控输入，不再整页重建 → 根治失焦 / 滚动跳顶。
 // 业务逻辑复用 server.ts / desktop.ts 与 main.ts 导出的处理器。
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { chatConn, getServerUrl, getDeviceName, getAllowDeviceSend, setAllowDeviceSend, getAutoApproveOperate, setAutoApproveOperate } from "../../services/server";
 import * as desktop from "../../services/desktop";
@@ -10,6 +10,7 @@ import { changeLocale } from "../../i18n";
 
 const hasClip = typeof (window as unknown as { umbraClip?: unknown }).umbraClip !== "undefined";
 const hasShot = typeof (window as unknown as { umbraShot?: unknown }).umbraShot !== "undefined";
+const hasLauncher = typeof (window as unknown as { umbraLauncher?: unknown }).umbraLauncher !== "undefined";
 
 function Card({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
   return (
@@ -289,6 +290,8 @@ export function Settings() {
           </Card>
         ) : null}
 
+        {hasLauncher ? <LauncherCard /> : null}
+
         <section className="bg-card border border-border rounded-xl p-[16px_18px] flex items-center gap-[14px]">
           <div className="flex-1">
             <div className="font-semibold">{t("settings.about")}</div>
@@ -298,6 +301,66 @@ export function Settings() {
         </section>
       </div>
     </div>
+  );
+}
+
+// 快捷入口（Launcher）设置：开关 + 唤起快捷键 + 文件夹书签（用指定软件打开固定文件夹）。自足，直连 IPC。
+interface LauncherFolder { name: string; path: string; app?: string }
+interface LauncherAPI {
+  getSettings(): Promise<{ enabled: boolean; shortcut: string; folders: LauncherFolder[]; registered: boolean }>;
+  setEnabled(enabled: boolean): Promise<void>;
+  setShortcut(acc: string): Promise<{ ok: boolean }>;
+  setFolders(folders: LauncherFolder[]): Promise<void>;
+}
+function LauncherCard() {
+  const { t } = useTranslation();
+  const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
+  const [enabled, setEnabled] = useState(true);
+  const [shortcut, setShortcut] = useState("Alt+Space");
+  const [folders, setFolders] = useState<LauncherFolder[]>([]);
+  const [draft, setDraft] = useState<LauncherFolder>({ name: "", path: "", app: "" });
+
+  useEffect(() => { void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); setFolders(s.folders || []); }); }, []);
+
+  const saveFolders = (list: LauncherFolder[]) => { setFolders(list); void api.setFolders(list); };
+  const addFolder = () => {
+    if (!draft.path.trim()) return;
+    saveFolders([...folders, { name: draft.name.trim() || draft.path.trim(), path: draft.path.trim(), app: draft.app?.trim() || "" }]);
+    setDraft({ name: "", path: "", app: "" });
+  };
+
+  const inputCls = "border border-border rounded-lg px-[10px] py-[6px] text-[12.5px] bg-bg text-text";
+  return (
+    <Card title={t("settings.launcher")}>
+      <Row label={t("settings.launcherEnable")}>
+        <span className="flex-1 text-[12px] text-muted">{t("settings.launcherEnableDesc")}</span>
+        <Toggle on={enabled} onClick={() => { const n = !enabled; setEnabled(n); void api.setEnabled(n); }} />
+      </Row>
+      <Row label={t("settings.launcherShortcut")}>
+        <input value={shortcut} onChange={(e) => setShortcut(e.target.value)} placeholder="Alt+Space" className={`flex-1 ${inputCls} font-mono`} />
+        <button className="px-[13px] py-[6px] border border-border bg-card text-text rounded-lg text-[12.5px]" onClick={() => void api.setShortcut(shortcut.trim())}>
+          {t("common.save")}
+        </button>
+      </Row>
+      <div className="pt-2">
+        <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherFolders")}</div>
+        <div className="flex flex-col gap-1.5 mb-2">
+          {folders.length ? folders.map((f, i) => (
+            <div key={i} className="flex items-center gap-2 text-[12.5px] bg-bg border border-border rounded-lg px-[10px] py-[7px]">
+              <span className="font-medium">{f.name}</span>
+              <span className="text-muted truncate flex-1">{(f.app ? `↳ ${f.app} · ` : "") + f.path}</span>
+              <button className="text-danger text-[12px]" onClick={() => saveFolders(folders.filter((_, j) => j !== i))}>{t("common.delete")}</button>
+            </div>
+          )) : <div className="text-[12px] text-muted">{t("settings.launcherFoldersEmpty")}</div>}
+        </div>
+        <div className="flex items-center gap-1.5">
+          <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder={t("settings.launcherFolderName")} className={`w-[110px] ${inputCls}`} />
+          <input value={draft.path} onChange={(e) => setDraft({ ...draft, path: e.target.value })} placeholder={t("settings.launcherFolderPath")} className={`flex-1 ${inputCls} font-mono`} />
+          <input value={draft.app} onChange={(e) => setDraft({ ...draft, app: e.target.value })} placeholder={t("settings.launcherFolderApp")} className={`w-[130px] ${inputCls}`} />
+          <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={addFolder}>{t("common.add")}</button>
+        </div>
+      </div>
+    </Card>
   );
 }
 

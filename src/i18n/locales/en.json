@@ -44,7 +44,8 @@
     "sizeLarge": "Large",
     "colorRed": "Red",
     "colorYellow": "Yellow",
-    "colorBlue": "Blue"
+    "colorBlue": "Blue",
+    "add": "Add"
   },
   "time": {
     "yesterday": "Yesterday",
@@ -126,7 +127,16 @@
     "glmKeyHint": "Zhipu GLM API key (for translation)",
     "about": "About",
     "aboutDesc": "Umbra Desktop · v0.1.0 (electron)",
-    "checkUpdate": "Check for updates"
+    "checkUpdate": "Check for updates",
+    "launcher": "Launcher",
+    "launcherEnable": "Enable launcher",
+    "launcherEnableDesc": "Global hotkey to search apps, folder bookmarks, clipboard",
+    "launcherShortcut": "Hotkey",
+    "launcherFolders": "Folder bookmarks (open a folder with a chosen app)",
+    "launcherFoldersEmpty": "No folder bookmarks yet",
+    "launcherFolderName": "Name",
+    "launcherFolderPath": "Folder path",
+    "launcherFolderApp": "Open with (optional)"
   },
   "logs": {
     "title": "Logs",

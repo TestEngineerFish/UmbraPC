@@ -1,0 +1,130 @@
+// 快捷入口浮层搜索窗（React）。搜索框 + 结果列表 + 键盘导航。自带 CSS（透明浮层窗）。
+import { useCallback, useEffect, useRef, useState } from "react";
+
+interface LauncherResult {
+  id: string;
+  title: string;
+  subtitle?: string;
+  icon?: string;      // data URL / emoji
+  source: string;
+  score: number;
+}
+interface LauncherAPI {
+  query(q: string): Promise<LauncherResult[]>;
+  run(id: string): Promise<boolean>;
+  hide(): Promise<void>;
+  onShown(cb: () => void): () => void;
+}
+const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
+
+const CSS = `
+:root{--bg:rgba(246,245,242,.98);--card:#FFF;--border:#E6E3DC;--text:#1F2320;--muted:#6B716B;--orange:#E8590C;--sel:#FFF1E6;}
+*{box-sizing:border-box;}
+html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;color:var(--text);}
+.wrap{height:100vh;padding:10px;}
+.box{background:var(--bg);border:1px solid var(--border);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.28);overflow:hidden;display:flex;flex-direction:column;max-height:calc(100vh - 20px);}
+.search{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border);}
+.search .q{flex:1;border:none;outline:none;background:transparent;font-size:22px;color:var(--text);}
+.search .q::placeholder{color:var(--muted);}
+.hint{color:var(--muted);font-size:12px;white-space:nowrap;}
+.list{overflow-y:auto;padding:6px;}
+.row{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:10px;cursor:pointer;}
+.row.sel{background:var(--sel);}
+.ico{width:30px;height:30px;flex:none;display:flex;align-items:center;justify-content:center;font-size:20px;border-radius:7px;overflow:hidden;background:#0000000a;}
+.ico img{width:30px;height:30px;object-fit:contain;}
+.meta{flex:1;min-width:0;}
+.title{font-size:14.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sub{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}
+.num{color:var(--muted);font-size:11px;border:1px solid var(--border);border-radius:5px;padding:1px 6px;}
+.empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:13px;}
+@media (prefers-color-scheme:dark){:root{--bg:rgba(30,27,24,.98);--card:#26221E;--border:#3A342E;--text:#F2EFEA;--muted:#A79E93;--sel:#3a2a1c;}.ico{background:#ffffff10;}}
+`;
+
+export function Launcher() {
+  const [q, setQ] = useState("");
+  const [results, setResults] = useState<LauncherResult[]>([]);
+  const [sel, setSel] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  // 唤起时：清空、聚焦。
+  useEffect(() => {
+    const off = api.onShown(() => {
+      setQ(""); setResults([]); setSel(0);
+      setTimeout(() => inputRef.current?.focus(), 30);
+    });
+    setTimeout(() => inputRef.current?.focus(), 30);
+    return off;
+  }, []);
+
+  // 防抖查询。
+  useEffect(() => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(async () => {
+      const r = await api.query(q);
+      setResults(r);
+      setSel(0);
+    }, 120);
+    return () => window.clearTimeout(timer.current);
+  }, [q]);
+
+  // 选中项滚动到可见。
+  useEffect(() => {
+    const el = listRef.current?.querySelector<HTMLElement>(".row.sel");
+    el?.scrollIntoView({ block: "nearest" });
+  }, [sel]);
+
+  const runAt = useCallback(async (i: number) => {
+    const r = results[i];
+    if (!r) return;
+    await api.run(r.id);
+  }, [results]);
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, Math.max(0, results.length - 1))); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); void runAt(sel); }
+    else if (e.key === "Escape") { e.preventDefault(); void api.hide(); }
+    else if (e.metaKey && e.key >= "1" && e.key <= "9") { e.preventDefault(); void runAt(Number(e.key) - 1); }
+  };
+
+  return (
+    <div className="wrap">
+      <style>{CSS}</style>
+      <div className="box">
+        <div className="search">
+          <span style={{ fontSize: 20 }}>🔍</span>
+          <input
+            ref={inputRef}
+            className="q"
+            value={q}
+            placeholder="搜索应用、文件夹、剪贴板…"
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={onKey}
+            autoFocus
+          />
+          <span className="hint">↑↓ 选择 · ↵ 打开 · esc 关闭</span>
+        </div>
+        <div className="list" ref={listRef}>
+          {results.length ? (
+            results.map((r, i) => (
+              <div key={r.id} className={`row ${i === sel ? "sel" : ""}`} onMouseMove={() => setSel(i)} onClick={() => runAt(i)}>
+                <span className="ico">
+                  {r.icon && r.icon.startsWith("data:") ? <img src={r.icon} alt="" /> : <span>{r.icon || "•"}</span>}
+                </span>
+                <div className="meta">
+                  <div className="title">{r.title}</div>
+                  {r.subtitle ? <div className="sub">{r.subtitle}</div> : null}
+                </div>
+                {i < 9 ? <span className="num">⌘{i + 1}</span> : null}
+              </div>
+            ))
+          ) : (
+            <div className="empty">{q ? "没有匹配结果" : "输入以搜索应用 / 文件夹书签 / 剪贴板历史"}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

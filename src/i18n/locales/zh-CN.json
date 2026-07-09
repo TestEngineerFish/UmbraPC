@@ -44,7 +44,8 @@
     "sizeLarge": "大",
     "colorRed": "红色",
     "colorYellow": "黄色",
-    "colorBlue": "蓝色"
+    "colorBlue": "蓝色",
+    "add": "新增"
   },
   "time": {
     "yesterday": "昨天",
@@ -126,7 +127,16 @@
     "glmKeyHint": "智谱 GLM API Key（翻译用）",
     "about": "关于",
     "aboutDesc": "Umbra 桌面客户端 · v0.1.0 (electron)",
-    "checkUpdate": "检查更新"
+    "checkUpdate": "检查更新",
+    "launcher": "快捷入口",
+    "launcherEnable": "启用快捷入口",
+    "launcherEnableDesc": "全局快捷键唤起搜索：应用、文件夹书签、剪贴板",
+    "launcherShortcut": "唤起快捷键",
+    "launcherFolders": "文件夹书签（用指定软件打开固定文件夹）",
+    "launcherFoldersEmpty": "还没有文件夹书签",
+    "launcherFolderName": "名称",
+    "launcherFolderPath": "文件夹路径",
+    "launcherFolderApp": "用哪个软件（可空）"
   },
   "logs": {
     "title": "日志",
