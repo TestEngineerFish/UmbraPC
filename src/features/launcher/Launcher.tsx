@@ -11,7 +11,8 @@ interface LauncherResult {
 }
 interface LauncherAPI {
   query(q: string): Promise<LauncherResult[]>;
-  run(id: string, mod?: string): Promise<string>;
+  run(id: string): Promise<string>;
+  sendAssistant(text: string): Promise<string>;
   hide(): Promise<void>;
   resize(h: number): Promise<void>;
   onShown(cb: () => void): () => void;
@@ -91,11 +92,11 @@ export function Launcher() {
     return () => cancelAnimationFrame(id);
   }, [results]);
 
-  const runAt = useCallback(async (i: number, mod = "") => {
+  const runAt = useCallback(async (i: number) => {
     const r = results[i];
     if (!r) return;
-    const msg = await api.run(r.id, mod);
-    // 有提示文案（复制/脚本/发秘书/记灵感等静默动作）→ 弹 toast 反馈后再关闭；否则窗口已由主进程隐藏。
+    const msg = await api.run(r.id);
+    // 有提示文案（复制/脚本等静默动作）→ 弹 toast 反馈后再关闭；否则窗口已由主进程隐藏。
     if (msg) { setToast(msg); setTimeout(() => { setToast(""); void api.hide(); }, 850); }
   }, [results]);
 
@@ -106,8 +107,12 @@ export function Launcher() {
     else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
     else if (e.key === "Enter") {
       e.preventDefault();
-      // ⌘↵ 发给秘书 / ⌥↵ 记为灵感 / ↵ 主动作。
-      void runAt(sel, e.metaKey ? "assistant" : e.altKey ? "inspiration" : "");
+      if (e.metaKey) {
+        // ⌘↵：把输入框里的文字直接发给秘书（跳聊天页），不依赖搜索结果。
+        if (q.trim()) { void api.sendAssistant(q.trim()); void api.hide(); }
+      } else {
+        void runAt(sel);  // ↵：执行选中结果的主动作
+      }
     }
     else if (e.key === "Escape") { e.preventDefault(); void api.hide(); }
     else if (e.metaKey && e.key >= "1" && e.key <= "9") { e.preventDefault(); void runAt(Number(e.key) - 1); }
@@ -128,7 +133,7 @@ export function Launcher() {
             onKeyDown={onKey}
             autoFocus
           />
-          <span className="hint">↵ 打开 · ⌘↵ 发秘书 · ⌥↵ 记灵感 · esc</span>
+          <span className="hint">↵ 打开 · ⌘↵ 发给秘书 · esc 关闭</span>
         </div>
         {results.length ? (
           <div className="list" ref={listRef}>

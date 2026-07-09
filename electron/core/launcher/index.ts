@@ -338,35 +338,23 @@ export class LauncherManager {
     }));
   }
 
-  // 取一个结果可用于「发秘书/记灵感」的文本（复制类取 payload.text，否则用标题）。
-  private resultText(r: LauncherResult): string {
-    return String((r.action.payload as { text?: string }).text || r.title || "");
-  }
-  // 把文本发给服务端（发秘书=聊天入口；记灵感=灵感接口）。best-effort。
-  private async sendToServer(pathname: string, body: Record<string, unknown>): Promise<void> {
-    const base = (this.cfg.get().serverUrl || "").replace(/\/+$/, "");
-    if (!base) return;
-    try {
-      await fetch(base + pathname, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    } catch { /* 离线忽略 */ }
+  // 「发给秘书」：把当前输入直接发到 PC 聊天主会话（跳转聊天页 + 发送）。由 main.ts 注入回调。
+  private chatSender?: (text: string) => void;
+  setChatSender(fn: (text: string) => void): void { this.chatSender = fn; }
+  private async sendAssistant(text: string): Promise<string> {
+    const t = (text || "").trim();
+    if (!t || !this.chatSender) return "";
+    this.chatSender(t);          // 主进程 → 主窗口：跳聊天页并发送
+    await this.hide(false);      // 关闭快捷入口（焦点交给主窗口）
+    return "";
   }
 
-  // mod：''=主动作；'assistant'=发给秘书；'inspiration'=记为灵感。
   // 返回：空字符串=已隐藏窗口(无需提示)；非空=提示文案(渲染层弹 toast 后再隐藏)。
-  private async runResult(id: string, mod = ""): Promise<string> {
+  private async runResult(id: string): Promise<string> {
     const r = this.cache.get(id);
     if (!r) return "";
     this.noteUse(id);  // 学习：这次在该 query 下选了它
     const clip = async (text: string) => { const { clipboard } = await import("electron"); clipboard.writeText(text); };
-
-    if (mod === "assistant") {
-      await this.sendToServer("/web/message", { content: this.resultText(r), client_id: "pc-launcher" });
-      return "已发给秘书 ✓";
-    }
-    if (mod === "inspiration") {
-      await this.sendToServer("/inspirations", { raw: this.resultText(r) });
-      return "已记为灵感 ✓";
-    }
 
     const a = r.action;
     if (a.kind === "open_app") {
@@ -413,7 +401,8 @@ export class LauncherManager {
   private async registerIpc(): Promise<void> {
     const { ipcMain, globalShortcut } = await import("electron");
     ipcMain.handle("launcher:query", (_e, q: string) => this.query(q));
-    ipcMain.handle("launcher:run", (_e, id: string, mod: string) => this.runResult(id, mod || ""));
+    ipcMain.handle("launcher:run", (_e, id: string) => this.runResult(id));
+    ipcMain.handle("launcher:sendAssistant", (_e, text: string) => this.sendAssistant(text));
     ipcMain.handle("launcher:hide", () => this.hide(true));
     // 渲染层上报内容高度 → 窗口贴合内容（顶部锚点不变），消除空白/暗框。
     ipcMain.handle("launcher:resize", (_e, h: number) => {

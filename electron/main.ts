@@ -304,6 +304,15 @@ app.whenReady().then(async () => {
   screenshot = new ScreenshotManager(store, winOpts, reregisterShortcuts);
   // 快捷入口：复用剪贴板的存储实例（避免两份读写同一文件）。
   launcher = new LauncherManager(store, clipboard.getStore(), app.getPath("userData"), winOpts, reregisterShortcuts);
+  // 快捷入口「发给秘书」：跳出主窗口聊天页并发送这条消息。
+  launcher.setChatSender((text: string) => {
+    showMainWindow();
+    const w = mainWindow;
+    if (w && !w.isDestroyed()) {
+      const post = () => w.webContents.send("umbra:launcher-send-chat", text);
+      if (w.webContents.isLoading()) w.webContents.once("did-finish-load", post); else post();
+    }
+  });
   Promise.all([clipboard.init(), screenshot.init(), launcher.init()])
     .then(() => reregisterShortcuts()) // 就绪后统一注册各自快捷键
     .catch((e) => console.error("剪贴板/截图/快捷入口初始化失败", e));

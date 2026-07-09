@@ -540,15 +540,21 @@ function send(): void {
   if (!text) return;
   ta.value = "";
   draftText = "";
+  sendText(text);
+}
+
+// 直接发送一段文本到主会话（供快捷入口「发给秘书」调用；不依赖输入框/是否已挂载聊天页）。
+export function sendText(text: string): void {
+  const t2 = (text || "").trim();
+  if (!t2 || clearing) return;
   stick = true;
-  forceScroll = true; // 自己发的消息总是滚到底
-  // 发送始终由秘书处理（服务端才是与设备对话的一方），故落在主会话。
+  forceScroll = true;
   const s = cs(MAIN);
   const now = Date.now();
-  s.blocks.push({ kind: "user", text, ts: now });
+  s.blocks.push({ kind: "user", text: t2, ts: now });
   s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
   s.assistantIdx = s.blocks.length - 1;
-  if (!chatConn.sendMessage(text, operateAutoApprove())) {
+  if (!chatConn.sendMessage(t2, operateAutoApprove())) {
     s.blocks.push({ kind: "error", text: t("chat.notConnected") });
     s.assistantIdx = null;
   }

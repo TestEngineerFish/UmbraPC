@@ -55,6 +55,12 @@ contextBridge.exposeInMainWorld("umbra", {
     ipcRenderer.on("umbra:locale-changed", l);
     return () => ipcRenderer.removeListener("umbra:locale-changed", l);
   },
+  // 快捷入口「发给秘书」：跳聊天页并发送这条消息。
+  onLauncherSendChat: (cb: (text: string) => void) => {
+    const l = (_e: unknown, text: string) => cb(text);
+    ipcRenderer.on("umbra:launcher-send-chat", l);
+    return () => ipcRenderer.removeListener("umbra:launcher-send-chat", l);
+  },
 });
 
 // 剪贴板历史桥（面板窗口与设置页共用）。
@@ -87,7 +93,8 @@ contextBridge.exposeInMainWorld("umbraClip", {
 // 快捷入口桥（浮层搜索窗渲染层用）。
 contextBridge.exposeInMainWorld("umbraLauncher", {
   query: (q: string) => ipcRenderer.invoke("launcher:query", q),
-  run: (id: string, mod?: string) => ipcRenderer.invoke("launcher:run", id, mod || ""),
+  run: (id: string) => ipcRenderer.invoke("launcher:run", id),
+  sendAssistant: (text: string) => ipcRenderer.invoke("launcher:sendAssistant", text),
   hide: () => ipcRenderer.invoke("launcher:hide"),
   getSettings: () => ipcRenderer.invoke("launcher:getSettings"),
   setEnabled: (enabled: boolean) => ipcRenderer.invoke("launcher:setEnabled", enabled),

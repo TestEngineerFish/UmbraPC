@@ -531,6 +531,12 @@ export function initLegacy(): void {
   chat.setAppRerender(render);
   document.addEventListener("click", onClick); // 委托：处理各页面/弹窗内的 data-act（含侧边栏 nav / 标题栏 theme）
   window.addEventListener("keydown", onKeydown);
+  // 快捷入口「发给秘书」：跳到聊天页并把这条消息发给秘书。
+  const umbra = (window as unknown as { umbra?: { onLauncherSendChat?: (cb: (t: string) => void) => () => void } }).umbra;
+  umbra?.onLauncherSendChat?.((text) => {
+    setNav("chat");
+    setTimeout(() => chat.sendText(text), 0); // 等聊天页挂载后再发，确保渲染
+  });
   // 窗口重新获得焦点时刷新权限状态（用户可能刚去系统设置授予了权限）。
   window.addEventListener("focus", () => {
     if (desktop.isDesktop()) desktop.refreshPermissions().then(() => { if (state.nav === "settings") render(); });
