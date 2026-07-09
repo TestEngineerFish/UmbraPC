@@ -141,7 +141,15 @@
     "launcherChoose": "选择",
     "launcherYoudao": "有道翻译（快捷入口输入 fy 词句）",
     "launcherYoudaoSet": "已配置（留空不变）",
-    "launcherYoudaoHint": "在有道智云控制台创建「文本翻译」应用，拿 appKey 与密钥填入。快捷入口里：fy hello / 翻译 你好；编解码：uni/url/b64；计算与单位换算直接输入（如 3*4、10km to mi）。"
+    "launcherYoudaoHint": "在有道智云控制台创建「文本翻译」应用，拿 appKey 与密钥填入。快捷入口里：fy hello / 翻译 你好；编解码：uni/url/b64；计算与单位换算直接输入（如 3*4、10km to mi）。",
+    "launcherDropHint": "可拖拽文件夹/文件/App 到此添加",
+    "launcherScripts": "自定义脚本",
+    "launcherScriptsEmpty": "还没有脚本",
+    "launcherScriptName": "名称",
+    "launcherScriptKeyword": "关键词",
+    "launcherScriptCmd": "shell 命令（输入作为 $1）",
+    "launcherScriptInput": "需输入",
+    "launcherScriptHint": "有关键词时用「关键词 内容」触发（内容作为 $1）；无关键词则按名称搜到即执行。结果 stdout 自动复制。"
   },
   "logs": {
     "title": "日志",

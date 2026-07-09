@@ -312,11 +312,13 @@ export function Settings() {
 
 // 快捷入口（Launcher）设置：开关 + 唤起快捷键 + 文件夹书签（用指定软件打开固定文件夹）。自足，直连 IPC。
 interface LauncherFolder { name: string; path: string; app?: string }
+interface LauncherScript { name: string; keyword?: string; command: string; icon?: string; needsInput?: boolean; output?: "copy" | "none" }
 interface LauncherAPI {
-  getSettings(): Promise<{ enabled: boolean; shortcut: string; folders: LauncherFolder[]; registered: boolean; youdaoConfigured: boolean }>;
+  getSettings(): Promise<{ enabled: boolean; shortcut: string; folders: LauncherFolder[]; scripts: LauncherScript[]; registered: boolean; youdaoConfigured: boolean }>;
   setEnabled(enabled: boolean): Promise<void>;
   setShortcut(acc: string): Promise<{ ok: boolean }>;
   setFolders(folders: LauncherFolder[]): Promise<void>;
+  setScripts(scripts: LauncherScript[]): Promise<void>;
   setYoudao(appKey: string, secret: string): Promise<void>;
   pickPath(): Promise<string>;
   pickApp(): Promise<string>;
@@ -349,8 +351,24 @@ function LauncherCard() {
   const [ydKey, setYdKey] = useState("");
   const [ydSecret, setYdSecret] = useState("");
   const [ydSet, setYdSet] = useState(false);
+  const [scripts, setScripts] = useState<LauncherScript[]>([]);
+  const [sdraft, setSdraft] = useState<LauncherScript>({ name: "", keyword: "", command: "", needsInput: false });
 
-  useEffect(() => { void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); setFolders(s.folders || []); setYdSet(s.youdaoConfigured); }); }, []);
+  useEffect(() => { void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); setFolders(s.folders || []); setScripts(s.scripts || []); setYdSet(s.youdaoConfigured); }); }, []);
+
+  const saveScripts = (list: LauncherScript[]) => { setScripts(list); void api.setScripts(list); };
+  const addScript = () => {
+    if (!sdraft.name.trim() || !sdraft.command.trim()) return;
+    saveScripts([...scripts, { ...sdraft, name: sdraft.name.trim(), keyword: sdraft.keyword?.trim() || undefined, command: sdraft.command.trim(), output: "copy" }]);
+    setSdraft({ name: "", keyword: "", command: "", needsInput: false });
+  };
+  // 拖拽文件夹/文件/App 进来即添加为书签。
+  const onDropFolders = (e: React.DragEvent) => {
+    e.preventDefault();
+    const dropped = Array.from(e.dataTransfer.files) as unknown as { path: string }[];
+    const adds = dropped.map((f) => f.path).filter(Boolean).map((p) => ({ name: p.split("/").pop() || p, path: p, app: p.endsWith(".app") ? "" : "" }));
+    if (adds.length) saveFolders([...folders, ...adds]);
+  };
 
   // 录制快捷键：按下组合键即保存；Esc 取消。
   useEffect(() => {
@@ -395,8 +413,8 @@ function LauncherCard() {
           {t("common.reset")}
         </button>
       </Row>
-      <div className="pt-2">
-        <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherFolders")}</div>
+      <div className="pt-2" onDragOver={(e) => e.preventDefault()} onDrop={onDropFolders}>
+        <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherFolders")} <span className="text-[11px] text-muted font-normal">· {t("settings.launcherDropHint")}</span></div>
         <div className="flex flex-col gap-1.5 mb-2">
           {folders.length ? folders.map((f, i) => (
             <div key={i} className="flex items-center gap-2 text-[12.5px] bg-bg border border-border rounded-lg px-[10px] py-[7px]">
@@ -418,6 +436,27 @@ function LauncherCard() {
           </div>
           <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={addFolder}>{t("common.add")}</button>
         </div>
+      </div>
+      <div className="pt-3 mt-1 border-t border-border">
+        <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherScripts")}</div>
+        <div className="flex flex-col gap-1.5 mb-2">
+          {scripts.length ? scripts.map((s, i) => (
+            <div key={i} className="flex items-center gap-2 text-[12.5px] bg-bg border border-border rounded-lg px-[10px] py-[7px]">
+              <span className="font-medium">{s.icon || "📜"} {s.name}</span>
+              {s.keyword ? <span className="text-orange-text text-[11px]">{s.keyword}</span> : null}
+              <span className="text-muted truncate flex-1 font-mono text-[11px]">{s.command}</span>
+              <button className="text-danger text-[12px]" onClick={() => saveScripts(scripts.filter((_, j) => j !== i))}>{t("common.delete")}</button>
+            </div>
+          )) : <div className="text-[12px] text-muted">{t("settings.launcherScriptsEmpty")}</div>}
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <input value={sdraft.name} onChange={(e) => setSdraft({ ...sdraft, name: e.target.value })} placeholder={t("settings.launcherScriptName")} className={`w-[110px] ${inputCls}`} />
+          <input value={sdraft.keyword} onChange={(e) => setSdraft({ ...sdraft, keyword: e.target.value })} placeholder={t("settings.launcherScriptKeyword")} className={`w-[90px] ${inputCls} font-mono`} />
+          <input value={sdraft.command} onChange={(e) => setSdraft({ ...sdraft, command: e.target.value })} placeholder={t("settings.launcherScriptCmd")} className={`flex-1 min-w-[180px] ${inputCls} font-mono`} />
+          <label className="flex items-center gap-1 text-[11.5px] text-muted"><input type="checkbox" checked={!!sdraft.needsInput} onChange={(e) => setSdraft({ ...sdraft, needsInput: e.target.checked })} />{t("settings.launcherScriptInput")}</label>
+          <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={addScript}>{t("common.add")}</button>
+        </div>
+        <div className="text-[11px] text-muted mt-1.5">{t("settings.launcherScriptHint")}</div>
       </div>
       <div className="pt-3 mt-1 border-t border-border">
         <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherYoudao")}</div>

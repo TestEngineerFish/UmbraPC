@@ -3,7 +3,8 @@
 // 窗口/焦点还原范式镜像 ClipboardManager。
 import * as path from "node:path";
 import * as crypto from "node:crypto";
-import { ConfigStore, expandHome, LauncherFolder } from "../config";
+import { promises as fs } from "node:fs";
+import { ConfigStore, expandHome, LauncherFolder, LauncherScript } from "../config";
 import { ClipStore } from "../clipboard/store";
 import { writeToClipboard, simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
@@ -12,7 +13,7 @@ import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } f
 
 // ── 结果与动作类型 ──
 export interface LauncherAction {
-  kind: "open_app" | "open_path" | "paste_clip" | "copy";
+  kind: "open_app" | "open_path" | "paste_clip" | "copy" | "run_script";
   payload: Record<string, unknown>;
 }
 export interface LauncherResult {
@@ -38,12 +39,36 @@ export class LauncherManager {
   private appWasActive = false;
   private shownAt = 0;  // 唤起时刻：刚弹出瞬间的失焦（主窗口被激活抢焦）要忽略，避免立刻收起/来回切换
   private cache = new Map<string, LauncherResult>();  // 本次查询结果，供 run 回查
+  private lastQuery = "";                              // 本次查询词，供 run 记录使用频率
+  private usage: Record<string, { c: number; t: number }> = {};  // 使用频率学习：`${query}\n${id}` → {次数,最近}
+  private usageFile: string;
 
-  constructor(private cfg: ConfigStore, private clipStore: ClipStore, private opts: ManagerOpts, private reregister: () => void) {}
+  constructor(private cfg: ConfigStore, private clipStore: ClipStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
+    this.usageFile = path.join(userData, "launcher-usage.json");
+  }
 
   async init(): Promise<void> {
     this.registerIpc();
+    try { this.usage = JSON.parse(await fs.readFile(this.usageFile, "utf-8")); } catch { this.usage = {}; }
+    // 预热：启动时就把浮层窗建好并加载渲染层（藏着），首次唤起即可秒开，避免忽快忽慢。
+    try { await this.ensurePanel(); } catch { /* 预热失败不影响后续按需创建 */ }
     // 全局快捷键由 main.ts 统一注册（见 registerShortcut）。
+  }
+
+  // 使用频率学习：同一 query 下选过的项自动加权置顶。
+  private usageKey(q: string, id: string): string { return `${q.trim().toLowerCase()}\n${id}`; }
+  private boost(q: string, id: string): number {
+    const u = this.usage[this.usageKey(q, id)];
+    if (!u) return 0;
+    return Math.min(u.c * 25, 200) + (Date.now() - u.t < 7 * 864e5 ? 20 : 0);
+  }
+  private noteUse(id: string): void {
+    if (!this.lastQuery) return;
+    const k = this.usageKey(this.lastQuery, id);
+    const u = this.usage[k] || { c: 0, t: 0 };
+    this.usage[k] = { c: u.c + 1, t: Date.now() };
+    fs.mkdir(path.dirname(this.usageFile), { recursive: true })
+      .then(() => fs.writeFile(this.usageFile, JSON.stringify(this.usage), "utf-8")).catch(() => {});
   }
 
   // ── 面板窗口（镜像剪贴板面板）──
@@ -64,7 +89,8 @@ export class LauncherManager {
       backgroundColor: "#00000000",
       webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
     });
-    win.setAlwaysOnTop(true, "pop-up-menu");  // 高层级：主窗口被激活也压在它下面
+    // floating 层级：压住主窗口即可；不要更高（如 pop-up-menu），否则会盖住系统输入法候选窗。
+    win.setAlwaysOnTop(true, "floating");
     // 刚弹出瞬间主窗口可能被激活抢走焦点（macOS 激活 app 会带出其它窗口）→ 忽略这段时间的 blur 并夺回焦点。
     win.on("blur", () => {
       if (Date.now() - this.shownAt < 600) { if (!win.isDestroyed()) win.focus(); return; }
@@ -136,9 +162,14 @@ export class LauncherManager {
   // ── 查询分发 ──
   private async query(raw: string): Promise<LauncherResult[]> {
     const q = (raw || "").trim();
+    this.lastQuery = q;
     let results: LauncherResult[] = [];
 
-    // 关键词前缀 → 进入某工具专属模式（翻译/编解码）。
+    // ① 自定义脚本 keyword 优先（如 "fy hello" 若用户自建了 fy 脚本）。
+    const scriptKw = this.matchScriptKeyword(q);
+    if (scriptKw) return this.finalize(q, [scriptKw]);
+
+    // ② 内置工具 keyword（翻译/编解码）。
     const kw = q.match(/^(fy|翻译|uni|unicode|url|b64|base64)\s+([\s\S]+)$/i);
     if (kw) {
       const type = kw[1].toLowerCase();
@@ -147,20 +178,26 @@ export class LauncherManager {
       else if (type === "uni" || type === "unicode") results = this.codecResults(unicodeTransform(arg));
       else if (type === "url") results = this.codecResults(urlTransform(arg));
       else results = this.codecResults(base64Transform(arg));
-    } else {
-      // 普通：并发 app/文件夹/剪贴板；再叠加计算器/单位换算（按模式命中）。
-      const [apps, folders, clips] = await Promise.all([
-        this.searchApps(q).catch(() => []),
-        Promise.resolve(this.searchFolders(q)),
-        Promise.resolve(this.searchClipboard(q)),
-      ]);
-      results.push(...folders, ...apps, ...clips);
-      const c = calc(q);
-      if (c !== null) results.unshift(this.copyResult("calc", `= ${c}`, "计算结果 · 回车复制", "🔢", 300, c));
-      const u = convertUnits(q);
-      if (u) results.unshift(this.copyResult("unit", u.title, u.subtitle + " · 回车复制", "📐", 300, u.title));
+      return this.finalize(q, results);
     }
 
+    // ③ 普通：并发 app/文件夹/剪贴板 + 脚本(按名) + 计算器/单位换算。
+    const [apps, folders, clips] = await Promise.all([
+      this.searchApps(q).catch(() => []),
+      Promise.resolve(this.searchFolders(q)),
+      Promise.resolve(this.searchClipboard(q)),
+    ]);
+    results.push(...folders, ...apps, ...clips, ...this.searchScripts(q));
+    const c = calc(q);
+    if (c !== null) results.unshift(this.copyResult("calc", `= ${c}`, "计算结果 · 回车复制", "🔢", 300, c));
+    const u = convertUnits(q);
+    if (u) results.unshift(this.copyResult("unit", u.title, u.subtitle + " · 回车复制", "📐", 300, u.title));
+    return this.finalize(q, results);
+  }
+
+  // 使用频率加权 + 排序 + 截断 + 缓存。
+  private finalize(q: string, results: LauncherResult[]): LauncherResult[] {
+    for (const r of results) r.score += this.boost(q, r.id);
     results.sort((a, b) => b.score - a.score);
     const top = results.slice(0, MAX_RESULTS);
     this.cache.clear();
@@ -210,6 +247,37 @@ export class LauncherManager {
     } catch (e) {
       return [this.copyResult("fy", "翻译请求失败", String(e).slice(0, 60), "🌐", 300, "")];
     }
+  }
+
+  // Provider（Phase3）：自定义脚本。keyword 命中 → 该脚本（keyword 后为输入）；否则按名称匹配。
+  private matchScriptKeyword(q: string): LauncherResult | null {
+    const scripts = this.cfg.get().launcherScripts || [];
+    for (let i = 0; i < scripts.length; i++) {
+      const s = scripts[i];
+      if (!s.keyword) continue;
+      const m = q.match(new RegExp(`^${s.keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s+([\\s\\S]+))?$`, "i"));
+      if (m) return this.scriptResult(s, i, m[1] || "");
+    }
+    return null;
+  }
+  private searchScripts(q: string): LauncherResult[] {
+    const scripts = this.cfg.get().launcherScripts || [];
+    const ql = q.toLowerCase();
+    return scripts
+      .map((s, i): LauncherResult | null => {
+        if (s.needsInput && !s.keyword) return null;  // 需输入但无 keyword 的脚本靠 keyword 触发
+        if (q && !s.name.toLowerCase().includes(ql) && !(s.keyword || "").toLowerCase().includes(ql)) return null;
+        return this.scriptResult(s, i, "");
+      })
+      .filter((r): r is LauncherResult => r !== null);
+  }
+  private scriptResult(s: LauncherScript, i: number, input: string): LauncherResult {
+    return {
+      id: `script:${i}`, title: s.name,
+      subtitle: (s.needsInput ? (input ? `输入：${input.slice(0, 30)}` : "需输入") : "脚本") + " · 回车执行",
+      icon: s.icon || "📜", source: "script", score: 140,
+      action: { kind: "run_script", payload: { command: s.command, input, output: s.output || "copy" } },
+    };
   }
 
   // Provider①：启动 App（mdfind 搜已安装应用 + 提取图标）。
@@ -268,10 +336,36 @@ export class LauncherManager {
     }));
   }
 
-  // ── 执行动作 ──
-  private async runResult(id: string): Promise<boolean> {
+  // 取一个结果可用于「发秘书/记灵感」的文本（复制类取 payload.text，否则用标题）。
+  private resultText(r: LauncherResult): string {
+    return String((r.action.payload as { text?: string }).text || r.title || "");
+  }
+  // 把文本发给服务端（发秘书=聊天入口；记灵感=灵感接口）。best-effort。
+  private async sendToServer(pathname: string, body: Record<string, unknown>): Promise<void> {
+    const base = (this.cfg.get().serverUrl || "").replace(/\/+$/, "");
+    if (!base) return;
+    try {
+      await fetch(base + pathname, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } catch { /* 离线忽略 */ }
+  }
+
+  // mod：''=主动作；'assistant'=发给秘书；'inspiration'=记为灵感。
+  private async runResult(id: string, mod = ""): Promise<boolean> {
     const r = this.cache.get(id);
     if (!r) return false;
+    this.noteUse(id);  // 学习：这次在该 query 下选了它
+
+    if (mod === "assistant") {
+      await this.sendToServer("/web/message", { content: this.resultText(r), client_id: "pc-launcher" });
+      await this.hide(true);
+      return true;
+    }
+    if (mod === "inspiration") {
+      await this.sendToServer("/inspirations", { raw: this.resultText(r) });
+      await this.hide(true);
+      return true;
+    }
+
     const a = r.action;
     if (a.kind === "open_app") {
       await run("open", [String(a.payload.path)]);
@@ -291,6 +385,17 @@ export class LauncherManager {
       await this.hide(true);
       return true;
     }
+    if (a.kind === "run_script") {
+      const cmd = String(a.payload.command || "");
+      const input = String(a.payload.input || "");
+      await this.hide(true);
+      const res = await run("bash", ["-lc", cmd, "umbra", input], { timeoutMs: 20000 });
+      if ((a.payload.output || "copy") === "copy" && res.output) {
+        const { clipboard } = await import("electron");
+        clipboard.writeText(res.output.trim());
+      }
+      return res.code === 0;
+    }
     if (a.kind === "paste_clip") {
       const it = this.clipStore.get(Number(a.payload.id));
       if (!it) return false;
@@ -309,7 +414,7 @@ export class LauncherManager {
   private async registerIpc(): Promise<void> {
     const { ipcMain, globalShortcut } = await import("electron");
     ipcMain.handle("launcher:query", (_e, q: string) => this.query(q));
-    ipcMain.handle("launcher:run", (_e, id: string) => this.runResult(id));
+    ipcMain.handle("launcher:run", (_e, id: string, mod: string) => this.runResult(id, mod || ""));
     ipcMain.handle("launcher:hide", () => this.hide(true));
     // 渲染层上报内容高度 → 窗口贴合内容（顶部锚点不变），消除空白/暗框。
     ipcMain.handle("launcher:resize", (_e, h: number) => {
@@ -340,6 +445,7 @@ export class LauncherManager {
         enabled: c.launcherEnabled,
         shortcut: c.launcherShortcut,
         folders: c.launcherFolders || [],
+        scripts: c.launcherScripts || [],
         registered: globalShortcut.isRegistered(c.launcherShortcut || "Alt+Space"),
         youdaoConfigured: !!(c.youdaoAppKey && c.youdaoSecret),
       };
@@ -347,6 +453,8 @@ export class LauncherManager {
     ipcMain.handle("launcher:setEnabled", (_e, enabled: boolean) => this.setEnabled(enabled));
     ipcMain.handle("launcher:setShortcut", (_e, acc: string) => this.setShortcut(acc));
     ipcMain.handle("launcher:setFolders", (_e, folders: LauncherFolder[]) => this.setFolders(folders));
+    ipcMain.handle("launcher:setScripts", (_e, scripts: LauncherScript[]) =>
+      this.cfg.save({ launcherScripts: Array.isArray(scripts) ? scripts : [] }));
     ipcMain.handle("launcher:setYoudao", (_e, appKey: string, secret: string) =>
       this.cfg.save({ youdaoAppKey: String(appKey || ""), youdaoSecret: String(secret || "") }));
   }

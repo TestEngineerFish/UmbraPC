@@ -11,7 +11,7 @@ interface LauncherResult {
 }
 interface LauncherAPI {
   query(q: string): Promise<LauncherResult[]>;
-  run(id: string): Promise<boolean>;
+  run(id: string, mod?: string): Promise<boolean>;
   hide(): Promise<void>;
   resize(h: number): Promise<void>;
   onShown(cb: () => void): () => void;
@@ -88,10 +88,10 @@ export function Launcher() {
     return () => cancelAnimationFrame(id);
   }, [results]);
 
-  const runAt = useCallback(async (i: number) => {
+  const runAt = useCallback(async (i: number, mod = "") => {
     const r = results[i];
     if (!r) return;
-    await api.run(r.id);
+    await api.run(r.id, mod);
   }, [results]);
 
   const onKey = (e: React.KeyboardEvent) => {
@@ -99,7 +99,11 @@ export function Launcher() {
     if ((e.nativeEvent as unknown as { isComposing?: boolean }).isComposing || e.keyCode === 229) return;
     if (e.key === "ArrowDown") { e.preventDefault(); setSel((s) => Math.min(s + 1, Math.max(0, results.length - 1))); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); void runAt(sel); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      // ⌘↵ 发给秘书 / ⌥↵ 记为灵感 / ↵ 主动作。
+      void runAt(sel, e.metaKey ? "assistant" : e.altKey ? "inspiration" : "");
+    }
     else if (e.key === "Escape") { e.preventDefault(); void api.hide(); }
     else if (e.metaKey && e.key >= "1" && e.key <= "9") { e.preventDefault(); void runAt(Number(e.key) - 1); }
   };
@@ -119,7 +123,7 @@ export function Launcher() {
             onKeyDown={onKey}
             autoFocus
           />
-          <span className="hint">↑↓ 选择 · ↵ 打开 · esc 关闭</span>
+          <span className="hint">↵ 打开 · ⌘↵ 发秘书 · ⌥↵ 记灵感 · esc</span>
         </div>
         {results.length ? (
           <div className="list" ref={listRef}>

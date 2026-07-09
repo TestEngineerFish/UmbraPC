@@ -303,7 +303,7 @@ app.whenReady().then(async () => {
   clipboard = new ClipboardManager(store, app.getPath("userData"), winOpts, reregisterShortcuts);
   screenshot = new ScreenshotManager(store, winOpts, reregisterShortcuts);
   // 快捷入口：复用剪贴板的存储实例（避免两份读写同一文件）。
-  launcher = new LauncherManager(store, clipboard.getStore(), winOpts, reregisterShortcuts);
+  launcher = new LauncherManager(store, clipboard.getStore(), app.getPath("userData"), winOpts, reregisterShortcuts);
   Promise.all([clipboard.init(), screenshot.init(), launcher.init()])
     .then(() => reregisterShortcuts()) // 就绪后统一注册各自快捷键
     .catch((e) => console.error("剪贴板/截图/快捷入口初始化失败", e));

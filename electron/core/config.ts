@@ -37,6 +37,7 @@ export interface UmbraConfig {
   launcherEnabled: boolean;      // 总开关（关则不注册快捷键、不可唤起）
   launcherShortcut: string;      // 唤起快捷键（Electron Accelerator，默认 ⌥Space = "Alt+Space"）
   launcherFolders: LauncherFolder[]; // 文件夹书签：用指定软件打开固定文件夹
+  launcherScripts: LauncherScript[]; // 自定义脚本
   youdaoAppKey: string;          // 有道翻译 appKey（Phase 2 用）
   youdaoSecret: string;          // 有道翻译 secret（Phase 2 用）
   locale?: string;               // 界面语言（zh-CN | en）；缺省时由主进程按系统语言初始化
@@ -47,6 +48,16 @@ export interface LauncherFolder {
   name: string;   // 显示名
   path: string;   // 绝对路径（支持 ~）
   app?: string;   // 用哪个应用打开（如 "Visual Studio Code"、"Finder"）；空=系统默认
+}
+
+// 自定义脚本：搜到即可执行；needsInput 时把 keyword 后的文本作为 $1 传入。
+export interface LauncherScript {
+  name: string;         // 显示名
+  keyword?: string;     // 可选前缀触发（如 "fy"）；空则按名称匹配
+  command: string;      // shell 命令（bash -lc 执行，输入作为 $1）
+  icon?: string;        // emoji / 图标
+  needsInput?: boolean; // 是否需要输入
+  output?: "copy" | "none"; // 输出处理：复制 stdout / 忽略。默认 copy
 }
 
 const envBool = (k: string, d: boolean) => {
@@ -96,6 +107,7 @@ function defaults(configDir: string): UmbraConfig {
     launcherEnabled: envBool("UMBRA_LAUNCHER_ENABLED", true),
     launcherShortcut: process.env.UMBRA_LAUNCHER_SHORTCUT || "Alt+Space",
     launcherFolders: [],
+    launcherScripts: [],
     youdaoAppKey: process.env.UMBRA_YOUDAO_APPKEY || "",
     youdaoSecret: process.env.UMBRA_YOUDAO_SECRET || "",
   };

@@ -141,7 +141,15 @@
     "launcherChoose": "Choose",
     "launcherYoudao": "Youdao translate (type 'fy word' in launcher)",
     "launcherYoudaoSet": "Configured (leave blank to keep)",
-    "launcherYoudaoHint": "Create a Text Translation app in Youdao console for appKey/secret. In launcher: 'fy hello'; codecs 'uni/url/b64 <text>'; calc & units inline (e.g. 3*4, 10km to mi)."
+    "launcherYoudaoHint": "Create a Text Translation app in Youdao console for appKey/secret. In launcher: 'fy hello'; codecs 'uni/url/b64 <text>'; calc & units inline (e.g. 3*4, 10km to mi).",
+    "launcherDropHint": "Drag folders/files/apps here to add",
+    "launcherScripts": "Custom scripts",
+    "launcherScriptsEmpty": "No scripts yet",
+    "launcherScriptName": "Name",
+    "launcherScriptKeyword": "Keyword",
+    "launcherScriptCmd": "shell command ($1 = input)",
+    "launcherScriptInput": "Input",
+    "launcherScriptHint": "With a keyword, run 'keyword text' ($1=text); otherwise match by name. stdout is copied."
   },
   "logs": {
     "title": "Logs",
