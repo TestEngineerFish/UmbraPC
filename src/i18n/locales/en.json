@@ -149,7 +149,11 @@
     "launcherScriptKeyword": "Keyword",
     "launcherScriptCmd": "shell command ($1 = input)",
     "launcherScriptInput": "Input",
-    "launcherScriptHint": "With a keyword, run 'keyword text' ($1=text); otherwise match by name. stdout is copied."
+    "launcherScriptHint": "With a keyword, run 'keyword text' ($1=text); otherwise match by name. stdout is copied.",
+    "launcherWorkflows": "Workflows",
+    "launcherWorkflowsCount": "{{count}} workflows",
+    "launcherWorkflowsOpen": "Edit workflows",
+    "launcherWorkflowsHint": "Alfred-style visual workflow editor: trigger → script → action. Compatible with Alfred Script Filter JSON; existing scripts were migrated automatically."
   },
   "logs": {
     "title": "Logs",

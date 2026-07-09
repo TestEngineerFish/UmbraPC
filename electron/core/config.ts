@@ -37,7 +37,9 @@ export interface UmbraConfig {
   launcherEnabled: boolean;      // 总开关（关则不注册快捷键、不可唤起）
   launcherShortcut: string;      // 唤起快捷键（Electron Accelerator，默认 ⌥Space = "Alt+Space"）
   launcherFolders: LauncherFolder[]; // 文件夹书签：用指定软件打开固定文件夹
-  launcherScripts: LauncherScript[]; // 自定义脚本
+  launcherScripts: LauncherScript[]; // 自定义脚本（旧；加载时迁移为工作流）
+  launcherWorkflows: Workflow[];     // 工作流编排（类 Alfred Workflow）
+  launcherScriptsMigrated?: boolean; // 迁移标记：launcherScripts 已转成工作流（幂等）
   youdaoAppKey: string;          // 有道翻译 appKey（Phase 2 用）
   youdaoSecret: string;          // 有道翻译 secret（Phase 2 用）
   locale?: string;               // 界面语言（zh-CN | en）；缺省时由主进程按系统语言初始化
@@ -51,6 +53,7 @@ export interface LauncherFolder {
 }
 
 // 自定义脚本：搜到即可执行；needsInput 时把 keyword 后的文本作为 $1 传入。
+// （已被工作流取代：加载时自动迁移为 Keyword+Run Script 工作流，此类型仅为迁移兼容保留。）
 export interface LauncherScript {
   name: string;         // 显示名
   keyword?: string;     // 可选前缀触发（如 "fy"）；空则按名称匹配
@@ -58,6 +61,35 @@ export interface LauncherScript {
   icon?: string;        // emoji / 图标
   needsInput?: boolean; // 是否需要输入
   output?: "copy" | "none"; // 输出处理：复制 stdout / 忽略。默认 copy
+}
+
+// ── 工作流编排（类 Alfred Workflow）──
+// 一个工作流 = 一张节点图：触发(Trigger) → 输入(Input/Script Filter) → 动作(Action) → 输出(Output)。
+// 节点间用连线连接，连线可带修饰键（回车/⌘/⌥/⌃/⇧）走不同分支。兼容 Alfred Script Filter JSON。
+export interface WorkflowNode {
+  id: string;                        // 节点内唯一 id
+  type: string;                      // "trigger.keyword" | "trigger.hotkey" | "input.scriptfilter"
+                                     // | "action.script" | "action.copy" | "action.paste"
+                                     // | "action.openurl" | "action.openfile" | "action.assistant"
+                                     // | "action.inspiration" | "output.notify" | "output.largetype"
+  x: number;                         // 画布坐标
+  y: number;
+  config: Record<string, unknown>;   // 节点配置（随 type 不同）
+}
+// 连线：from 节点输出 → to 节点输入；mod 指定触发该分支的修饰键（空=回车）。
+export interface WorkflowConnection {
+  from: string;
+  to: string;
+  mod?: "" | "cmd" | "alt" | "ctrl" | "shift" | "cmd+alt" | "cmd+shift" | "cmd+ctrl";
+}
+export interface Workflow {
+  id: string;
+  name: string;
+  icon?: string;                     // emoji 或 图标路径
+  enabled: boolean;
+  variables?: Record<string, string>; // 工作流级变量（可含密钥），注入脚本 env
+  nodes: WorkflowNode[];
+  connections: WorkflowConnection[];
 }
 
 const envBool = (k: string, d: boolean) => {
@@ -108,6 +140,8 @@ function defaults(configDir: string): UmbraConfig {
     launcherShortcut: process.env.UMBRA_LAUNCHER_SHORTCUT || "Alt+Space",
     launcherFolders: [],
     launcherScripts: [],
+    launcherWorkflows: [],
+    launcherScriptsMigrated: false,
     youdaoAppKey: process.env.UMBRA_YOUDAO_APPKEY || "",
     youdaoSecret: process.env.UMBRA_YOUDAO_SECRET || "",
   };

@@ -149,7 +149,11 @@
     "launcherScriptKeyword": "关键词",
     "launcherScriptCmd": "shell 命令（输入作为 $1）",
     "launcherScriptInput": "需输入",
-    "launcherScriptHint": "有关键词时用「关键词 内容」触发（内容作为 $1）；无关键词则按名称搜到即执行。结果 stdout 自动复制。"
+    "launcherScriptHint": "有关键词时用「关键词 内容」触发（内容作为 $1）；无关键词则按名称搜到即执行。结果 stdout 自动复制。",
+    "launcherWorkflows": "工作流编排",
+    "launcherWorkflowsCount": "{{count}} 个工作流",
+    "launcherWorkflowsOpen": "编辑工作流",
+    "launcherWorkflowsHint": "类 Alfred Workflow 的可视化编排：触发 → 脚本 → 动作。兼容 Alfred Script Filter JSON，现有脚本已自动迁移为工作流。"
   },
   "logs": {
     "title": "日志",

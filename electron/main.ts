@@ -56,6 +56,7 @@ function reregisterShortcuts(): void {
   clipboard?.registerShortcut();
   screenshot?.registerShortcut();
   launcher?.registerShortcut();
+  launcher?.registerWorkflowHotkeys();  // 工作流里的 Hotkey 触发
 }
 
 // 打包后的 .app 只有极简 PATH（看不到 homebrew/nvm/npm 全局），导致 which(claude/codex/ffmpeg) 找不到。

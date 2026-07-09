@@ -7,6 +7,7 @@ import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/locale";
 import { changeLocale } from "../../i18n";
+import { WorkflowEditor, type WF } from "../launcher/WorkflowEditor";
 
 const hasClip = typeof (window as unknown as { umbraClip?: unknown }).umbraClip !== "undefined";
 const hasShot = typeof (window as unknown as { umbraShot?: unknown }).umbraShot !== "undefined";
@@ -322,6 +323,8 @@ interface LauncherAPI {
   setYoudao(appKey: string, secret: string): Promise<void>;
   pickPath(): Promise<string>;
   pickApp(): Promise<string>;
+  getWorkflows(): Promise<WF[]>;
+  setWorkflows(workflows: WF[]): Promise<void>;
 }
 
 // 浏览器 KeyboardEvent → Electron Accelerator（如 ⌥Space → "Alt+Space"）。未按到主键返回 null。
@@ -351,17 +354,14 @@ function LauncherCard() {
   const [ydKey, setYdKey] = useState("");
   const [ydSecret, setYdSecret] = useState("");
   const [ydSet, setYdSet] = useState(false);
-  const [scripts, setScripts] = useState<LauncherScript[]>([]);
-  const [sdraft, setSdraft] = useState<LauncherScript>({ name: "", keyword: "", command: "", needsInput: false });
+  const [wfOpen, setWfOpen] = useState(false);
+  const [wfCount, setWfCount] = useState(0);
 
-  useEffect(() => { void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); setFolders(s.folders || []); setScripts(s.scripts || []); setYdSet(s.youdaoConfigured); }); }, []);
+  useEffect(() => {
+    void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); setFolders(s.folders || []); setYdSet(s.youdaoConfigured); });
+    void api.getWorkflows().then((w) => setWfCount(w.length));
+  }, []);
 
-  const saveScripts = (list: LauncherScript[]) => { setScripts(list); void api.setScripts(list); };
-  const addScript = () => {
-    if (!sdraft.name.trim() || !sdraft.command.trim()) return;
-    saveScripts([...scripts, { ...sdraft, name: sdraft.name.trim(), keyword: sdraft.keyword?.trim() || undefined, command: sdraft.command.trim(), output: "copy" }]);
-    setSdraft({ name: "", keyword: "", command: "", needsInput: false });
-  };
   // 拖拽文件夹/文件/App 进来即添加为书签。
   const onDropFolders = (e: React.DragEvent) => {
     e.preventDefault();
@@ -438,26 +438,14 @@ function LauncherCard() {
         </div>
       </div>
       <div className="pt-3 mt-1 border-t border-border">
-        <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherScripts")}</div>
-        <div className="flex flex-col gap-1.5 mb-2">
-          {scripts.length ? scripts.map((s, i) => (
-            <div key={i} className="flex items-center gap-2 text-[12.5px] bg-bg border border-border rounded-lg px-[10px] py-[7px]">
-              <span className="font-medium">{s.icon || "📜"} {s.name}</span>
-              {s.keyword ? <span className="text-orange-text text-[11px]">{s.keyword}</span> : null}
-              <span className="text-muted truncate flex-1 font-mono text-[11px]">{s.command}</span>
-              <button className="text-danger text-[12px]" onClick={() => saveScripts(scripts.filter((_, j) => j !== i))}>{t("common.delete")}</button>
-            </div>
-          )) : <div className="text-[12px] text-muted">{t("settings.launcherScriptsEmpty")}</div>}
+        <div className="flex items-center gap-2 mb-1.5">
+          <div className="text-[12.5px] font-semibold flex-1">{t("settings.launcherWorkflows")}</div>
+          <span className="text-[11.5px] text-muted">{t("settings.launcherWorkflowsCount", { count: wfCount })}</span>
+          <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => setWfOpen(true)}>{t("settings.launcherWorkflowsOpen")}</button>
         </div>
-        <div className="flex items-center gap-1.5 flex-wrap">
-          <input value={sdraft.name} onChange={(e) => setSdraft({ ...sdraft, name: e.target.value })} placeholder={t("settings.launcherScriptName")} className={`w-[110px] ${inputCls}`} />
-          <input value={sdraft.keyword} onChange={(e) => setSdraft({ ...sdraft, keyword: e.target.value })} placeholder={t("settings.launcherScriptKeyword")} className={`w-[90px] ${inputCls} font-mono`} />
-          <input value={sdraft.command} onChange={(e) => setSdraft({ ...sdraft, command: e.target.value })} placeholder={t("settings.launcherScriptCmd")} className={`flex-1 min-w-[180px] ${inputCls} font-mono`} />
-          <label className="flex items-center gap-1 text-[11.5px] text-muted"><input type="checkbox" checked={!!sdraft.needsInput} onChange={(e) => setSdraft({ ...sdraft, needsInput: e.target.checked })} />{t("settings.launcherScriptInput")}</label>
-          <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={addScript}>{t("common.add")}</button>
-        </div>
-        <div className="text-[11px] text-muted mt-1.5">{t("settings.launcherScriptHint")}</div>
+        <div className="text-[11px] text-muted">{t("settings.launcherWorkflowsHint")}</div>
       </div>
+      {wfOpen ? <WorkflowEditor onClose={() => { setWfOpen(false); void api.getWorkflows().then((w) => setWfCount(w.length)); }} /> : null}
       <div className="pt-3 mt-1 border-t border-border">
         <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherYoudao")}</div>
         <div className="flex items-center gap-1.5 flex-wrap">

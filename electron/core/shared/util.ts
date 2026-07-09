@@ -32,12 +32,17 @@ export interface RunOpts {
   cwd?: string;
   timeoutMs?: number;
   onLine?: (line: string) => void;
+  env?: Record<string, string>;  // 追加环境变量（并入 process.env）；工作流脚本注入变量用
 }
 
 // 以 argv 形式启动子进程（不经 shell），合并 stdout/stderr，带超时与逐行回调。
 export function run(cmd: string, args: string[], opts: RunOpts = {}): Promise<RunResult> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(cmd, args, {
+      cwd: opts.cwd,
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
     let output = "";
     let timedOut = false;
     let buf = "";

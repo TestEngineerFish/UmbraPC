@@ -93,7 +93,7 @@ contextBridge.exposeInMainWorld("umbraClip", {
 // 快捷入口桥（浮层搜索窗渲染层用）。
 contextBridge.exposeInMainWorld("umbraLauncher", {
   query: (q: string) => ipcRenderer.invoke("launcher:query", q),
-  run: (id: string) => ipcRenderer.invoke("launcher:run", id),
+  run: (id: string, mod?: string) => ipcRenderer.invoke("launcher:run", id, mod || ""),
   sendAssistant: (text: string) => ipcRenderer.invoke("launcher:sendAssistant", text),
   hide: () => ipcRenderer.invoke("launcher:hide"),
   getSettings: () => ipcRenderer.invoke("launcher:getSettings"),
@@ -102,6 +102,8 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   setFolders: (folders: unknown) => ipcRenderer.invoke("launcher:setFolders", folders),
   setScripts: (scripts: unknown) => ipcRenderer.invoke("launcher:setScripts", scripts),
   setYoudao: (appKey: string, secret: string) => ipcRenderer.invoke("launcher:setYoudao", appKey, secret),
+  getWorkflows: () => ipcRenderer.invoke("launcher:getWorkflows"),
+  setWorkflows: (workflows: unknown) => ipcRenderer.invoke("launcher:setWorkflows", workflows),
   resize: (h: number) => ipcRenderer.invoke("launcher:resize", h),
   pickPath: () => ipcRenderer.invoke("launcher:pickPath"),
   pickApp: () => ipcRenderer.invoke("launcher:pickApp"),

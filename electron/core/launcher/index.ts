@@ -4,16 +4,17 @@
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { promises as fs } from "node:fs";
-import { ConfigStore, expandHome, LauncherFolder, LauncherScript } from "../config";
+import { ConfigStore, expandHome, LauncherFolder, LauncherScript, Workflow } from "../config";
 import { ClipStore } from "../clipboard/store";
 import { writeToClipboard, simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
 import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } from "./tools";
+import { WorkflowEngine, migrateScriptsToWorkflows, NO_BRANCH } from "./workflow";
 
 // ── 结果与动作类型 ──
 export interface LauncherAction {
-  kind: "open_app" | "open_path" | "paste_clip" | "copy" | "run_script";
+  kind: "open_app" | "open_path" | "paste_clip" | "copy" | "run_script" | "workflow";
   payload: Record<string, unknown>;
 }
 export interface LauncherResult {
@@ -21,9 +22,10 @@ export interface LauncherResult {
   title: string;
   subtitle?: string;
   icon?: string;           // data URL / emoji
-  source: string;          // 来源 provider（app/folder/clipboard）
+  source: string;          // 来源 provider（app/folder/clipboard/workflow）
   score: number;           // 合并排序用
   action: LauncherAction;  // 主动作（回车执行）
+  mods?: string[];         // 工作流结果的修饰键分支（如 ["cmd"]），供渲染层提示 ⌘ 分支
 }
 
 interface ManagerOpts {
@@ -42,13 +44,19 @@ export class LauncherManager {
   private lastQuery = "";                              // 本次查询词，供 run 记录使用频率
   private usage: Record<string, { c: number; t: number }> = {};  // 使用频率学习：`${query}\n${id}` → {次数,最近}
   private usageFile: string;
+  private engine: WorkflowEngine;  // 工作流执行引擎
 
   constructor(private cfg: ConfigStore, private clipStore: ClipStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
     this.usageFile = path.join(userData, "launcher-usage.json");
+    this.engine = new WorkflowEngine(cfg, {
+      sendAssistant: (t) => this.chatSender?.(t),
+      hide: (rf) => this.hide(rf),
+    });
   }
 
   async init(): Promise<void> {
     this.registerIpc();
+    migrateScriptsToWorkflows(this.cfg);  // 一次性：旧脚本 → 工作流
     try { this.usage = JSON.parse(await fs.readFile(this.usageFile, "utf-8")); } catch { this.usage = {}; }
     // 预热：启动时就把浮层窗建好并加载渲染层（藏着），首次唤起即可秒开，避免忽快忽慢。
     try { await this.ensurePanel(); } catch { /* 预热失败不影响后续按需创建 */ }
@@ -167,9 +175,9 @@ export class LauncherManager {
     this.lastQuery = q;
     let results: LauncherResult[] = [];
 
-    // ① 自定义脚本 keyword 优先（如 "fy hello" 若用户自建了 fy 脚本）。
-    const scriptKw = this.matchScriptKeyword(q);
-    if (scriptKw) return this.finalize(q, [scriptKw]);
+    // ① 工作流 keyword 触发优先（如自建的 "yd hello"）。命中即返回该工作流结果。
+    const wf = await this.engine.query(q).catch(() => [] as LauncherResult[]);
+    if (wf.length) return this.finalize(q, wf);
 
     // ② 内置工具 keyword（翻译/编解码）。
     const kw = q.match(/^(fy|翻译|uni|unicode|url|b64|base64)\s+([\s\S]+)$/i);
@@ -183,13 +191,13 @@ export class LauncherManager {
       return this.finalize(q, results);
     }
 
-    // ③ 普通：并发 app/文件夹/剪贴板 + 脚本(按名) + 计算器/单位换算。
+    // ③ 普通：并发 app/文件夹/剪贴板 + 计算器/单位换算。
     const [apps, folders, clips] = await Promise.all([
       this.searchApps(q).catch(() => []),
       Promise.resolve(this.searchFolders(q)),
       Promise.resolve(this.searchClipboard(q)),
     ]);
-    results.push(...folders, ...apps, ...clips, ...this.searchScripts(q));
+    results.push(...folders, ...apps, ...clips);
     const c = calc(q);
     if (c !== null) results.unshift(this.copyResult("calc", `= ${c}`, "计算结果 · 回车复制", "🔢", 300, c));
     const u = convertUnits(q);
@@ -249,37 +257,6 @@ export class LauncherManager {
     } catch (e) {
       return [this.copyResult("fy", "翻译请求失败", String(e).slice(0, 60), "🌐", 300, "")];
     }
-  }
-
-  // Provider（Phase3）：自定义脚本。keyword 命中 → 该脚本（keyword 后为输入）；否则按名称匹配。
-  private matchScriptKeyword(q: string): LauncherResult | null {
-    const scripts = this.cfg.get().launcherScripts || [];
-    for (let i = 0; i < scripts.length; i++) {
-      const s = scripts[i];
-      if (!s.keyword) continue;
-      const m = q.match(new RegExp(`^${s.keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s+([\\s\\S]+))?$`, "i"));
-      if (m) return this.scriptResult(s, i, m[1] || "");
-    }
-    return null;
-  }
-  private searchScripts(q: string): LauncherResult[] {
-    const scripts = this.cfg.get().launcherScripts || [];
-    const ql = q.toLowerCase();
-    return scripts
-      .map((s, i): LauncherResult | null => {
-        if (s.needsInput && !s.keyword) return null;  // 需输入但无 keyword 的脚本靠 keyword 触发
-        if (q && !s.name.toLowerCase().includes(ql) && !(s.keyword || "").toLowerCase().includes(ql)) return null;
-        return this.scriptResult(s, i, "");
-      })
-      .filter((r): r is LauncherResult => r !== null);
-  }
-  private scriptResult(s: LauncherScript, i: number, input: string): LauncherResult {
-    return {
-      id: `script:${i}`, title: s.name,
-      subtitle: (s.needsInput ? (input ? `输入：${input.slice(0, 30)}` : "需输入") : "脚本") + " · 回车执行",
-      icon: s.icon || "📜", source: "script", score: 140,
-      action: { kind: "run_script", payload: { command: s.command, input, output: s.output || "copy" } },
-    };
   }
 
   // Provider①：启动 App（mdfind 搜已安装应用 + 提取图标）。
@@ -350,13 +327,18 @@ export class LauncherManager {
   }
 
   // 返回：空字符串=已隐藏窗口(无需提示)；非空=提示文案(渲染层弹 toast 后再隐藏)。
-  private async runResult(id: string): Promise<string> {
+  // mod：回车分支修饰键（""=回车，"cmd"/"alt"…），仅工作流结果用。
+  private async runResult(id: string, mod = ""): Promise<string> {
     const r = this.cache.get(id);
     if (!r) return "";
     this.noteUse(id);  // 学习：这次在该 query 下选了它
     const clip = async (text: string) => { const { clipboard } = await import("electron"); clipboard.writeText(text); };
 
     const a = r.action;
+    if (a.kind === "workflow") {
+      const fb = await this.engine.run(String(a.payload.token), mod);
+      return fb === NO_BRANCH ? "" : fb;  // 无该修饰键分支 → 静默（渲染层已按 mods 决定是否走此路）
+    }
     if (a.kind === "open_app") {
       await run("open", [String(a.payload.path)]);
       await this.hide(false);
@@ -401,7 +383,7 @@ export class LauncherManager {
   private async registerIpc(): Promise<void> {
     const { ipcMain, globalShortcut } = await import("electron");
     ipcMain.handle("launcher:query", (_e, q: string) => this.query(q));
-    ipcMain.handle("launcher:run", (_e, id: string) => this.runResult(id));
+    ipcMain.handle("launcher:run", (_e, id: string, mod?: string) => this.runResult(id, mod || ""));
     ipcMain.handle("launcher:sendAssistant", (_e, text: string) => this.sendAssistant(text));
     ipcMain.handle("launcher:hide", () => this.hide(true));
     // 渲染层上报内容高度 → 窗口贴合内容（顶部锚点不变），消除空白/暗框。
@@ -445,5 +427,25 @@ export class LauncherManager {
       this.cfg.save({ launcherScripts: Array.isArray(scripts) ? scripts : [] }));
     ipcMain.handle("launcher:setYoudao", (_e, appKey: string, secret: string) =>
       this.cfg.save({ youdaoAppKey: String(appKey || ""), youdaoSecret: String(secret || "") }));
+    // 工作流读写（画布编辑器用）。写入后重注册 Hotkey 触发。
+    ipcMain.handle("launcher:getWorkflows", () => this.cfg.get().launcherWorkflows || []);
+    ipcMain.handle("launcher:setWorkflows", async (_e, workflows: Workflow[]) => {
+      await this.cfg.save({ launcherWorkflows: Array.isArray(workflows) ? workflows : [] });
+      this.reregister();  // 工作流里的 Hotkey 触发可能变化 → 重注册全局快捷键
+    });
+  }
+
+  // 注册工作流里的 Hotkey 触发（由 main.ts 在 reregisterShortcuts 里调用；清理由 main.ts 统一做）。
+  async registerWorkflowHotkeys(): Promise<void> {
+    if (!this.cfg.get().launcherEnabled) return;
+    const { globalShortcut } = await import("electron");
+    for (const h of this.engine.hotkeys()) {
+      try {
+        if (globalShortcut.isRegistered(h.accelerator)) continue;  // 让位给已占用的快捷键
+        globalShortcut.register(h.accelerator, () => this.engine.fireHotkey(h.wfId, h.nodeId));
+      } catch (e) {
+        console.warn(`[launcher] 工作流 Hotkey 注册失败：${h.accelerator}`, e);
+      }
+    }
   }
 }

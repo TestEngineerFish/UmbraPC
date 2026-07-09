@@ -8,10 +8,11 @@ interface LauncherResult {
   icon?: string;      // data URL / emoji
   source: string;
   score: number;
+  mods?: string[];    // 工作流结果的修饰键分支（如 ["cmd"]）
 }
 interface LauncherAPI {
   query(q: string): Promise<LauncherResult[]>;
-  run(id: string): Promise<string>;
+  run(id: string, mod?: string): Promise<string>;
   sendAssistant(text: string): Promise<string>;
   hide(): Promise<void>;
   resize(h: number): Promise<void>;
@@ -92,10 +93,10 @@ export function Launcher() {
     return () => cancelAnimationFrame(id);
   }, [results]);
 
-  const runAt = useCallback(async (i: number) => {
+  const runAt = useCallback(async (i: number, mod = "") => {
     const r = results[i];
     if (!r) return;
-    const msg = await api.run(r.id);
+    const msg = await api.run(r.id, mod);
     // 有提示文案（复制/脚本等静默动作）→ 弹 toast 反馈后再关闭；否则窗口已由主进程隐藏。
     if (msg) { setToast(msg); setTimeout(() => { setToast(""); void api.hide(); }, 850); }
   }, [results]);
@@ -108,8 +109,13 @@ export function Launcher() {
     else if (e.key === "Enter") {
       e.preventDefault();
       if (e.metaKey) {
-        // ⌘↵：把输入框里的文字直接发给秘书（跳聊天页），不依赖搜索结果。
-        if (q.trim()) { void api.sendAssistant(q.trim()); void api.hide(); }
+        // ⌘↵：若选中的是带 cmd 分支的工作流结果 → 走该分支；否则把输入文字发给秘书。
+        const r = results[sel];
+        if (r?.mods?.includes("cmd")) void runAt(sel, "cmd");
+        else if (q.trim()) { void api.sendAssistant(q.trim()); void api.hide(); }
+      } else if (e.altKey) {
+        const r = results[sel];
+        if (r?.mods?.includes("alt")) void runAt(sel, "alt");  // ⌥↵：工作流 alt 分支
       } else {
         void runAt(sel);  // ↵：执行选中结果的主动作
       }
