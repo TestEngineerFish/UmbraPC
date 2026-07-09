@@ -3,17 +3,16 @@
 // 窗口/焦点还原范式镜像 ClipboardManager。
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
-import { ConfigStore, expandHome, LauncherFolder, LauncherScript, Workflow } from "../config";
+import { ConfigStore, expandHome, LauncherFolder, LauncherScript, Phrase, Workflow } from "../config";
 import { ClipStore } from "../clipboard/store";
 import { writeToClipboard, simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
-import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } from "./tools";
-import { WorkflowEngine, migrateScriptsToWorkflows, migrateFoldersAndYoudao, NO_BRANCH } from "./workflow";
+import { WorkflowEngine, migrateScriptsToWorkflows, migrateFoldersAndYoudao, seedBuiltinTools, NO_BRANCH } from "./workflow";
 
 // ── 结果与动作类型 ──
 export interface LauncherAction {
-  kind: "open_app" | "open_path" | "paste_clip" | "copy" | "run_script" | "workflow";
+  kind: "open_app" | "open_path" | "paste_clip" | "paste_text" | "copy" | "run_script" | "workflow";
   payload: Record<string, unknown>;
 }
 export interface LauncherResult {
@@ -47,6 +46,7 @@ export class LauncherManager {
   private wfWin: Electron.BrowserWindow | null = null;  // 工作流编排 独立窗口
   private largeWin: Electron.BrowserWindow | null = null;  // 大字显示浮层窗
   private pendingLarge = "";  // 大字待显示文本（等渲染层 ready 后发送）
+  private largeBounds: Electron.Rectangle | null = null;  // 大字窗目标位置（渲染完成后再显示）
 
   constructor(private cfg: ConfigStore, private clipStore: ClipStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
     this.usageFile = path.join(userData, "launcher-usage.json");
@@ -61,6 +61,7 @@ export class LauncherManager {
     this.registerIpc();
     migrateScriptsToWorkflows(this.cfg);   // 一次性：旧脚本 → 工作流
     migrateFoldersAndYoudao(this.cfg);     // 一次性：文件夹书签 + 有道 → 工作流
+    seedBuiltinTools(this.cfg);            // 一次性：编解码/计算/换算 → 默认工作流
     try { this.usage = JSON.parse(await fs.readFile(this.usageFile, "utf-8")); } catch { this.usage = {}; }
     // 预热：启动时就把浮层窗建好并加载渲染层（藏着），首次唤起即可秒开，避免忽快忽慢。
     try { await this.ensurePanel(); } catch { /* 预热失败不影响后续按需创建 */ }
@@ -177,34 +178,43 @@ export class LauncherManager {
   private async query(raw: string): Promise<LauncherResult[]> {
     const q = (raw || "").trim();
     this.lastQuery = q;
-    let results: LauncherResult[] = [];
+    const results: LauncherResult[] = [];
 
-    // ① 工作流 keyword 触发优先（如自建的 "yd hello"）。命中即返回该工作流结果。
+    // ① 工作流 keyword 触发优先（如 "yd hello" / "uni 你好"）。命中即独占返回。
     const wf = await this.engine.query(q).catch(() => [] as LauncherResult[]);
     if (wf.length) return this.finalize(q, wf);
 
-    // ② 内置工具 keyword（编解码）。翻译/文件夹书签已并入工作流。
-    const kw = q.match(/^(uni|unicode|url|b64|base64)\s+([\s\S]+)$/i);
-    if (kw) {
-      const type = kw[1].toLowerCase();
-      const arg = kw[2];
-      if (type === "uni" || type === "unicode") results = this.codecResults(unicodeTransform(arg));
-      else if (type === "url") results = this.codecResults(urlTransform(arg));
-      else results = this.codecResults(base64Transform(arg));
-      return this.finalize(q, results);
-    }
-
-    // ③ 普通：并发 app/剪贴板 + 计算器/单位换算。
-    const [apps, clips] = await Promise.all([
+    // ② 普通：并发 app/剪贴板 + 常用语 + 「始终触发」工作流（计算器/单位换算等）。
+    const [apps, clips, always] = await Promise.all([
       this.searchApps(q).catch(() => []),
       Promise.resolve(this.searchClipboard(q)),
+      this.engine.queryAlways(q).catch(() => [] as LauncherResult[]),
     ]);
-    results.push(...apps, ...clips);
-    const c = calc(q);
-    if (c !== null) results.unshift(this.copyResult("calc", `= ${c}`, "计算结果 · 回车复制", "🔢", 300, c));
-    const u = convertUnits(q);
-    if (u) results.unshift(this.copyResult("unit", u.title, u.subtitle + " · 回车复制", "📐", 300, u.title));
+    results.push(...always, ...this.searchPhrases(q), ...apps, ...clips);
     return this.finalize(q, results);
+  }
+
+  // Provider：常用语（按名称/内容/关键词搜；回车插入到前台）。
+  private searchPhrases(q: string): LauncherResult[] {
+    if (!q) return [];
+    const ql = q.toLowerCase();
+    const phrases = this.cfg.get().phrases || [];
+    return phrases
+      .map((p, i): LauncherResult | null => {
+        const kw = (p.keyword || "").toLowerCase();
+        const nameHit = (p.name || "").toLowerCase().includes(ql);
+        const kwHit = kw && (kw === ql || kw.startsWith(ql));
+        const contentHit = (p.content || "").toLowerCase().includes(ql);
+        if (!nameHit && !kwHit && !contentHit) return null;
+        const score = 130 + (kwHit ? 60 : nameHit ? 30 : 0) - i;  // 靠前的略高
+        return {
+          id: `phrase:${p.id}`, title: p.name || p.content.slice(0, 40),
+          subtitle: `常用语 · 回车插入 · ${p.content.replace(/\s+/g, " ").slice(0, 50)}`,
+          icon: "💬", source: "phrase", score,
+          action: { kind: "paste_text", payload: { text: p.content } },
+        };
+      })
+      .filter((r): r is LauncherResult => r !== null);
   }
 
   // 使用频率加权 + 排序 + 截断 + 缓存。
@@ -215,14 +225,6 @@ export class LauncherManager {
     this.cache.clear();
     for (const r of top) this.cache.set(r.id, r);
     return top;
-  }
-
-  // 构造一个「回车复制」结果。
-  private copyResult(id: string, title: string, subtitle: string, icon: string, score: number, text: string): LauncherResult {
-    return { id: `${id}:${title}`, title, subtitle, icon, source: id, score, action: { kind: "copy", payload: { text } } };
-  }
-  private codecResults(items: { label: string; value: string }[]): LauncherResult[] {
-    return items.map((it, i) => this.copyResult(`codec${i}`, it.value, `${it.label} · 回车复制`, "🔡", 300 - i, it.value));
   }
 
   // Provider①：启动 App（mdfind 搜已安装应用 + 提取图标）。
@@ -320,6 +322,14 @@ export class LauncherManager {
       await simulatePaste();
       return "";
     }
+    if (a.kind === "paste_text") {
+      const text = String(a.payload.text || "");
+      await clip(text);
+      await this.hide(true);                       // 隐藏并把焦点还给原应用
+      await new Promise((rr) => setTimeout(rr, 180));
+      const ok = await simulatePaste();            // 未授权辅助功能则降级为仅复制
+      return ok ? "" : "已复制 ✓";
+    }
     return "";
   }
 
@@ -381,9 +391,28 @@ export class LauncherManager {
       this.reregister();  // 工作流里的 Hotkey 触发可能变化 → 重注册全局快捷键
     });
     ipcMain.handle("launcher:openWorkflowEditor", () => this.openWorkflowEditor());
-    // 大字显示浮层：渲染层 ready 时索取文本；关闭时隐藏窗口。
+    // 常用语读写（设置页管理）。
+    ipcMain.handle("launcher:getPhrases", () => this.cfg.get().phrases || []);
+    ipcMain.handle("launcher:setPhrases", (_e, phrases: Phrase[]) => this.cfg.save({ phrases: Array.isArray(phrases) ? phrases : [] }));
+    // 大字显示浮层：渲染层 ready 时索取文本；渲染完成后再显示窗口（去残影）；关闭时隐藏。
     ipcMain.handle("largetype:ready", () => this.pendingLarge);
+    ipcMain.handle("largetype:rendered", () => {
+      if (!this.largeWin || this.largeWin.isDestroyed()) return;
+      if (this.largeBounds) this.largeWin.setBounds(this.largeBounds);
+      this.largeWin.showInactive();
+      this.largeWin.focus();
+    });
     ipcMain.handle("largetype:close", () => { if (this.largeWin && !this.largeWin.isDestroyed()) this.largeWin.hide(); });
+    // 文件/App 图标 → dataURL（工作流编辑器 Launch 列表用）。
+    ipcMain.handle("launcher:fileIcon", async (_e, p: string) => {
+      try {
+        const { app } = await import("electron");
+        const ep = expandHome(String(p || ""));
+        if (/\.app$/i.test(ep)) { try { const ic = await getAppIcon(ep); if (ic) return ic; } catch { /* 退回 getFileIcon */ } }
+        const img = await app.getFileIcon(ep, { size: "normal" });
+        return img && !img.isEmpty() ? img.toDataURL() : "";
+      } catch { return ""; }
+    });
   }
 
   // 打开「工作流编排」独立窗口（带原生标题栏，不覆盖主窗口）。
@@ -403,15 +432,16 @@ export class LauncherManager {
   }
 
   // 大字显示：全屏透明浮层，居中放大显示内容（点击/Esc 关闭）。
+  // 窗口先隐藏，渲染层把新内容画好后回调 largetype:rendered 再显示，避免先闪出上次内容。
   async showLargeType(text: string): Promise<void> {
     const t = (text || "").trim();
     if (!t) return;
     this.pendingLarge = t;
     const { BrowserWindow, screen } = await import("electron");
-    const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    this.largeBounds = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
     if (!this.largeWin || this.largeWin.isDestroyed()) {
       const win = new BrowserWindow({
-        x: wa.x, y: wa.y, width: wa.width, height: wa.height,
+        x: this.largeBounds.x, y: this.largeBounds.y, width: this.largeBounds.width, height: this.largeBounds.height,
         frame: false, transparent: true, resizable: false, movable: false,
         skipTaskbar: true, show: false, fullscreenable: false, hasShadow: false,
         backgroundColor: "#00000000",
@@ -426,11 +456,9 @@ export class LauncherManager {
       win.webContents.on("did-finish-load", () => win.webContents.send("largetype:text", this.pendingLarge));
       this.largeWin = win;
     } else {
+      if (this.largeWin.isVisible()) this.largeWin.hide();  // 先藏起旧内容，等渲染完再显
       this.largeWin.webContents.send("largetype:text", this.pendingLarge);
     }
-    this.largeWin.setBounds(wa);
-    this.largeWin.showInactive();
-    this.largeWin.focus();
   }
 
   // 注册工作流里的 Hotkey 触发（由 main.ts 在 reregisterShortcuts 里调用；清理由 main.ts 统一做）。

@@ -106,6 +106,9 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   getWorkflows: () => ipcRenderer.invoke("launcher:getWorkflows"),
   setWorkflows: (workflows: unknown) => ipcRenderer.invoke("launcher:setWorkflows", workflows),
   openWorkflowEditor: () => ipcRenderer.invoke("launcher:openWorkflowEditor"),
+  fileIcon: (p: string) => ipcRenderer.invoke("launcher:fileIcon", p),
+  getPhrases: () => ipcRenderer.invoke("launcher:getPhrases"),
+  setPhrases: (phrases: unknown) => ipcRenderer.invoke("launcher:setPhrases", phrases),
   resize: (h: number) => ipcRenderer.invoke("launcher:resize", h),
   pickPath: () => ipcRenderer.invoke("launcher:pickPath"),
   pickApp: () => ipcRenderer.invoke("launcher:pickApp"),
@@ -119,6 +122,7 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
 // 大字显示浮层桥。
 contextBridge.exposeInMainWorld("umbraLarge", {
   ready: () => ipcRenderer.invoke("largetype:ready"),
+  rendered: () => ipcRenderer.invoke("largetype:rendered"),
   close: () => ipcRenderer.invoke("largetype:close"),
   onText: (cb: (text: string) => void) => {
     const l = (_e: unknown, text: string) => cb(text);

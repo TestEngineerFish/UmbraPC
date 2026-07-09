@@ -39,9 +39,11 @@ export interface UmbraConfig {
   launcherShortcut: string;      // 唤起快捷键（Electron Accelerator，默认 ⌥Space = "Alt+Space"）
   launcherFolders: LauncherFolder[]; // 文件夹书签：用指定软件打开固定文件夹
   launcherScripts: LauncherScript[]; // 自定义脚本（旧；加载时迁移为工作流）
+  phrases: Phrase[];                 // 常用语（快捷入口可搜、回车插入；设置里管理排序）
   launcherWorkflows: Workflow[];     // 工作流编排（类 Alfred Workflow）
   launcherScriptsMigrated?: boolean; // 迁移标记：launcherScripts 已转成工作流（幂等）
   launcherMigratedV2?: boolean;      // 迁移标记 V2：文件夹书签 + 有道 已转成工作流
+  launcherToolsSeeded?: boolean;     // 种子标记：内置工具(编解码/计算/换算)已作为默认工作流写入
   youdaoAppKey: string;          // 有道翻译 appKey（Phase 2 用）
   youdaoSecret: string;          // 有道翻译 secret（Phase 2 用）
   locale?: string;               // 界面语言（zh-CN | en）；缺省时由主进程按系统语言初始化
@@ -63,6 +65,14 @@ export interface LauncherScript {
   icon?: string;        // emoji / 图标
   needsInput?: boolean; // 是否需要输入
   output?: "copy" | "none"; // 输出处理：复制 stdout / 忽略。默认 copy
+}
+
+// 常用语：在快捷入口按名称/内容/关键词搜到，回车即插入（粘贴到前台应用）。数组顺序即显示排序。
+export interface Phrase {
+  id: string;
+  name: string;      // 显示名/标签
+  content: string;   // 实际文本（插入的内容）
+  keyword?: string;  // 可选关键词，快速定位
 }
 
 // ── 工作流编排（类 Alfred Workflow）──
@@ -144,6 +154,7 @@ function defaults(configDir: string): UmbraConfig {
     launcherShortcut: process.env.UMBRA_LAUNCHER_SHORTCUT || "Alt+Space",
     launcherFolders: [],
     launcherScripts: [],
+    phrases: [],
     launcherWorkflows: [],
     launcherScriptsMigrated: false,
     youdaoAppKey: process.env.UMBRA_YOUDAO_APPKEY || "",

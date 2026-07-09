@@ -1,5 +1,5 @@
 // 大字显示浮层：把内容放大居中显示在半透明浮层里；自动适配字号，超长可滚动；点击/Esc 关闭。
-interface LargeAPI { ready(): Promise<string>; close(): Promise<void>; onText(cb: (t: string) => void): () => void }
+interface LargeAPI { ready(): Promise<string>; rendered(): Promise<void>; close(): Promise<void>; onText(cb: (t: string) => void): () => void }
 const api = (window as unknown as { umbraLarge: LargeAPI }).umbraLarge;
 
 const style = document.createElement("style");
@@ -32,7 +32,7 @@ function fit(): void {
   txt.style.fontSize = Math.floor(best) + "px";
 }
 
-function show(text: string): void { txt.textContent = text || ""; fit(); }
+function show(text: string): void { txt.textContent = text || ""; fit(); void api.rendered(); }
 
 api.onText(show);
 void api.ready().then((t) => { if (t) show(t); });

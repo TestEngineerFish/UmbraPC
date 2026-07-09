@@ -46,7 +46,8 @@
     "colorYellow": "Yellow",
     "colorBlue": "Blue",
     "add": "Add",
-    "reset": "Reset"
+    "reset": "Reset",
+    "done": "Done"
   },
   "time": {
     "yesterday": "Yesterday",
@@ -155,7 +156,14 @@
     "launcherWorkflows": "Workflows",
     "launcherWorkflowsCount": "{{count}} workflows",
     "launcherWorkflowsOpen": "Edit workflows",
-    "launcherWorkflowsHint": "Alfred-style visual workflow editor: trigger → script → action. Compatible with Alfred Script Filter JSON; existing scripts were migrated automatically."
+    "launcherWorkflowsHint": "Alfred-style visual workflow editor: trigger → script → action. Compatible with Alfred Script Filter JSON; existing scripts were migrated automatically.",
+    "phrases": "Snippets",
+    "phrasesSub": "Searchable in launcher, Enter to insert",
+    "phrasesEmpty": "No snippets yet",
+    "phraseName": "Name",
+    "phraseKeyword": "Keyword",
+    "phraseContent": "Content (text to insert)",
+    "phrasesHint": "Search by name/keyword/content in the launcher; Enter inserts the content into the front app (needs Accessibility, else copy only). Reorder with ▲▼."
   },
   "logs": {
     "title": "Logs",

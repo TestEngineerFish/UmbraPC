@@ -46,7 +46,8 @@
     "colorYellow": "黄色",
     "colorBlue": "蓝色",
     "add": "新增",
-    "reset": "重置"
+    "reset": "重置",
+    "done": "完成"
   },
   "time": {
     "yesterday": "昨天",
@@ -155,7 +156,14 @@
     "launcherWorkflows": "工作流编排",
     "launcherWorkflowsCount": "{{count}} 个工作流",
     "launcherWorkflowsOpen": "编辑工作流",
-    "launcherWorkflowsHint": "类 Alfred Workflow 的可视化编排：触发 → 脚本 → 动作。兼容 Alfred Script Filter JSON，现有脚本已自动迁移为工作流。"
+    "launcherWorkflowsHint": "类 Alfred Workflow 的可视化编排：触发 → 脚本 → 动作。兼容 Alfred Script Filter JSON，现有脚本已自动迁移为工作流。",
+    "phrases": "常用语",
+    "phrasesSub": "快捷入口可搜、回车插入",
+    "phrasesEmpty": "还没有常用语",
+    "phraseName": "名称",
+    "phraseKeyword": "关键词",
+    "phraseContent": "内容（插入的文本）",
+    "phrasesHint": "在快捷入口输入名称/关键词/内容即可搜到，回车把内容插入到前台应用（需辅助功能权限，否则仅复制）。用左侧 ▲▼ 调整排序。"
   },
   "logs": {
     "title": "日志",
