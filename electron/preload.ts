@@ -104,6 +104,7 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   setYoudao: (appKey: string, secret: string) => ipcRenderer.invoke("launcher:setYoudao", appKey, secret),
   getWorkflows: () => ipcRenderer.invoke("launcher:getWorkflows"),
   setWorkflows: (workflows: unknown) => ipcRenderer.invoke("launcher:setWorkflows", workflows),
+  openWorkflowEditor: () => ipcRenderer.invoke("launcher:openWorkflowEditor"),
   resize: (h: number) => ipcRenderer.invoke("launcher:resize", h),
   pickPath: () => ipcRenderer.invoke("launcher:pickPath"),
   pickApp: () => ipcRenderer.invoke("launcher:pickApp"),

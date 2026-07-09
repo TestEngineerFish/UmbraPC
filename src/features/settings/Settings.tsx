@@ -7,7 +7,7 @@ import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/locale";
 import { changeLocale } from "../../i18n";
-import { WorkflowEditor, type WF } from "../launcher/WorkflowEditor";
+import { type WF } from "../launcher/WorkflowEditor";
 
 const hasClip = typeof (window as unknown as { umbraClip?: unknown }).umbraClip !== "undefined";
 const hasShot = typeof (window as unknown as { umbraShot?: unknown }).umbraShot !== "undefined";
@@ -325,6 +325,7 @@ interface LauncherAPI {
   pickApp(): Promise<string>;
   getWorkflows(): Promise<WF[]>;
   setWorkflows(workflows: WF[]): Promise<void>;
+  openWorkflowEditor(): Promise<void>;
 }
 
 // 浏览器 KeyboardEvent → Electron Accelerator（如 ⌥Space → "Alt+Space"）。未按到主键返回 null。
@@ -354,12 +355,14 @@ function LauncherCard() {
   const [ydKey, setYdKey] = useState("");
   const [ydSecret, setYdSecret] = useState("");
   const [ydSet, setYdSet] = useState(false);
-  const [wfOpen, setWfOpen] = useState(false);
   const [wfCount, setWfCount] = useState(0);
 
   useEffect(() => {
     void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); setFolders(s.folders || []); setYdSet(s.youdaoConfigured); });
-    void api.getWorkflows().then((w) => setWfCount(w.length));
+    const refreshWf = () => void api.getWorkflows().then((w) => setWfCount(w.length));
+    refreshWf();
+    window.addEventListener("focus", refreshWf);  // 从编辑器窗口切回时刷新计数
+    return () => window.removeEventListener("focus", refreshWf);
   }, []);
 
   // 拖拽文件夹/文件/App 进来即添加为书签。
@@ -441,11 +444,10 @@ function LauncherCard() {
         <div className="flex items-center gap-2 mb-1.5">
           <div className="text-[12.5px] font-semibold flex-1">{t("settings.launcherWorkflows")}</div>
           <span className="text-[11.5px] text-muted">{t("settings.launcherWorkflowsCount", { count: wfCount })}</span>
-          <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => setWfOpen(true)}>{t("settings.launcherWorkflowsOpen")}</button>
+          <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => void api.openWorkflowEditor()}>{t("settings.launcherWorkflowsOpen")}</button>
         </div>
         <div className="text-[11px] text-muted">{t("settings.launcherWorkflowsHint")}</div>
       </div>
-      {wfOpen ? <WorkflowEditor onClose={() => { setWfOpen(false); void api.getWorkflows().then((w) => setWfCount(w.length)); }} /> : null}
       <div className="pt-3 mt-1 border-t border-border">
         <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherYoudao")}</div>
         <div className="flex items-center gap-1.5 flex-wrap">

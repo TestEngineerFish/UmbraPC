@@ -45,6 +45,7 @@ export class LauncherManager {
   private usage: Record<string, { c: number; t: number }> = {};  // 使用频率学习：`${query}\n${id}` → {次数,最近}
   private usageFile: string;
   private engine: WorkflowEngine;  // 工作流执行引擎
+  private wfWin: Electron.BrowserWindow | null = null;  // 工作流编排 独立窗口
 
   constructor(private cfg: ConfigStore, private clipStore: ClipStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
     this.usageFile = path.join(userData, "launcher-usage.json");
@@ -433,6 +434,23 @@ export class LauncherManager {
       await this.cfg.save({ launcherWorkflows: Array.isArray(workflows) ? workflows : [] });
       this.reregister();  // 工作流里的 Hotkey 触发可能变化 → 重注册全局快捷键
     });
+    ipcMain.handle("launcher:openWorkflowEditor", () => this.openWorkflowEditor());
+  }
+
+  // 打开「工作流编排」独立窗口（带原生标题栏，不覆盖主窗口）。
+  async openWorkflowEditor(): Promise<void> {
+    const { BrowserWindow } = await import("electron");
+    if (this.wfWin && !this.wfWin.isDestroyed()) { this.wfWin.show(); this.wfWin.focus(); return; }
+    const win = new BrowserWindow({
+      width: 1060, height: 720, minWidth: 840, minHeight: 560,
+      title: "工作流编排",
+      backgroundColor: "#15110E",
+      webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
+    });
+    if (this.opts.devUrl) win.loadURL(`${this.opts.devUrl}/workflow.html`).catch(() => {});
+    else win.loadFile(path.join(this.opts.distDir, "workflow.html")).catch(() => {});
+    win.on("closed", () => { this.wfWin = null; });
+    this.wfWin = win;
   }
 
   // 注册工作流里的 Hotkey 触发（由 main.ts 在 reregisterShortcuts 里调用；清理由 main.ts 统一做）。

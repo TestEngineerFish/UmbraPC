@@ -19,6 +19,7 @@ export default defineConfig({
         screenshot: "screenshot.html",
         sticker: "sticker.html",
         launcher: "launcher.html",
+        workflow: "workflow.html",
       },
     },
   },

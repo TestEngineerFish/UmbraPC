@@ -86,6 +86,7 @@ export interface Workflow {
   id: string;
   name: string;
   icon?: string;                     // emoji 或 图标路径
+  desc?: string;                     // 描述（可选）
   enabled: boolean;
   variables?: Record<string, string>; // 工作流级变量（可含密钥），注入脚本 env
   nodes: WorkflowNode[];

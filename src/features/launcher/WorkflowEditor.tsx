@@ -1,10 +1,10 @@
-// 工作流可视化编辑器（类 Alfred Workflow）。全屏浮层：左工作流列表 / 中可拖拽画布 / 右节点面板。
-// 画布：节点可拖动摆位、从输出端口拉线连接、连线徽章切换修饰键分支、双击节点配置。
+// 工作流可视化编辑器（类 Alfred Workflow）。独立窗口：左工作流列表 / 中可拖拽画布 / 右节点面板。
+// 画布：节点按下任意处即拖动、双击配置、右键菜单；从输出端口拉线连接、连线徽章切换修饰键分支。
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export interface WFNode { id: string; type: string; x: number; y: number; config: Record<string, unknown> }
 export interface WFConn { from: string; to: string; mod?: string }
-export interface WF { id: string; name: string; icon?: string; enabled: boolean; variables?: Record<string, string>; nodes: WFNode[]; connections: WFConn[] }
+export interface WF { id: string; name: string; icon?: string; desc?: string; enabled: boolean; variables?: Record<string, string>; nodes: WFNode[]; connections: WFConn[] }
 
 interface LauncherAPI { getWorkflows(): Promise<WF[]>; setWorkflows(w: WF[]): Promise<void> }
 const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
@@ -14,7 +14,7 @@ const PORT_Y = 26;               // 端口/连线锚点相对节点顶部的 y
 const MODS = ["", "cmd", "alt", "ctrl", "shift"]; // 徽章循环切换的修饰键
 const MOD_LABEL: Record<string, string> = { "": "↵", cmd: "⌘↵", alt: "⌥↵", ctrl: "⌃↵", shift: "⇧↵" };
 
-// 节点目录（右侧面板 + 默认配置）。
+// 节点目录（右侧面板 / 右键菜单 / 默认配置）。
 const CATALOG: { cat: string; items: { type: string; label: string; emoji: string }[] }[] = [
   { cat: "触发 Triggers", items: [
     { type: "trigger.keyword", label: "Keyword", emoji: "⌨️" },
@@ -40,9 +40,7 @@ const CATALOG: { cat: string; items: { type: string; label: string; emoji: strin
 const TYPE_META: Record<string, { label: string; emoji: string; kind: string }> = {};
 for (const g of CATALOG) for (const it of g.items) TYPE_META[it.type] = { label: it.label, emoji: it.emoji, kind: it.type.split(".")[0] };
 
-const KIND_ACCENT: Record<string, string> = {
-  trigger: "#8E44AD", input: "#2980B9", action: "#27AE60", output: "#E8590C",
-};
+const KIND_ACCENT: Record<string, string> = { trigger: "#8E44AD", input: "#2980B9", action: "#27AE60", output: "#E8590C" };
 
 function defaultConfig(type: string): Record<string, unknown> {
   switch (type) {
@@ -57,22 +55,50 @@ function defaultConfig(type: string): Record<string, unknown> {
 }
 const uid = () => `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 
+// ── 右键菜单（支持多级子菜单）──
+interface MenuItem { label?: string; emoji?: string; onClick?: () => void; sub?: MenuItem[]; danger?: boolean; sep?: boolean }
+function MenuList({ items, onClose }: { items: MenuItem[]; onClose: () => void }) {
+  const [open, setOpen] = useState<number | null>(null);
+  return (
+    <div className="bg-card border border-border rounded-lg shadow-2xl py-1 min-w-[184px]">
+      {items.map((it, i) => it.sep ? <div key={i} className="h-px bg-border my-1" /> : (
+        <div key={i} className="relative" onMouseEnter={() => setOpen(it.sub ? i : null)}>
+          <button className={`w-full text-left px-3 py-1.5 text-[12.5px] flex items-center gap-2 hover:bg-orange/10 ${it.danger ? "text-danger" : ""}`}
+            onClick={() => { if (it.sub) return; it.onClick?.(); onClose(); }}>
+            <span className="w-4 text-center">{it.emoji || ""}</span>
+            <span className="flex-1">{it.label}</span>
+            {it.sub ? <span className="text-muted">›</span> : null}
+          </button>
+          {it.sub && open === i ? (
+            <div className="absolute left-full top-0 -mt-1 ml-0.5"><MenuList items={it.sub} onClose={onClose} /></div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[70]" onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
+      <div className="absolute" style={{ left: x, top: y }} onMouseDown={(e) => e.stopPropagation()}>
+        <MenuList items={items} onClose={onClose} />
+      </div>
+    </div>
+  );
+}
+
 export function WorkflowEditor({ onClose }: { onClose: () => void }) {
   const [wfs, setWfs] = useState<WF[]>([]);
   const [curId, setCurId] = useState<string>("");
-  const [editNode, setEditNode] = useState<string | null>(null); // 配置弹窗的节点 id
+  const [editNode, setEditNode] = useState<string | null>(null);
   const [showVars, setShowVars] = useState(false);
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { void api.getWorkflows().then((w) => { setWfs(w); setCurId(w[0]?.id || ""); }); }, []);
 
   const cur = wfs.find((w) => w.id === curId);
 
-  // 持久化：save=true 时落库（拖拽过程中只更新本地，mouseup 再落库）。
-  const persist = useCallback((next: WF[], save = true) => {
-    setWfs(next);
-    if (save) void api.setWorkflows(next);
-  }, []);
   const updateCur = useCallback((fn: (w: WF) => WF, save = true) => {
     setWfs((prev) => {
       const next = prev.map((w) => (w.id === curId ? fn(w) : w));
@@ -81,28 +107,31 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
     });
   }, [curId]);
 
-  // ── 工作流增删改 ──
+  // ── 工作流增删 ──
   const newWf = () => {
     const id = uid();
     const wf: WF = {
-      id, name: "新工作流", icon: "🧩", enabled: true, variables: {},
+      id, name: "新工作流", icon: "🧩", desc: "", enabled: true, variables: {},
       nodes: [{ id: "n1", type: "trigger.keyword", x: 60, y: 120, config: defaultConfig("trigger.keyword") }],
       connections: [],
     };
-    persist([...wfs, wf]);
+    setWfs((prev) => { const next = [...prev, wf]; void api.setWorkflows(next); return next; });
     setCurId(id);
   };
   const delWf = (id: string) => {
-    const next = wfs.filter((w) => w.id !== id);
-    persist(next);
-    if (curId === id) setCurId(next[0]?.id || "");
+    setWfs((prev) => { const next = prev.filter((w) => w.id !== id); void api.setWorkflows(next); return next; });
+    if (curId === id) setCurId("");
   };
 
   // ── 节点增删改 ──
-  const addNode = (type: string) => {
+  const addNode = (type: string, x?: number, y?: number) => {
     if (!cur) return;
-    const n: WFNode = { id: uid(), type, x: 260 + (cur.nodes.length % 3) * 30, y: 120 + (cur.nodes.length % 5) * 24, config: defaultConfig(type) };
+    const n: WFNode = { id: uid(), type, x: x ?? 260 + (cur.nodes.length % 3) * 30, y: y ?? 120 + (cur.nodes.length % 5) * 24, config: defaultConfig(type) };
     updateCur((w) => ({ ...w, nodes: [...w.nodes, n] }));
+  };
+  const insertAfter = (n: WFNode, type: string) => {
+    const nn: WFNode = { id: uid(), type, x: n.x + NODE_W + 60, y: n.y, config: defaultConfig(type) };
+    updateCur((w) => ({ ...w, nodes: [...w.nodes, nn], connections: [...w.connections, { from: n.id, to: nn.id, mod: "" }] }));
   };
   const delNode = (id: string) => updateCur((w) => ({
     ...w, nodes: w.nodes.filter((n) => n.id !== id),
@@ -111,13 +140,13 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
   const setNodeConfig = (id: string, config: Record<string, unknown>) =>
     updateCur((w) => ({ ...w, nodes: w.nodes.map((n) => (n.id === id ? { ...n, config } : n)) }));
 
-  // ── 拖动节点（header 拖拽）──
-  const drag = useRef<{ id: string; dx: number; dy: number } | null>(null);
+  // ── 拖动节点（按下任意处）──
+  const drag = useRef<{ id: string; dx: number; dy: number; moved: boolean } | null>(null);
   const onNodeDown = (e: React.MouseEvent, n: WFNode) => {
+    if ((e.target as HTMLElement).closest("button,[data-port]")) return; // 端口/按钮不触发拖动
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
-    drag.current = { id: n.id, dx: e.clientX - rect.left - n.x, dy: e.clientY - rect.top - n.y };
-    e.preventDefault();
+    drag.current = { id: n.id, dx: e.clientX - rect.left - n.x, dy: e.clientY - rect.top - n.y, moved: false };
   };
 
   // ── 连线（端口拉线）──
@@ -132,22 +161,18 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
   const onNodeUp = (n: WFNode) => {
     if (link.current && link.current.from !== n.id) {
       const from = link.current.from;
-      updateCur((w) => (
-        w.connections.some((c) => c.from === from && c.to === n.id && (c.mod || "") === "")
-          ? w
-          : { ...w, connections: [...w.connections, { from, to: n.id, mod: "" }] }
-      ));
+      updateCur((w) => (w.connections.some((c) => c.from === from && c.to === n.id && (c.mod || "") === "")
+        ? w : { ...w, connections: [...w.connections, { from, to: n.id, mod: "" }] }));
     }
     link.current = null; setLinkPos(null);
   };
 
-  // 全局 mousemove / mouseup：处理拖动与连线。
   useEffect(() => {
     const move = (e: MouseEvent) => {
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
       if (drag.current) {
-        const d = drag.current;
+        const d = drag.current; d.moved = true;
         const x = Math.max(0, e.clientX - rect.left - d.dx);
         const y = Math.max(0, e.clientY - rect.top - d.dy);
         setWfs((prev) => prev.map((w) => (w.id === curId ? { ...w, nodes: w.nodes.map((n) => (n.id === d.id ? { ...n, x, y } : n)) } : w)));
@@ -156,7 +181,7 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
       }
     };
     const up = () => {
-      if (drag.current) { drag.current = null; setWfs((prev) => { void api.setWorkflows(prev); return prev; }); } // 拖动结束落库
+      if (drag.current) { const moved = drag.current.moved; drag.current = null; if (moved) setWfs((prev) => { void api.setWorkflows(prev); return prev; }); }
       if (link.current) { link.current = null; setLinkPos(null); }
     };
     window.addEventListener("mousemove", move);
@@ -164,11 +189,10 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
     return () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
   }, [curId]);
 
-  // 连线徽章：点击循环修饰键；右键删除。
   const cycleMod = (i: number) => updateCur((w) => {
     const conns = w.connections.slice();
-    const cur = conns[i].mod || "";
-    conns[i] = { ...conns[i], mod: MODS[(MODS.indexOf(cur) + 1) % MODS.length] as WFConn["mod"] };
+    const c = conns[i].mod || "";
+    conns[i] = { ...conns[i], mod: MODS[(MODS.indexOf(c) + 1) % MODS.length] as WFConn["mod"] };
     return { ...w, connections: conns };
   });
   const delConn = (i: number) => updateCur((w) => ({ ...w, connections: w.connections.filter((_, j) => j !== i) }));
@@ -176,23 +200,46 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
   const node = (id: string) => cur?.nodes.find((n) => n.id === id);
   const anchor = (n: WFNode, side: "in" | "out") => ({ x: n.x + (side === "out" ? NODE_W : 0), y: n.y + PORT_Y });
 
+  // 右键菜单构造
+  const addSubmenu = (px: number, py: number): MenuItem[] =>
+    CATALOG.map((g) => ({ label: g.cat, sub: g.items.map((it) => ({ label: it.label, emoji: it.emoji, onClick: () => addNode(it.type, px, py) })) }));
+  const openCanvasMenu = (e: React.MouseEvent) => {
+    if (!cur) return;
+    e.preventDefault();
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const px = rect ? e.clientX - rect.left : 260, py = rect ? e.clientY - rect.top : 140;
+    setMenu({ x: e.clientX, y: e.clientY, items: addSubmenu(px, py) });
+  };
+  const openNodeMenu = (e: React.MouseEvent, n: WFNode) => {
+    e.preventDefault(); e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY, items: [
+      { label: "配置节点…", emoji: "⚙️", onClick: () => setEditNode(n.id) },
+      { label: "在其后插入", emoji: "➕", sub: CATALOG.map((g) => ({ label: g.cat, sub: g.items.map((it) => ({ label: it.label, emoji: it.emoji, onClick: () => insertAfter(n, it.type) })) })) },
+      { sep: true },
+      { label: "删除节点", emoji: "🗑", danger: true, onClick: () => delNode(n.id) },
+    ] });
+  };
+
+  const inp = "bg-bg border border-border rounded-lg px-[10px] py-[6px] text-[13px] outline-none";
+
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-bg/95 backdrop-blur-sm">
+    <div className="flex flex-col h-screen bg-bg text-text">
       {/* 顶栏 */}
-      <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border bg-card">
-        <span className="text-[15px] font-semibold">工作流编排</span>
+      <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-border bg-card">
+        <span className="text-[14px] font-semibold shrink-0">工作流编排</span>
         {cur ? (
           <>
             <input value={cur.icon || ""} onChange={(e) => updateCur((w) => ({ ...w, icon: e.target.value }))}
-              className="w-[38px] text-center bg-bg border border-border rounded-lg py-[5px] text-[15px]" maxLength={2} />
+              className={`w-[40px] text-center ${inp} text-[15px]`} maxLength={2} title="图标（emoji）" />
             <input value={cur.name} onChange={(e) => updateCur((w) => ({ ...w, name: e.target.value }))}
-              className="w-[180px] bg-bg border border-border rounded-lg px-[10px] py-[6px] text-[13px]" />
-            <button className="text-[12px] text-muted border border-border rounded-lg px-[10px] py-[6px]" onClick={() => setShowVars(true)}>变量</button>
-            <label className="flex items-center gap-1.5 text-[12px] text-muted"><input type="checkbox" checked={cur.enabled !== false} onChange={(e) => updateCur((w) => ({ ...w, enabled: e.target.checked }))} />启用</label>
+              className={`w-[160px] ${inp}`} placeholder="工作流名称" />
+            <input value={cur.desc || ""} onChange={(e) => updateCur((w) => ({ ...w, desc: e.target.value }))}
+              className={`flex-1 ${inp} text-[12.5px]`} placeholder="描述（可选）" />
+            <button className="text-[12px] text-muted border border-border rounded-lg px-[10px] py-[6px] shrink-0" onClick={() => setShowVars(true)}>变量</button>
+            <label className="flex items-center gap-1.5 text-[12px] text-muted shrink-0"><input type="checkbox" checked={cur.enabled !== false} onChange={(e) => updateCur((w) => ({ ...w, enabled: e.target.checked }))} />启用</label>
           </>
-        ) : <span className="text-[12.5px] text-muted">左侧新建一个工作流</span>}
-        <div className="flex-1" />
-        <button className="text-[13px] px-[14px] py-[6px] border border-border rounded-lg" onClick={onClose}>完成</button>
+        ) : <span className="flex-1 text-[12.5px] text-muted">← 左侧新建或选择一个工作流</span>}
+        <button className="text-[13px] px-[16px] py-[6px] bg-orange text-white rounded-lg font-semibold shrink-0" onClick={onClose}>完成</button>
       </div>
 
       <div className="flex flex-1 min-h-0">
@@ -208,25 +255,24 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
                 <button className="text-danger text-[11px] opacity-0 group-hover:opacity-100" onClick={(e) => { e.stopPropagation(); delWf(w.id); }}>删</button>
               </div>
             ))}
+            {wfs.length === 0 ? <div className="px-4 py-3 text-[12px] text-muted">还没有工作流，点下方新建。</div> : null}
           </div>
-          <button className="m-3 py-2 border border-dashed border-border rounded-lg text-[12.5px] text-muted" onClick={newWf}>＋ 新建工作流</button>
+          <button className="m-3 py-2 rounded-lg text-[12.5px] font-semibold text-orange border border-orange/40 hover:bg-orange/10" onClick={newWf}>＋ 新建工作流</button>
         </div>
 
         {/* 中：画布 */}
         <div ref={canvasRef} className="relative flex-1 overflow-hidden"
           style={{ background: "#22201D", backgroundImage: "radial-gradient(rgba(255,255,255,.06) 1px,transparent 1px)", backgroundSize: "22px 22px" }}
-          onMouseDown={() => { setEditNode(null); }}>
+          onMouseDown={() => { setEditNode(null); setMenu(null); }} onContextMenu={openCanvasMenu}>
           {!cur ? <div className="absolute inset-0 flex items-center justify-center text-[13px] text-white/40">新建或选择一个工作流</div> : null}
           {cur ? (
             <>
-              {/* 连线层 */}
               <svg className="absolute inset-0 w-full h-full pointer-events-none">
                 {cur.connections.map((c, i) => {
                   const a = node(c.from), b = node(c.to);
                   if (!a || !b) return null;
                   const p1 = anchor(a, "out"), p2 = anchor(b, "in");
-                  const d = `M ${p1.x} ${p1.y} C ${p1.x + 60} ${p1.y}, ${p2.x - 60} ${p2.y}, ${p2.x} ${p2.y}`;
-                  return <path key={i} d={d} fill="none" stroke="#6b645c" strokeWidth={2} />;
+                  return <path key={i} d={`M ${p1.x} ${p1.y} C ${p1.x + 60} ${p1.y}, ${p2.x - 60} ${p2.y}, ${p2.x} ${p2.y}`} fill="none" stroke="#6b645c" strokeWidth={2} />;
                 })}
                 {link.current && linkPos ? (() => {
                   const a = node(link.current.from); if (!a) return null;
@@ -234,43 +280,39 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
                   return <path d={`M ${p1.x} ${p1.y} C ${p1.x + 60} ${p1.y}, ${linkPos.x - 60} ${linkPos.y}, ${linkPos.x} ${linkPos.y}`} fill="none" stroke="#E8590C" strokeWidth={2} strokeDasharray="4 4" />;
                 })() : null}
               </svg>
-              {/* 连线徽章（可点击切换修饰键 / 右键删除）*/}
               {cur.connections.map((c, i) => {
                 const a = node(c.from), b = node(c.to);
                 if (!a || !b) return null;
                 const p1 = anchor(a, "out"), p2 = anchor(b, "in");
-                const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;
                 return (
                   <button key={`b${i}`} title="点击切换 回车/⌘/⌥ 分支，右键删除"
-                    onClick={() => cycleMod(i)} onContextMenu={(e) => { e.preventDefault(); delConn(i); }}
+                    onClick={() => cycleMod(i)} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); delConn(i); }}
                     className="absolute -translate-x-1/2 -translate-y-1/2 bg-[#413C36] text-[#EDEAE4] border border-[#55504a] rounded-md text-[11px] px-[6px] py-[1px]"
-                    style={{ left: mx, top: my }}>{MOD_LABEL[c.mod || ""]}</button>
+                    style={{ left: (p1.x + p2.x) / 2, top: (p1.y + p2.y) / 2 }}>{MOD_LABEL[c.mod || ""]}</button>
                 );
               })}
-              {/* 节点 */}
               {cur.nodes.map((n) => {
                 const meta = TYPE_META[n.type] || { label: n.type, emoji: "🔹", kind: "action" };
                 const accent = KIND_ACCENT[meta.kind] || "#888";
                 return (
-                  <div key={n.id} className="absolute rounded-xl border shadow-lg select-none"
+                  <div key={n.id} className="absolute rounded-xl border shadow-lg select-none cursor-grab active:cursor-grabbing"
                     style={{ left: n.x, top: n.y, width: NODE_W, background: "#2E2B27", borderColor: "#413C36", color: "#EDEAE4" }}
-                    onMouseUp={() => onNodeUp(n)} onDoubleClick={() => setEditNode(n.id)} onMouseDown={(e) => e.stopPropagation()}>
-                    <div className="flex items-center gap-2 px-3 py-2 border-b cursor-move" style={{ borderColor: "#413C36" }} onMouseDown={(e) => onNodeDown(e, n)}>
+                    onMouseDown={(e) => { e.stopPropagation(); onNodeDown(e, n); }} onMouseUp={() => onNodeUp(n)}
+                    onDoubleClick={() => setEditNode(n.id)} onContextMenu={(e) => openNodeMenu(e, n)}>
+                    <div className="flex items-center gap-2 px-3 py-2 border-b" style={{ borderColor: "#413C36" }}>
                       <span className="w-[22px] h-[22px] rounded-md flex items-center justify-center text-[13px]" style={{ background: accent + "40" }}>{meta.emoji}</span>
                       <b className="text-[12.5px] flex-1 truncate">{meta.label}</b>
-                      <button className="text-[12px] text-white/40 hover:text-danger" onClick={() => delNode(n.id)}>✕</button>
+                      <button className="text-[12px] text-white/40 hover:text-danger" onMouseDown={(e) => e.stopPropagation()} onClick={() => delNode(n.id)}>✕</button>
                     </div>
-                    <div className="px-3 py-2 text-[11px] text-[#B8B1A7] truncate cursor-pointer" onClick={() => setEditNode(n.id)}>{nodeSummary(n)}</div>
-                    {/* 输入端口（左）：连线落点靠 onMouseUp 命中整个节点，这里只做视觉标记 */}
-                    <span className="absolute w-[11px] h-[11px] rounded-full" style={{ left: -6, top: PORT_Y - 5, background: "#8a827a", border: "2px solid #2E2B27" }} />
-                    {/* 输出端口（右）：按下拉线 */}
-                    <span className="absolute w-[11px] h-[11px] rounded-full cursor-crosshair" style={{ right: -6, top: PORT_Y - 5, background: "#8a827a", border: "2px solid #2E2B27" }}
+                    <div className="px-3 py-2 text-[11px] text-[#B8B1A7] truncate">{nodeSummary(n)}</div>
+                    <span data-port className="absolute w-[11px] h-[11px] rounded-full" style={{ left: -6, top: PORT_Y - 5, background: "#8a827a", border: "2px solid #2E2B27" }} />
+                    <span data-port className="absolute w-[11px] h-[11px] rounded-full cursor-crosshair" style={{ right: -6, top: PORT_Y - 5, background: "#8a827a", border: "2px solid #2E2B27" }}
                       onMouseDown={(e) => onPortDown(e, n)} />
                   </div>
                 );
               })}
               <div className="absolute left-4 bottom-3 bg-black/40 text-white/70 text-[11px] px-3 py-1.5 rounded-full pointer-events-none">
-                拖 header 摆位 · 拖右侧端口到另一节点连线 · 点连线徽章切分支(右键删) · 双击节点配置
+                按住节点拖动摆位 · 双击配置 · 右键节点/空白弹菜单 · 拖右侧端口到另一节点连线 · 点连线徽章切分支(右键删)
               </div>
             </>
           ) : null}
@@ -300,11 +342,11 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
         <VarsEditor vars={cur.variables || {}} onClose={() => setShowVars(false)}
           onSave={(v) => { updateCur((w) => ({ ...w, variables: v })); setShowVars(false); }} />
       ) : null}
+      {menu ? <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} /> : null}
     </div>
   );
 }
 
-// 节点摘要（画布上一行简述）。
 function nodeSummary(n: WFNode): string {
   const c = n.config as Record<string, string>;
   switch (n.type) {
@@ -327,7 +369,6 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
   const inp = "w-full bg-bg border border-border rounded-lg px-[10px] py-[7px] text-[12.5px] outline-none";
   const lab = "text-[11.5px] text-muted mb-1 block";
 
-  // Hotkey 录制
   useEffect(() => {
     if (!rec) return;
     const onKey = (e: KeyboardEvent) => {

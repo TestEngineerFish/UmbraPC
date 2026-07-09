@@ -18,7 +18,6 @@ export class ClipboardManager {
   private store: ClipStore;
   private watcher: ClipWatcher;
   private panel: Electron.BrowserWindow | null = null;
-  private positioned = false;
   // 打开面板前 Umbra 自身是否已在前台。false=用户在别的应用里（如 Finder/Chrome），
   // 关闭面板时需把焦点还给那个应用，而不是让 Umbra 主窗口抢到前台。
   private appWasActive = false;
@@ -59,6 +58,8 @@ export class ClipboardManager {
       webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
     });
     win.setAlwaysOnTop(true, "floating");
+    // 在「当前所在的桌面/屏幕」直接显示，不跟随窗口原 Space（否则会跳屏）。
+    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     win.on("blur", () => this.hidePanel(false));
     win.webContents.on("before-input-event", (_e, input) => {
       if (input.type === "keyDown" && input.key === "Escape") this.hidePanel(true);
@@ -82,18 +83,16 @@ export class ClipboardManager {
     // 记录打开前 Umbra 是否已在前台（有窗口聚焦即为是）。
     this.appWasActive = BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isFocused());
     const win = await this.ensurePanel();
-    if (!this.positioned) {
-      try {
-        const { screen } = await import("electron");
-        const pt = screen.getCursorScreenPoint();
-        const disp = screen.getDisplayNearestPoint(pt);
-        const wa = disp.workArea;
-        const [w, h] = win.getSize();
-        win.setPosition(Math.round(wa.x + (wa.width - w) / 2), Math.round(wa.y + (wa.height - h) / 2));
-      } catch {
-        win.center();
-      }
-      this.positioned = true;
+    // 每次唤起都重新定位到「光标所在屏幕」居中（不再只定位一次，否则会弹到上次/前台屏幕）。
+    try {
+      const { screen } = await import("electron");
+      const pt = screen.getCursorScreenPoint();
+      const disp = screen.getDisplayNearestPoint(pt);
+      const wa = disp.workArea;
+      const [w, h] = win.getSize();
+      win.setPosition(Math.round(wa.x + (wa.width - w) / 2), Math.round(wa.y + (wa.height - h) / 2));
+    } catch {
+      win.center();
     }
     win.show();
     win.focus();
