@@ -2,11 +2,13 @@
 // 输入 query → 并发查询各 Provider（app 启动 / 文件夹书签 / 剪贴板历史）→ 结果列表 → 回车执行 action。
 // 窗口/焦点还原范式镜像 ClipboardManager。
 import * as path from "node:path";
+import * as crypto from "node:crypto";
 import { ConfigStore, expandHome, LauncherFolder } from "../config";
 import { ClipStore } from "../clipboard/store";
 import { writeToClipboard, simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
+import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } from "./tools";
 
 // ── 结果与动作类型 ──
 export interface LauncherAction {
@@ -134,19 +136,80 @@ export class LauncherManager {
   // ── 查询分发 ──
   private async query(raw: string): Promise<LauncherResult[]> {
     const q = (raw || "").trim();
-    const results: LauncherResult[] = [];
-    // 并发各 provider（失败不影响其它）。
-    const [apps, folders, clips] = await Promise.all([
-      this.searchApps(q).catch(() => []),
-      Promise.resolve(this.searchFolders(q)),
-      Promise.resolve(this.searchClipboard(q)),
-    ]);
-    results.push(...folders, ...apps, ...clips);
+    let results: LauncherResult[] = [];
+
+    // 关键词前缀 → 进入某工具专属模式（翻译/编解码）。
+    const kw = q.match(/^(fy|翻译|uni|unicode|url|b64|base64)\s+([\s\S]+)$/i);
+    if (kw) {
+      const type = kw[1].toLowerCase();
+      const arg = kw[2];
+      if (type === "fy" || type === "翻译") results = await this.searchTranslate(arg);
+      else if (type === "uni" || type === "unicode") results = this.codecResults(unicodeTransform(arg));
+      else if (type === "url") results = this.codecResults(urlTransform(arg));
+      else results = this.codecResults(base64Transform(arg));
+    } else {
+      // 普通：并发 app/文件夹/剪贴板；再叠加计算器/单位换算（按模式命中）。
+      const [apps, folders, clips] = await Promise.all([
+        this.searchApps(q).catch(() => []),
+        Promise.resolve(this.searchFolders(q)),
+        Promise.resolve(this.searchClipboard(q)),
+      ]);
+      results.push(...folders, ...apps, ...clips);
+      const c = calc(q);
+      if (c !== null) results.unshift(this.copyResult("calc", `= ${c}`, "计算结果 · 回车复制", "🔢", 300, c));
+      const u = convertUnits(q);
+      if (u) results.unshift(this.copyResult("unit", u.title, u.subtitle + " · 回车复制", "📐", 300, u.title));
+    }
+
     results.sort((a, b) => b.score - a.score);
     const top = results.slice(0, MAX_RESULTS);
     this.cache.clear();
     for (const r of top) this.cache.set(r.id, r);
     return top;
+  }
+
+  // 构造一个「回车复制」结果。
+  private copyResult(id: string, title: string, subtitle: string, icon: string, score: number, text: string): LauncherResult {
+    return { id: `${id}:${title}`, title, subtitle, icon, source: id, score, action: { kind: "copy", payload: { text } } };
+  }
+  private codecResults(items: { label: string; value: string }[]): LauncherResult[] {
+    return items.map((it, i) => this.copyResult(`codec${i}`, it.value, `${it.label} · 回车复制`, "🔡", 300 - i, it.value));
+  }
+
+  // Provider（Phase2）：有道翻译（原生重写：md5 签名 + 请求有道 openapi）。
+  private async searchTranslate(text: string): Promise<LauncherResult[]> {
+    const c = this.cfg.get();
+    if (!c.youdaoAppKey || !c.youdaoSecret) {
+      return [this.copyResult("fy", "未配置有道翻译", "请在设置里填写有道 appKey / secret", "🌐", 300, "")];
+    }
+    // 与原 Alfred 一致：camelCase 拆词并小写。
+    const q = text.replace(/([A-Z])/g, " $1").toLowerCase().trim();
+    const isZh = /^[一-龥]+$/.test(q);
+    const from = isZh ? "zh-CHS" : "auto";
+    const to = isZh ? "en" : "zh-CHS";
+    const salt = String(Math.floor(Math.random() * 1e5));
+    const sign = crypto.createHash("md5").update(c.youdaoAppKey + q + salt + c.youdaoSecret, "utf8").digest("hex");
+    const url = "https://openapi.youdao.com/api?" + new URLSearchParams({
+      q, from, to, appKey: c.youdaoAppKey, salt, sign,
+    }).toString();
+    try {
+      const resp = await fetch(url);
+      const data = await resp.json() as {
+        errorCode?: string; translation?: string[];
+        basic?: { explains?: string[]; phonetic?: string };
+        web?: { key: string; value: string[] }[];
+      };
+      if (data.errorCode !== "0") {
+        return [this.copyResult("fy", "翻译出错", `有道错误码：${data.errorCode}`, "🌐", 300, "")];
+      }
+      const out: LauncherResult[] = [];
+      if (data.translation?.length) out.push(this.copyResult("fy", data.translation[0], `翻译：${text} · 回车复制`, "🌐", 320, data.translation[0]));
+      data.basic?.explains?.forEach((e, i) => out.push(this.copyResult(`fyb${i}`, e, "释义 · 回车复制", "📖", 310 - i, e)));
+      data.web?.slice(0, 2).forEach((w, i) => out.push(this.copyResult(`fyw${i}`, w.value.join(", "), `${w.key} · 回车复制`, "🔗", 300 - i, w.value.join(", "))));
+      return out.length ? out : [this.copyResult("fy", text, "没有更多释义", "🌐", 300, text)];
+    } catch (e) {
+      return [this.copyResult("fy", "翻译请求失败", String(e).slice(0, 60), "🌐", 300, "")];
+    }
   }
 
   // Provider①：启动 App（mdfind 搜已安装应用 + 提取图标）。
@@ -278,10 +341,13 @@ export class LauncherManager {
         shortcut: c.launcherShortcut,
         folders: c.launcherFolders || [],
         registered: globalShortcut.isRegistered(c.launcherShortcut || "Alt+Space"),
+        youdaoConfigured: !!(c.youdaoAppKey && c.youdaoSecret),
       };
     });
     ipcMain.handle("launcher:setEnabled", (_e, enabled: boolean) => this.setEnabled(enabled));
     ipcMain.handle("launcher:setShortcut", (_e, acc: string) => this.setShortcut(acc));
     ipcMain.handle("launcher:setFolders", (_e, folders: LauncherFolder[]) => this.setFolders(folders));
+    ipcMain.handle("launcher:setYoudao", (_e, appKey: string, secret: string) =>
+      this.cfg.save({ youdaoAppKey: String(appKey || ""), youdaoSecret: String(secret || "") }));
   }
 }

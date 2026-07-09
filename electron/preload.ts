@@ -93,6 +93,7 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   setEnabled: (enabled: boolean) => ipcRenderer.invoke("launcher:setEnabled", enabled),
   setShortcut: (acc: string) => ipcRenderer.invoke("launcher:setShortcut", acc),
   setFolders: (folders: unknown) => ipcRenderer.invoke("launcher:setFolders", folders),
+  setYoudao: (appKey: string, secret: string) => ipcRenderer.invoke("launcher:setYoudao", appKey, secret),
   resize: (h: number) => ipcRenderer.invoke("launcher:resize", h),
   pickPath: () => ipcRenderer.invoke("launcher:pickPath"),
   pickApp: () => ipcRenderer.invoke("launcher:pickApp"),

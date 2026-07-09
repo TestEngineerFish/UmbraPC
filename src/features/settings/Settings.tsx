@@ -260,6 +260,9 @@ export function Settings() {
               <button onClick={() => legacy.beginShortcutRecording("clip")} className={`flex-1 text-left border rounded-lg px-[11px] py-[7px] text-[13px] font-mono bg-bg text-text ${clip.recording ? "border-orange" : "border-border"}`}>
                 {clip.recording ? t("settings.pressShortcut") : clip.shortcut}
               </button>
+              <button className={btnGhost} onClick={async () => { await (window as unknown as { umbraClip: { setShortcut(a: string): Promise<unknown> } }).umbraClip.setShortcut("Command+Shift+V"); await legacy.loadClipSettings(); }}>
+                {t("common.reset")}
+              </button>
             </Row>
             <Row label={t("settings.clipClear")}>
               <span className="flex-1 text-[12px] text-muted">{t("settings.clipClearDesc")}</span>
@@ -279,6 +282,9 @@ export function Settings() {
             <Row label={t("settings.shotShortcut")}>
               <button onClick={() => legacy.beginShortcutRecording("shot")} className={`flex-1 text-left border rounded-lg px-[11px] py-[7px] text-[13px] font-mono bg-bg text-text ${shot.recording ? "border-orange" : "border-border"}`}>
                 {shot.recording ? t("settings.pressShortcut") : shot.shortcut}
+              </button>
+              <button className={btnGhost} onClick={async () => { await (window as unknown as { umbraShot: { setShortcut(a: string): Promise<unknown> } }).umbraShot.setShortcut("Command+Control+A"); await legacy.loadShotSettings(); }}>
+                {t("common.reset")}
               </button>
             </Row>
             <Row label={t("settings.translateKey")}>
@@ -307,10 +313,11 @@ export function Settings() {
 // 快捷入口（Launcher）设置：开关 + 唤起快捷键 + 文件夹书签（用指定软件打开固定文件夹）。自足，直连 IPC。
 interface LauncherFolder { name: string; path: string; app?: string }
 interface LauncherAPI {
-  getSettings(): Promise<{ enabled: boolean; shortcut: string; folders: LauncherFolder[]; registered: boolean }>;
+  getSettings(): Promise<{ enabled: boolean; shortcut: string; folders: LauncherFolder[]; registered: boolean; youdaoConfigured: boolean }>;
   setEnabled(enabled: boolean): Promise<void>;
   setShortcut(acc: string): Promise<{ ok: boolean }>;
   setFolders(folders: LauncherFolder[]): Promise<void>;
+  setYoudao(appKey: string, secret: string): Promise<void>;
   pickPath(): Promise<string>;
   pickApp(): Promise<string>;
 }
@@ -339,8 +346,11 @@ function LauncherCard() {
   const [recording, setRecording] = useState(false);
   const [folders, setFolders] = useState<LauncherFolder[]>([]);
   const [draft, setDraft] = useState<LauncherFolder>({ name: "", path: "", app: "" });
+  const [ydKey, setYdKey] = useState("");
+  const [ydSecret, setYdSecret] = useState("");
+  const [ydSet, setYdSet] = useState(false);
 
-  useEffect(() => { void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); setFolders(s.folders || []); }); }, []);
+  useEffect(() => { void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); setFolders(s.folders || []); setYdSet(s.youdaoConfigured); }); }, []);
 
   // 录制快捷键：按下组合键即保存；Esc 取消。
   useEffect(() => {
@@ -366,7 +376,8 @@ function LauncherCard() {
   const pickApp = async () => { const a = await api.pickApp(); if (a) setDraft((d) => ({ ...d, app: a })); };
 
   const inputCls = "border border-border rounded-lg px-[10px] py-[6px] text-[12.5px] bg-bg text-text";
-  const pickBtn = "px-[10px] py-[6px] border border-border bg-card text-text rounded-lg text-[12px] whitespace-nowrap";
+  // 选择按钮嵌在输入框右侧内部，避免和相邻输入框混淆。
+  const pickBtn = "absolute right-[4px] top-1/2 -translate-y-1/2 px-[8px] py-[3px] border border-border bg-card text-text rounded-md text-[11.5px] whitespace-nowrap";
   return (
     <Card title={t("settings.launcher")}>
       <Row label={t("settings.launcherEnable")}>
@@ -379,6 +390,9 @@ function LauncherCard() {
           className={`flex-1 text-left border rounded-lg px-[11px] py-[7px] text-[13px] font-mono bg-bg text-text ${recording ? "border-orange" : "border-border"}`}
         >
           {recording ? t("settings.pressShortcut") : shortcut}
+        </button>
+        <button className="px-[13px] py-[6px] border border-border bg-card text-text rounded-lg text-[12.5px]" onClick={() => { setShortcut("Alt+Space"); void api.setShortcut("Alt+Space"); }}>
+          {t("common.reset")}
         </button>
       </Row>
       <div className="pt-2">
@@ -394,12 +408,27 @@ function LauncherCard() {
         </div>
         <div className="flex items-center gap-1.5 flex-wrap">
           <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder={t("settings.launcherFolderName")} className={`w-[110px] ${inputCls}`} />
-          <input value={draft.path} onChange={(e) => setDraft({ ...draft, path: e.target.value })} placeholder={t("settings.launcherFolderPath")} className={`flex-1 min-w-[160px] ${inputCls} font-mono`} />
-          <button className={pickBtn} onClick={pickPath}>{t("settings.launcherChoose")}</button>
-          <input value={draft.app} onChange={(e) => setDraft({ ...draft, app: e.target.value })} placeholder={t("settings.launcherFolderApp")} className={`w-[130px] ${inputCls}`} />
-          <button className={pickBtn} onClick={pickApp}>{t("settings.launcherChoose")}</button>
+          <div className="relative flex-1 min-w-[190px]">
+            <input value={draft.path} onChange={(e) => setDraft({ ...draft, path: e.target.value })} placeholder={t("settings.launcherFolderPath")} className={`w-full pr-[54px] ${inputCls} font-mono`} />
+            <button className={pickBtn} onClick={pickPath}>{t("settings.launcherChoose")}</button>
+          </div>
+          <div className="relative w-[170px]">
+            <input value={draft.app} onChange={(e) => setDraft({ ...draft, app: e.target.value })} placeholder={t("settings.launcherFolderApp")} className={`w-full pr-[54px] ${inputCls}`} />
+            <button className={pickBtn} onClick={pickApp}>{t("settings.launcherChoose")}</button>
+          </div>
           <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={addFolder}>{t("common.add")}</button>
         </div>
+      </div>
+      <div className="pt-3 mt-1 border-t border-border">
+        <div className="text-[12.5px] font-semibold mb-2">{t("settings.launcherYoudao")}</div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <input value={ydKey} onChange={(e) => setYdKey(e.target.value)} placeholder={ydSet ? t("settings.launcherYoudaoSet") : "appKey"} className={`w-[180px] ${inputCls} font-mono`} />
+          <input type="password" value={ydSecret} onChange={(e) => setYdSecret(e.target.value)} placeholder="secret" className={`flex-1 min-w-[160px] ${inputCls} font-mono`} />
+          <button className="px-[12px] py-[6px] border border-border bg-card text-text rounded-lg text-[12.5px]" onClick={async () => { await api.setYoudao(ydKey.trim(), ydSecret.trim()); setYdSet(!!(ydKey.trim() && ydSecret.trim())); setYdKey(""); setYdSecret(""); }}>
+            {t("common.save")}
+          </button>
+        </div>
+        <div className="text-[11.5px] text-muted mt-1.5">{t("settings.launcherYoudaoHint")}</div>
       </div>
     </Card>
   );

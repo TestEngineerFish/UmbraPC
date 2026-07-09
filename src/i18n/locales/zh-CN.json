@@ -45,7 +45,8 @@
     "colorRed": "红色",
     "colorYellow": "黄色",
     "colorBlue": "蓝色",
-    "add": "新增"
+    "add": "新增",
+    "reset": "重置"
   },
   "time": {
     "yesterday": "昨天",
@@ -137,7 +138,10 @@
     "launcherFolderName": "名称",
     "launcherFolderPath": "文件夹或文件路径",
     "launcherFolderApp": "用哪个软件打开（可空）",
-    "launcherChoose": "选择"
+    "launcherChoose": "选择",
+    "launcherYoudao": "有道翻译（快捷入口输入 fy 词句）",
+    "launcherYoudaoSet": "已配置（留空不变）",
+    "launcherYoudaoHint": "在有道智云控制台创建「文本翻译」应用，拿 appKey 与密钥填入。快捷入口里：fy hello / 翻译 你好；编解码：uni/url/b64；计算与单位换算直接输入（如 3*4、10km to mi）。"
   },
   "logs": {
     "title": "日志",
