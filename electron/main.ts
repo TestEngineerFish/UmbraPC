@@ -12,6 +12,7 @@ import { initRpc } from "./core/shared/rpc";
 import { ClipboardManager } from "./core/clipboard";
 import { ScreenshotManager } from "./core/screenshot";
 import { LauncherManager } from "./core/launcher";
+import { VaultManager } from "./core/vault";
 import { getMainLocale, resolveLocale, setMainLocale } from "./i18n";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
@@ -46,6 +47,7 @@ let executor: TaskExecutor;
 let clipboard: ClipboardManager;
 let screenshot: ScreenshotManager;
 let launcher: LauncherManager;
+let vault: VaultManager;
 let mainWindow: BrowserWindow | null = null; // 显式跟踪主窗口：剪贴板/截图的隐藏窗口会让 getAllWindows() 恒 >0，不能靠它判断
 let tray: Tray | null = null;
 let quitting = false; // true 时才真正退出（关窗默认只隐藏）
@@ -314,9 +316,10 @@ app.whenReady().then(async () => {
       if (w.webContents.isLoading()) w.webContents.once("did-finish-load", post); else post();
     }
   });
-  Promise.all([clipboard.init(), screenshot.init(), launcher.init()])
+  vault = new VaultManager(app.getPath("userData"), winOpts);
+  Promise.all([clipboard.init(), screenshot.init(), launcher.init(), vault.init()])
     .then(() => reregisterShortcuts()) // 就绪后统一注册各自快捷键
-    .catch((e) => console.error("剪贴板/截图/快捷入口初始化失败", e));
+    .catch((e) => console.error("剪贴板/截图/快捷入口/保险箱初始化失败", e));
 
   // 点 Dock 图标：唤起主窗口（不能靠 getAllWindows().length===0 判断，
   // 剪贴板/截图的隐藏窗口会让它恒 >0）。

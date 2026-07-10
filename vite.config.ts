@@ -21,6 +21,7 @@ export default defineConfig({
         launcher: "launcher.html",
         workflow: "workflow.html",
         largetype: "largetype.html",
+        vault: "vault.html",
       },
     },
   },

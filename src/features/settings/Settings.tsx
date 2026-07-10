@@ -12,6 +12,7 @@ import { type WF } from "../launcher/WorkflowEditor";
 const hasClip = typeof (window as unknown as { umbraClip?: unknown }).umbraClip !== "undefined";
 const hasShot = typeof (window as unknown as { umbraShot?: unknown }).umbraShot !== "undefined";
 const hasLauncher = typeof (window as unknown as { umbraLauncher?: unknown }).umbraLauncher !== "undefined";
+const hasVault = typeof (window as unknown as { umbraVault?: unknown }).umbraVault !== "undefined";
 
 function Card({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
   return (
@@ -309,6 +310,15 @@ export function Settings() {
         {hasLauncher ? <LauncherCard /> : null}
 
         {hasLauncher ? <PhrasesCard /> : null}
+
+        {hasVault ? (
+          <Card title={t("settings.vault")}>
+            <div className="flex items-center gap-2">
+              <span className="flex-1 text-[12px] text-muted">{t("settings.vaultDesc")}</span>
+              <button className="px-[14px] py-[7px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => void (window as unknown as { umbraVault: { openWindow(): Promise<void> } }).umbraVault.openWindow()}>{t("settings.vaultOpen")}</button>
+            </div>
+          </Card>
+        ) : null}
 
         <section className="bg-card border border-border rounded-xl p-[16px_18px] flex items-center gap-[14px]">
           <div className="flex-1">

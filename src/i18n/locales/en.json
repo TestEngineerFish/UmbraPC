@@ -163,7 +163,10 @@
     "phraseName": "Name",
     "phraseKeyword": "Keyword",
     "phraseContent": "Content (text to insert)",
-    "phrasesHint": "Search by name/keyword/content in the launcher; Enter inserts the content into the front app (needs Accessibility, else copy only). Reorder with ▲▼."
+    "phrasesHint": "Search by name/keyword/content in the launcher; Enter inserts the content into the front app (needs Accessibility, else copy only). Reorder with ▲▼.",
+    "vault": "Password Vault",
+    "vaultDesc": "Zero-knowledge encrypted passwords / IDs / important files (separate window, master password)",
+    "vaultOpen": "Open vault"
   },
   "logs": {
     "title": "Logs",

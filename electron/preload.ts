@@ -119,6 +119,36 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   },
 });
 
+// 密码保险箱桥。
+contextBridge.exposeInMainWorld("umbraVault", {
+  openWindow: () => ipcRenderer.invoke("vault:openWindow"),
+  status: () => ipcRenderer.invoke("vault:status"),
+  setup: (mp: string) => ipcRenderer.invoke("vault:setup", mp),
+  unlock: (mp: string, sk?: string) => ipcRenderer.invoke("vault:unlock", mp, sk),
+  lock: () => ipcRenderer.invoke("vault:lock"),
+  generatePassword: (opts: unknown) => ipcRenderer.invoke("vault:generatePassword", opts),
+  listVaults: () => ipcRenderer.invoke("vault:listVaults"),
+  addVault: (name: string, owner: string, icon: string) => ipcRenderer.invoke("vault:addVault", name, owner, icon),
+  updateVault: (id: string, patch: unknown) => ipcRenderer.invoke("vault:updateVault", id, patch),
+  deleteVault: (id: string) => ipcRenderer.invoke("vault:deleteVault", id),
+  listTypes: (vid: string) => ipcRenderer.invoke("vault:listTypes", vid),
+  addType: (vid: string, name: string, icon: string) => ipcRenderer.invoke("vault:addType", vid, name, icon),
+  updateType: (vid: string, tid: string, patch: unknown) => ipcRenderer.invoke("vault:updateType", vid, tid, patch),
+  deleteType: (vid: string, tid: string) => ipcRenderer.invoke("vault:deleteType", vid, tid),
+  reorderTypes: (vid: string, ids: string[]) => ipcRenderer.invoke("vault:reorderTypes", vid, ids),
+  listItems: (vid: string) => ipcRenderer.invoke("vault:listItems", vid),
+  getItem: (vid: string, iid: string) => ipcRenderer.invoke("vault:getItem", vid, iid),
+  addItem: (vid: string, init: unknown) => ipcRenderer.invoke("vault:addItem", vid, init),
+  updateItem: (vid: string, item: unknown) => ipcRenderer.invoke("vault:updateItem", vid, item),
+  deleteItem: (vid: string, iid: string) => ipcRenderer.invoke("vault:deleteItem", vid, iid),
+  moveItem: (vid: string, iid: string, tid: string) => ipcRenderer.invoke("vault:moveItem", vid, iid, tid),
+  addAttachment: (vid: string, iid: string, name: string, mime: string, dataB64: string) => ipcRenderer.invoke("vault:addAttachment", vid, iid, name, mime, dataB64),
+  readAttachment: (vid: string, aid: string) => ipcRenderer.invoke("vault:readAttachment", vid, aid),
+  deleteAttachment: (vid: string, iid: string, aid: string) => ipcRenderer.invoke("vault:deleteAttachment", vid, iid, aid),
+  search: (q: string, vid?: string) => ipcRenderer.invoke("vault:search", q, vid),
+  setAutoLock: (min: number) => ipcRenderer.invoke("vault:setAutoLock", min),
+});
+
 // 大字显示浮层桥。
 contextBridge.exposeInMainWorld("umbraLarge", {
   ready: () => ipcRenderer.invoke("largetype:ready"),
