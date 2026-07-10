@@ -34,6 +34,8 @@ export interface UmbraConfig {
   screenshotEnabled: boolean;    // 截图功能开关（关则不注册快捷键）
   screenshotShortcut: string;    // 截图全局快捷键
   glmApiKey: string;             // 智谱 GLM API Key（截图翻译直连用；不硬编码，走 env/设置）
+  // ── 密码保险箱 ──
+  vaultShortcut: string;         // 唤起保险箱窗口的全局快捷键（Electron Accelerator，空=不注册）
   // ── 快捷入口 Launcher（类 Alfred）──
   launcherEnabled: boolean;      // 总开关（关则不注册快捷键、不可唤起）
   launcherShortcut: string;      // 唤起快捷键（Electron Accelerator，默认 ⌥Space = "Alt+Space"）
@@ -150,6 +152,7 @@ function defaults(configDir: string): UmbraConfig {
     screenshotEnabled: envBool("UMBRA_SCREENSHOT_ENABLED", true),
     screenshotShortcut: process.env.UMBRA_SCREENSHOT_SHORTCUT || "Command+Control+A",
     glmApiKey: process.env.UMBRA_GLM_API_KEY || "",
+    vaultShortcut: process.env.UMBRA_VAULT_SHORTCUT || "Command+Alt+P",
     launcherEnabled: envBool("UMBRA_LAUNCHER_ENABLED", true),
     launcherShortcut: process.env.UMBRA_LAUNCHER_SHORTCUT || "Alt+Space",
     launcherFolders: [],

@@ -5,10 +5,11 @@ import * as fssync from "node:fs";
 import { promises as fs } from "node:fs";
 import {
   randomBytes, randomSalt, generateSecretKey, deriveAUK, authHash, verifierOf,
-  wrapKey, unwrapKey, newVaultKey, encryptJSON, decryptJSON, aesEncryptBytes, aesDecryptBytes,
+  wrapKey, unwrapKey, newVaultKey, encryptJSON, decryptJSON, aesEncrypt, aesDecrypt, aesEncryptBytes, aesDecryptBytes,
   generatePassword, GenOpts,
 } from "./crypto";
 import { VaultMeta, VaultInfo, VaultType, VaultData, Item, Attachment } from "./types";
+import { ConfigStore } from "../config";
 
 const rid = (p = "") => p + randomBytes(9).toString("hex");
 const b64 = (b: Buffer) => b.toString("base64");
@@ -51,9 +52,24 @@ export class VaultManager {
   private clearTimer?: NodeJS.Timeout;                  // 剪贴板自动清除
   private win: Electron.BrowserWindow | null = null;
 
-  constructor(userData: string, private opts: WinOpts, private deps: VaultDeps = {}) {
+  constructor(private cfg: ConfigStore, userData: string, private opts: WinOpts, private deps: VaultDeps = {}, private reregister: () => void = () => {}) {
     this.dir = path.join(userData, "vault");
     this.metaFile = path.join(this.dir, "meta.json");
+  }
+
+  // 全局快捷键：唤起保险箱窗口（清理由 main.ts 统一做）。
+  async registerShortcut(): Promise<void> {
+    const acc = this.cfg.get().vaultShortcut;
+    if (!acc) return;
+    const { globalShortcut } = await import("electron");
+    try { if (!globalShortcut.isRegistered(acc)) globalShortcut.register(acc, () => this.openWindow()); }
+    catch (e) { console.warn(`[vault] 快捷键注册失败：${acc}`, e); }
+  }
+  private async setShortcut(acc: string): Promise<{ ok: boolean }> {
+    await this.cfg.save({ vaultShortcut: acc || "" });
+    this.reregister();
+    const { globalShortcut } = await import("electron");
+    return { ok: !acc || globalShortcut.isRegistered(acc) };
   }
 
   // 复制到剪贴板（隐蔽写入不进历史）+ 20s 后若未被覆盖则自动清空。
@@ -98,6 +114,7 @@ export class VaultManager {
     return {
       exists: this.existsFile(), unlocked: this.unlocked, autoLockMin: this.meta?.autoLockMin ?? 10,
       quickUnlock: !!this.meta?.quickUnlockEnc, biometric: await this.biometricAvailable(),
+      shortcut: this.cfg.get().vaultShortcut || "",
     };
   }
   private async biometricAvailable(): Promise<boolean> {
@@ -369,6 +386,86 @@ export class VaultManager {
     await this.saveMeta(); this.armAutoLock();
   }
 
+  // ── 批量导入 / 导出 ──
+  // 明文 bundle（含附件字节 base64）；导出时用当前 AUK 加密或明文落盘。
+  private async buildBundle() {
+    if (!this.meta) throw new Error("未初始化");
+    const vaults = [];
+    for (const v of this.meta.vaults) {
+      const d = this.vdata.get(v.id); const vk = this.vaultKeys.get(v.id); if (!d || !vk) continue;
+      const attachments: Record<string, string> = {};
+      for (const it of d.items) for (const a of it.attachments) {
+        try { attachments[a.id] = b64(aesDecryptBytes(vk, await fs.readFile(this.attFile(v.id, a.id)))); } catch { /* 缺文件跳过 */ }
+      }
+      vaults.push({ name: v.name, owner: v.owner, icon: v.icon, types: d.types, items: d.items, attachments });
+    }
+    return { kind: "umbra-vault-backup", v: 1, exportedAt: Date.now(), vaults };
+  }
+  // 导出加密备份（.umbravault）：用当前 AUK 加密，随文件存 salt+verifier，导入时凭 主密码+SecretKey 解。
+  private async exportBackup(): Promise<{ ok: boolean; path?: string }> {
+    if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+    const bundle = await this.buildBundle();
+    const file = { kind: "umbra-vault-backup-enc", v: 1, salt: this.meta.salt, verifier: this.meta.verifier, blob: aesEncrypt(this.auk, Buffer.from(JSON.stringify(bundle), "utf8")) };
+    const { dialog } = await import("electron");
+    const r = await dialog.showSaveDialog({ title: "导出加密备份", defaultPath: `umbra-vault-${new Date().toISOString().slice(0, 10)}.umbravault`, filters: [{ name: "Umbra 保险箱备份", extensions: ["umbravault"] }] });
+    if (r.canceled || !r.filePath) return { ok: false };
+    await fs.writeFile(r.filePath, JSON.stringify(file), { mode: 0o600 });
+    return { ok: true, path: r.filePath };
+  }
+  // 导出明文 JSON（不安全，仅供迁移/检视；含明文密码）。
+  private async exportPlain(): Promise<{ ok: boolean; path?: string }> {
+    if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+    const bundle = await this.buildBundle();
+    const { dialog } = await import("electron");
+    const r = await dialog.showSaveDialog({ title: "导出明文 JSON（不加密）", defaultPath: `umbra-vault-plain-${new Date().toISOString().slice(0, 10)}.json`, filters: [{ name: "JSON", extensions: ["json"] }] });
+    if (r.canceled || !r.filePath) return { ok: false };
+    await fs.writeFile(r.filePath, JSON.stringify({ ...bundle, kind: "umbra-vault-plain" }, null, 2), { mode: 0o600 });
+    return { ok: true, path: r.filePath };
+  }
+  // 导入：先选文件(importPick，缓存)，加密备份返回 needPassword=true；再 importApply(主密码+SecretKey)。
+  private pendingImport: Record<string, unknown> | null = null;
+  private async importPick(): Promise<{ ok: boolean; needPassword: boolean }> {
+    if (!this.auk) throw new Error("保险箱已锁定");
+    const { dialog } = await import("electron");
+    const r = await dialog.showOpenDialog({ title: "导入备份 / 数据", properties: ["openFile"], filters: [{ name: "备份或 JSON", extensions: ["umbravault", "json"] }] });
+    if (r.canceled || !r.filePaths[0]) return { ok: false, needPassword: false };
+    const file = JSON.parse(await fs.readFile(r.filePaths[0], "utf-8"));
+    if (!["umbra-vault-backup-enc", "umbra-vault-plain", "umbra-vault-backup"].includes(file.kind)) throw new Error("无法识别的文件格式");
+    this.pendingImport = file;
+    return { ok: true, needPassword: file.kind === "umbra-vault-backup-enc" };
+  }
+  private async importApply(masterPassword?: string, secretKey?: string): Promise<{ ok: boolean; added: number }> {
+    if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+    const file = this.pendingImport; if (!file) throw new Error("请先选择文件");
+    let bundle: { vaults: { name: string; owner?: string; icon?: string; types?: VaultType[]; items?: Item[]; attachments?: Record<string, string> }[] };
+    if (file.kind === "umbra-vault-backup-enc") {
+      if (!masterPassword) throw new Error("需要主密码");
+      const salt = unb64(String(file.salt));
+      const auk2 = deriveAUK(masterPassword, secretKey || await this.decSecret(this.meta.secretKeyEnc), salt);
+      if (verifierOf(authHash(auk2, salt)) !== file.verifier) throw new Error("主密码或 Secret Key 不正确");
+      bundle = JSON.parse(aesDecrypt(auk2, String(file.blob)).toString("utf8"));
+    } else bundle = file as typeof bundle;
+    const added = await this.mergeBundle(bundle);
+    this.pendingImport = null;
+    return { ok: true, added };
+  }
+  private async mergeBundle(bundle: { vaults: { name: string; owner?: string; icon?: string; types?: VaultType[]; items?: Item[]; attachments?: Record<string, string> }[] }): Promise<number> {
+    if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+    for (const bv of bundle.vaults || []) {
+      const vk = newVaultKey();
+      const info: VaultInfo = { id: rid("v"), name: `${bv.name}（导入）`, owner: bv.owner || "custom", icon: bv.icon || "📥", order: this.meta.vaults.length, keyWrapped: wrapKey(this.auk, vk) };
+      this.meta.vaults.push(info); this.vaultKeys.set(info.id, vk);
+      await fs.mkdir(this.attDir(info.id), { recursive: true });
+      for (const [aid, data] of Object.entries(bv.attachments || {})) {
+        await fs.writeFile(this.attFile(info.id, aid), aesEncryptBytes(vk, unb64(data)), { mode: 0o600 });
+      }
+      this.vdata.set(info.id, { types: bv.types && bv.types.length ? bv.types : defaultTypes(), items: bv.items || [] });
+      await this.persistVault(info.id);
+    }
+    await this.saveMeta();
+    return (bundle.vaults || []).length;
+  }
+
   // ── IPC ──
   private async registerIpc(): Promise<void> {
     const { ipcMain } = await import("electron");
@@ -411,5 +508,10 @@ export class VaultManager {
     H("vault:copy", (text) => this.copy(String(text)));
     H("vault:enableQuickUnlock", () => this.enableQuickUnlock());
     H("vault:disableQuickUnlock", () => this.disableQuickUnlock());
+    H("vault:exportBackup", () => this.exportBackup());
+    H("vault:exportPlain", () => this.exportPlain());
+    H("vault:importPick", () => this.importPick());
+    H("vault:importApply", (mp, sk) => this.importApply(mp ? String(mp) : undefined, sk ? String(sk) : undefined));
+    ipcMain.handle("vault:setShortcut", (_e, acc: string) => this.setShortcut(String(acc || "")));
   }
 }

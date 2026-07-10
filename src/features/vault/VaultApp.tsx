@@ -8,7 +8,7 @@ interface Att { id: string; name: string; mime: string; size: number; addedAt: n
 interface Block { id: string; type: string; label?: string; data: Record<string, unknown> }
 interface Item { id: string; typeId: string; title: string; icon?: string; favorite?: boolean; tags?: string[]; blocks: Block[]; attachments: Att[]; createdAt: number; updatedAt: number; revision: number }
 
-interface VStatus { exists: boolean; unlocked: boolean; autoLockMin: number; quickUnlock: boolean; biometric: boolean }
+interface VStatus { exists: boolean; unlocked: boolean; autoLockMin: number; quickUnlock: boolean; biometric: boolean; shortcut: string }
 interface VaultAPI {
   status(): Promise<VStatus>;
   setup(mp: string): Promise<{ secretKey: string }>;
@@ -19,6 +19,10 @@ interface VaultAPI {
   disableQuickUnlock(): Promise<boolean>;
   lock(): Promise<boolean>;
   copy(text: string): Promise<void>;
+  exportBackup(): Promise<{ ok: boolean; path?: string }>;
+  exportPlain(): Promise<{ ok: boolean; path?: string }>;
+  importPick(): Promise<{ ok: boolean; needPassword: boolean }>;
+  importApply(mp?: string, sk?: string): Promise<{ ok: boolean; added: number }>;
   generatePassword(opts: unknown): Promise<string>;
   listVaults(): Promise<VaultInfo[]>;
   addVault(name: string, owner: string, icon: string): Promise<string>;
@@ -69,7 +73,7 @@ const CSS = `
 export function VaultApp() {
   const [theme, setTheme] = useState(() => (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   const [ready, setReady] = useState(false);
-  const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false });
+  const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "" });
   useEffect(() => { void api.status().then((s) => { setSt(s); setReady(true); }); }, []);
   const refresh = useCallback(async () => setSt(await api.status()), []);
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
@@ -182,6 +186,8 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
   const [autoEditId, setAutoEditId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const [idOpen, setIdOpen] = useState(false);
+  const [gearOpen, setGearOpen] = useState(false);
+  const [imp, setImp] = useState<{ open: boolean; mp: string; sk: string; err: string }>({ open: false, mp: "", sk: "", err: "" });
   const [ctx, setCtx] = useState<Ctx>({ open: false, x: 0, y: 0 });
   const [tctx, setTctx] = useState<TCtx>({ open: false, x: 0, y: 0 });
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -191,7 +197,10 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
   const loadVault = useCallback(async (id: string) => { const [t, it] = await Promise.all([api.listTypes(id), api.listItems(id)]); setTypes(t); setItems(it); }, []);
   useEffect(() => { if (vid) void loadVault(vid); }, [vid, loadVault]);
   const refresh = useCallback(async () => { if (vid) await loadVault(vid); }, [vid, loadVault]);
-  const closeMenus = () => { setIdOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
+  const closeMenus = () => { setIdOpen(false); setGearOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
+  const doExport = async (plain: boolean) => { setGearOpen(false); const r = plain ? await api.exportPlain() : await api.exportBackup(); if (r.ok) flash(plain ? "已导出明文 JSON" : "已导出加密备份 ✓"); };
+  const doImport = async () => { setGearOpen(false); const r = await api.importPick(); if (!r.ok) return; if (r.needPassword) setImp({ open: true, mp: "", sk: "", err: "" }); else { const a = await api.importApply(); setVaults(await api.listVaults()); await refresh(); flash(`已导入 ${a.added} 个身份库`); } };
+  const applyImport = async () => { try { const a = await api.importApply(imp.mp, imp.sk || undefined); setImp({ open: false, mp: "", sk: "", err: "" }); setVaults(await api.listVaults()); await refresh(); flash(`已导入 ${a.added} 个身份库`); } catch (e) { setImp((s) => ({ ...s, err: String(e).replace("Error: ", "") })); } };
 
   const cur = vaults.find((v) => v.id === vid);
   const searchText = (it: Item) => {
@@ -215,7 +224,7 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
   const toggleFav = async (it: Item) => { await api.updateItem(vid, { ...it, favorite: !it.favorite }); await refresh(); };
   const doMove = async (iid: string, tid: string) => { await api.moveItem(vid, iid, tid); closeMenus(); await refresh(); flash(`已移动到「${typeName(tid)}」`); };
   const doDelete = async (iid: string) => { await api.deleteItem(vid, iid); closeMenus(); if (selId === iid) setSelId(""); await refresh(); flash("记录已删除"); };
-  const anyMenu = idOpen || ctx.open || tctx.open;
+  const anyMenu = idOpen || gearOpen || ctx.open || tctx.open;
 
   const ctxItem = items.find((i) => i.id === ctx.itemId);
   const tctxType = types.find((t) => t.id === tctx.typeId);
@@ -246,6 +255,17 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
         <div style={{ flex: 1 }} />
         <button className="v-btn" onClick={addRecord} style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", background: "var(--orange)", color: "#fff", border: "none", borderRadius: 10, padding: "7px 13px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}><span style={{ fontSize: 15, lineHeight: 1 }}>＋</span>添加记录</button>
         <button className="v-lock" onClick={onLock} style={{ whiteSpace: "nowrap", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", borderRadius: 10, padding: "7px 12px", fontSize: 13, cursor: "pointer" }}>🔒 锁定</button>
+        <div style={{ position: "relative" }}>
+          <button className="v-lock" onClick={() => { setGearOpen((v) => !v); setIdOpen(false); }} title="导入 / 导出" style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", borderRadius: 10, height: 30, width: 34, fontSize: 15, cursor: "pointer" }}>⋯</button>
+          {gearOpen ? (
+            <div style={{ position: "absolute", top: 38, right: 0, width: 200, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "var(--shadow)", padding: 6, zIndex: 40, animation: "vPop .12s ease" }}>
+              <MenuItem onClick={() => doExport(false)}>💾 导出加密备份</MenuItem>
+              <MenuItem onClick={() => doExport(true)}>📄 导出明文 JSON</MenuItem>
+              <div style={{ height: 1, background: "var(--border)", margin: "4px 4px" }} />
+              <MenuItem onClick={doImport}>📥 导入备份 / 数据</MenuItem>
+            </div>
+          ) : null}
+        </div>
         <ThemeBtn theme={theme} onTheme={onTheme} style={{ height: 30, width: 32 }} />
       </div>
 
@@ -336,6 +356,22 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
           <div style={{ height: 1, background: "var(--border)", margin: "2px 4px 4px" }} />
           <MenuItem onClick={() => { setRenaming(tctx.typeId!); closeMenus(); }}>✎ 改名</MenuItem>
           <div className="v-danger" onClick={async () => { await api.deleteType(vid, tctx.typeId!); if (cat === tctx.typeId) setCat("all"); closeMenus(); await refresh(); flash("类型已删除"); }} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, cursor: "pointer", color: "var(--danger)" }}>🗑 删除类型</div>
+        </div>
+      ) : null}
+
+      {imp.open ? (
+        <div style={{ position: "fixed", inset: 0, zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.4)" }} onMouseDown={() => setImp({ open: false, mp: "", sk: "", err: "" })}>
+          <div style={{ width: 360, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 16, padding: 20, boxShadow: "var(--shadow)" }} onMouseDown={(e) => e.stopPropagation()}>
+            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>导入加密备份</div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>输入备份对应的主密码解密（若换过 Secret Key 也一并填）。导入的库会作为新身份库追加，不覆盖现有数据。</div>
+            <input autoFocus type="password" className="v-inp" placeholder="备份的主密码" value={imp.mp} onChange={(e) => setImp((s) => ({ ...s, mp: e.target.value, err: "" }))} onKeyDown={(e) => e.key === "Enter" && applyImport()} style={{ width: "100%", border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 10, padding: "10px 12px", fontSize: 14, color: "var(--text)", outline: "none" }} />
+            <input type="text" className="v-inp" placeholder="Secret Key（可选，U1-…）" value={imp.sk} onChange={(e) => setImp((s) => ({ ...s, sk: e.target.value }))} style={{ width: "100%", marginTop: 8, border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 10, padding: "10px 12px", fontSize: 14, color: "var(--text)", outline: "none", fontFamily: "ui-monospace,Menlo,monospace" }} />
+            {imp.err ? <div style={{ ...errStyle, textAlign: "left" }}>{imp.err}</div> : null}
+            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+              <button style={{ border: "1px solid var(--border)", background: "var(--card)", color: "var(--text)", borderRadius: 10, padding: "8px 14px", fontSize: 13, cursor: "pointer" }} onClick={() => setImp({ open: false, mp: "", sk: "", err: "" })}>取消</button>
+              <button className="v-btn" style={{ background: "var(--orange)", color: "#fff", border: "none", borderRadius: 10, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={applyImport}>导入</button>
+            </div>
+          </div>
         </div>
       ) : null}
 

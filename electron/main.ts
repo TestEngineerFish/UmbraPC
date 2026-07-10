@@ -59,6 +59,7 @@ function reregisterShortcuts(): void {
   screenshot?.registerShortcut();
   launcher?.registerShortcut();
   launcher?.registerWorkflowHotkeys();  // 工作流里的 Hotkey 触发
+  vault?.registerShortcut();            // 保险箱唤起快捷键
 }
 
 // 打包后的 .app 只有极简 PATH（看不到 homebrew/nvm/npm 全局），导致 which(claude/codex/ffmpeg) 找不到。
@@ -316,7 +317,7 @@ app.whenReady().then(async () => {
       if (w.webContents.isLoading()) w.webContents.once("did-finish-load", post); else post();
     }
   });
-  vault = new VaultManager(app.getPath("userData"), winOpts, { copyConceal: (t) => clipboard.writeConcealed(t) });
+  vault = new VaultManager(store, app.getPath("userData"), winOpts, { copyConceal: (t) => clipboard.writeConcealed(t) }, reregisterShortcuts);
   Promise.all([clipboard.init(), screenshot.init(), launcher.init(), vault.init()])
     .then(() => reregisterShortcuts()) // 就绪后统一注册各自快捷键
     .catch((e) => console.error("剪贴板/截图/快捷入口/保险箱初始化失败", e));

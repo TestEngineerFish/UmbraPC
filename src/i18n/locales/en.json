@@ -166,7 +166,9 @@
     "phrasesHint": "Search by name/keyword/content in the launcher; Enter inserts the content into the front app (needs Accessibility, else copy only). Reorder with ▲▼.",
     "vault": "Password Vault",
     "vaultDesc": "Zero-knowledge encrypted passwords / IDs / important files (separate window, master password)",
-    "vaultOpen": "Open vault"
+    "vaultOpen": "Open vault",
+    "vaultOpenLabel": "Vault",
+    "vaultShortcut": "Global shortcut"
   },
   "logs": {
     "title": "Logs",
