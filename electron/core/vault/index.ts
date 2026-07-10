@@ -9,7 +9,7 @@ import {
   generatePassword, GenOpts,
 } from "./crypto";
 import { VaultMeta, VaultInfo, VaultType, VaultData, Item, Attachment } from "./types";
-import { ConfigStore } from "../config";
+import { ConfigStore, httpBase } from "../config";
 
 // 导入用的明文 bundle 结构（每个 vault 会作为新身份库追加）。
 interface ImportBundle { vaults: { name: string; owner?: string; icon?: string; types?: VaultType[]; items?: Item[]; attachments?: Record<string, string> }[] }
@@ -114,10 +114,12 @@ export class VaultManager {
   }
   private async status() {
     await this.loadMeta();
+    const c = this.cfg.get();
     return {
       exists: this.existsFile(), unlocked: this.unlocked, autoLockMin: this.meta?.autoLockMin ?? 10,
       quickUnlock: !!this.meta?.quickUnlockEnc, biometric: await this.biometricAvailable(),
-      shortcut: this.cfg.get().vaultShortcut || "",
+      shortcut: c.vaultShortcut || "",
+      syncConfigured: !!(c.serverUrl && c.token), syncRev: this.meta?.syncRev ?? 0,
     };
   }
   private async biometricAvailable(): Promise<boolean> {
@@ -146,6 +148,7 @@ export class VaultManager {
     this.vaultKeys.clear(); this.vdata.clear();
     for (const v of this.meta.vaults) { const vk = unwrapKey(auk, v.keyWrapped); this.vaultKeys.set(v.id, vk); this.vdata.set(v.id, await this.loadVault(v.id, vk)); }
     this.auk = auk; this.armAutoLock();
+    void this.autoPull();
     return true;
   }
   private armAutoLock(): void {
@@ -221,6 +224,7 @@ export class VaultManager {
     this.auk = auk;
     if (secretKeyOverride) { this.meta.secretKeyEnc = await this.encSecret(secretKey); await this.saveMeta(); } // 新设备：写入本机 keychain
     this.armAutoLock();
+    void this.autoPull();
     return true;
   }
 
@@ -395,6 +399,105 @@ export class VaultManager {
     if (!this.meta) throw new Error("未初始化");
     this.meta.autoLockMin = Math.max(0, Math.min(min | 0, 240));
     await this.saveMeta(); this.armAutoLock();
+  }
+
+  // ── 端到端加密同步（服务器只存密文快照）──
+  // 快照明文：各库信息(含 keyWrapped) + 每库 {types,items,附件字节 base64}。设备端密钥(secretKeyEnc/quickUnlockEnc)不上传。
+  private async buildSnapshot(): Promise<Record<string, unknown>> {
+    if (!this.meta) throw new Error("未初始化");
+    const vaults = this.meta.vaults.map((v) => ({ id: v.id, name: v.name, owner: v.owner, icon: v.icon, order: v.order, keyWrapped: v.keyWrapped }));
+    const data: Record<string, unknown> = {};
+    for (const v of this.meta.vaults) {
+      const d = this.vdata.get(v.id); const vk = this.vaultKeys.get(v.id); if (!d || !vk) continue;
+      const attachments: Record<string, string> = {};
+      for (const it of d.items) for (const a of it.attachments) {
+        try { attachments[a.id] = b64(aesDecryptBytes(vk, await fs.readFile(this.attFile(v.id, a.id)))); } catch { /* 缺文件跳过 */ }
+      }
+      data[v.id] = { types: d.types, items: d.items, attachments };
+    }
+    return { v: 1, vaults, data };
+  }
+  private async httpVault(method: string, path: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
+    const c = this.cfg.get();
+    if (!c.serverUrl || !c.token) throw new Error("未配置服务器地址或令牌");
+    const headers: Record<string, string> = { "X-Umbra-Token": c.token };
+    if (body) headers["Content-Type"] = "application/json";
+    const resp = await fetch(`${httpBase(c)}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const json = await resp.json().catch(() => ({}));
+    return { status: resp.status, json: json as Record<string, unknown> };
+  }
+  // 上传本地快照（乐观并发）。返回 {ok} 或 {conflict, rev}。
+  private async syncPush(force = false): Promise<{ ok: boolean; conflict?: boolean; rev?: number }> {
+    if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+    const record = JSON.stringify({ v: 1, salt: this.meta.salt, verifier: this.meta.verifier, enc: aesEncrypt(this.auk, Buffer.from(JSON.stringify(await this.buildSnapshot()), "utf8")) });
+    const r = await this.httpVault("PUT", "/vault/sync", { blob: record, baseRev: this.meta.syncRev ?? 0, deviceId: this.cfg.get().deviceId, force });
+    if (r.json.ok) { this.meta.syncRev = Number(r.json.rev); await this.saveMeta(); return { ok: true, rev: this.meta.syncRev }; }
+    if (r.json.conflict) return { ok: false, conflict: true, rev: Number(r.json.rev) };
+    throw new Error(String(r.json.detail || `同步上传失败(${r.status})`));
+  }
+  // 拉取云端快照并合并（按条目 revision 取新；类型/库按 id 合并；不覆盖本地未同步改动）。
+  private async syncPull(): Promise<{ pulled: boolean; rev?: number }> {
+    if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+    const r = await this.httpVault("GET", `/vault/sync?have_rev=${this.meta.syncRev ?? 0}`);
+    if (!r.json.exists) return { pulled: false };
+    const rev = Number(r.json.rev);
+    if (rev === (this.meta.syncRev ?? 0) || !r.json.blob) return { pulled: false, rev };
+    const record = JSON.parse(String(r.json.blob));
+    if (record.verifier !== this.meta.verifier) throw new Error("云端数据的主密码/Secret Key 与本地不一致");
+    const snap = JSON.parse(aesDecrypt(this.auk, String(record.enc)).toString("utf8")) as { vaults: VaultInfo[]; data: Record<string, { types: VaultType[]; items: Item[]; attachments: Record<string, string> }> };
+    await this.mergeSnapshot(snap);
+    this.meta.syncRev = rev; await this.saveMeta();
+    return { pulled: true, rev };
+  }
+  private async mergeSnapshot(snap: { vaults: VaultInfo[]; data: Record<string, { types: VaultType[]; items: Item[]; attachments: Record<string, string> }> }): Promise<void> {
+    if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+    for (const rv of snap.vaults || []) {
+      if (!this.meta.vaults.find((x) => x.id === rv.id)) {
+        this.meta.vaults.push(rv);
+        try { this.vaultKeys.set(rv.id, unwrapKey(this.auk, rv.keyWrapped)); } catch { /* 解包失败(密钥不符)跳过 */ }
+      }
+    }
+    for (const [vid, rd] of Object.entries(snap.data || {})) {
+      const vk = this.vaultKeys.get(vid); if (!vk) continue;
+      const local = this.vdata.get(vid) || { types: [], items: [] };
+      // 类型按 id 合并
+      const tIds = new Set(local.types.map((t) => t.id));
+      for (const t of rd.types || []) if (!tIds.has(t.id)) local.types.push(t);
+      // 条目按 id 合并，revision 高者胜（相等按 updatedAt）
+      const byId = new Map(local.items.map((it) => [it.id, it]));
+      for (const rit of rd.items || []) {
+        const cur = byId.get(rit.id);
+        if (!cur || rit.revision > cur.revision || (rit.revision === cur.revision && rit.updatedAt > cur.updatedAt)) byId.set(rit.id, rit);
+      }
+      local.items = [...byId.values()];
+      // 附件字节：写入本地（用目标库密钥重新加密）
+      if (Object.keys(rd.attachments || {}).length) await fs.mkdir(this.attDir(vid), { recursive: true });
+      for (const [aid, dataB64] of Object.entries(rd.attachments || {})) {
+        if (!fssync.existsSync(this.attFile(vid, aid))) await fs.writeFile(this.attFile(vid, aid), aesEncryptBytes(vk, unb64(dataB64)), { mode: 0o600 });
+      }
+      this.vdata.set(vid, local);
+      await this.persistVault(vid);
+    }
+    await this.saveMeta();
+  }
+  // 一键同步：先拉取合并，再上传；冲突则再拉再传（最多几次），最后必要时强制。
+  private async syncNow(): Promise<{ ok: boolean; rev: number; pulled: boolean }> {
+    if (!this.unlocked) throw new Error("保险箱已锁定");
+    const pull = await this.syncPull();
+    let push = await this.syncPush(false);
+    for (let i = 0; i < 3 && push.conflict; i++) { await this.syncPull(); push = await this.syncPush(i === 2); } // 最后一次强制
+    return { ok: true, rev: this.meta?.syncRev ?? 0, pulled: pull.pulled };
+  }
+  private async syncReset(): Promise<{ ok: boolean }> {
+    await this.httpVault("DELETE", "/vault/sync");
+    if (this.meta) { this.meta.syncRev = 0; await this.saveMeta(); }
+    return { ok: true };
+  }
+  // 解锁后后台静默拉取（不打断用户；失败忽略）。
+  private async autoPull(): Promise<void> {
+    const c = this.cfg.get();
+    if (!c.serverUrl || !c.token) return;
+    try { await this.syncPull(); } catch { /* 静默 */ }
   }
 
   // ── 批量导入 / 导出 ──
@@ -596,6 +699,8 @@ export class VaultManager {
     H("vault:search", (q, vid) => this.search(String(q), vid ? String(vid) : undefined));
     H("vault:setAutoLock", (min) => this.setAutoLock(Number(min)));
     H("vault:copy", (text) => this.copy(String(text)));
+    H("vault:syncNow", () => this.syncNow());
+    H("vault:syncReset", () => this.syncReset());
     H("vault:enableQuickUnlock", () => this.enableQuickUnlock());
     H("vault:disableQuickUnlock", () => this.disableQuickUnlock());
     H("vault:exportBackup", () => this.exportBackup());

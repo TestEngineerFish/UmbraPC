@@ -131,6 +131,8 @@ contextBridge.exposeInMainWorld("umbraVault", {
   disableQuickUnlock: () => ipcRenderer.invoke("vault:disableQuickUnlock"),
   lock: () => ipcRenderer.invoke("vault:lock"),
   copy: (text: string) => ipcRenderer.invoke("vault:copy", text),
+  syncNow: () => ipcRenderer.invoke("vault:syncNow"),
+  syncReset: () => ipcRenderer.invoke("vault:syncReset"),
   setShortcut: (acc: string) => ipcRenderer.invoke("vault:setShortcut", acc),
   exportBackup: () => ipcRenderer.invoke("vault:exportBackup"),
   exportPlain: () => ipcRenderer.invoke("vault:exportPlain"),

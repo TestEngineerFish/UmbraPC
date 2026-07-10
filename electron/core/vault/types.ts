@@ -8,6 +8,7 @@ export interface VaultMeta {
   vaults: VaultInfo[];       // 身份库列表 + 各自被 AUK 包装的 VaultKey
   autoLockMin: number;       // 自动锁定分钟（0=不自动锁）
   quickUnlockEnc?: string;   // 启用 Touch ID 快速解锁后：safeStorage 加密的 AUK（生物识别通过即解锁）
+  syncRev?: number;          // 端到端同步：本地已基于的云端版本号
   createdAt: number;
 }
 export interface VaultInfo {

@@ -8,7 +8,7 @@ interface Att { id: string; name: string; mime: string; size: number; addedAt: n
 interface Block { id: string; type: string; label?: string; data: Record<string, unknown> }
 interface Item { id: string; typeId: string; title: string; icon?: string; favorite?: boolean; tags?: string[]; blocks: Block[]; attachments: Att[]; createdAt: number; updatedAt: number; revision: number }
 
-interface VStatus { exists: boolean; unlocked: boolean; autoLockMin: number; quickUnlock: boolean; biometric: boolean; shortcut: string }
+interface VStatus { exists: boolean; unlocked: boolean; autoLockMin: number; quickUnlock: boolean; biometric: boolean; shortcut: string; syncConfigured: boolean; syncRev: number }
 interface VaultAPI {
   status(): Promise<VStatus>;
   setup(mp: string): Promise<{ secretKey: string }>;
@@ -19,6 +19,7 @@ interface VaultAPI {
   disableQuickUnlock(): Promise<boolean>;
   lock(): Promise<boolean>;
   copy(text: string): Promise<void>;
+  syncNow(): Promise<{ ok: boolean; rev: number; pulled: boolean }>;
   exportBackup(): Promise<{ ok: boolean; path?: string }>;
   exportPlain(): Promise<{ ok: boolean; path?: string }>;
   importPick(): Promise<{ ok: boolean; needPassword: boolean }>;
@@ -77,7 +78,7 @@ const CSS = `
 export function VaultApp() {
   const [theme, setTheme] = useState(() => (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   const [ready, setReady] = useState(false);
-  const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "" });
+  const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "", syncConfigured: false, syncRev: 0 });
   useEffect(() => { void api.status().then((s) => { setSt(s); setReady(true); }); }, []);
   const refresh = useCallback(async () => setSt(await api.status()), []);
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
@@ -208,6 +209,13 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
   const refresh = useCallback(async () => { if (vid) await loadVault(vid); }, [vid, loadVault]);
   const closeMenus = () => { setIdOpen(false); setGearOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
   const doExport = async (plain: boolean) => { setGearOpen(false); const r = plain ? await api.exportPlain() : await api.exportBackup(); if (r.ok) flash(plain ? "已导出明文 JSON" : "已导出加密备份 ✓"); };
+  const doSync = async () => {
+    setGearOpen(false);
+    if (!st.syncConfigured) { flash("请先在 Umbra 设置里配置服务器地址与令牌"); return; }
+    flash("同步中…");
+    try { const r = await api.syncNow(); await refresh(); await onStatus(); flash(`已同步 ✓${r.pulled ? " · 已拉取云端更新" : ""}`); }
+    catch (e) { flash(String(e).replace("Error: ", "")); }
+  };
   const afterImport = async (a: { added: number }) => { setCat("all"); await refresh(); flash(`已导入 ${a.added} 条记录到当前身份库`); };
   const doImport = async () => {
     setGearOpen(false);
@@ -281,6 +289,8 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
           <button className="v-lock" onClick={() => { setGearOpen((v) => !v); setIdOpen(false); }} title="导入 / 导出" style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", borderRadius: 10, height: 30, width: 34, fontSize: 15, cursor: "pointer" }}>⋯</button>
           {gearOpen ? (
             <div style={{ position: "absolute", top: 38, right: 0, width: 200, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "var(--shadow)", padding: 6, zIndex: 40, animation: "vPop .12s ease" }}>
+              <MenuItem onClick={doSync}>☁︎ 立即同步{st.syncConfigured ? "" : "（未配置）"}</MenuItem>
+              <div style={{ height: 1, background: "var(--border)", margin: "4px 4px" }} />
               <MenuItem onClick={() => doExport(false)}>💾 导出加密备份</MenuItem>
               <MenuItem onClick={() => doExport(true)}>📄 导出明文 JSON</MenuItem>
               <div style={{ height: 1, background: "var(--border)", margin: "4px 4px" }} />
