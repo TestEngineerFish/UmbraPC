@@ -329,6 +329,14 @@ export class VaultManager {
     d.items = d.items.filter((i) => i.id !== itemId);
     await this.persistVault(vaultId);
   }
+  private async deleteItems(vaultId: string, ids: string[]) {
+    const d = this.data(vaultId);
+    const set = new Set(ids);
+    for (const it of d.items) if (set.has(it.id)) for (const a of it.attachments) await fs.rm(this.attFile(vaultId, a.id), { force: true });
+    d.items = d.items.filter((i) => !set.has(i.id));
+    await this.persistVault(vaultId);
+    return ids.length;
+  }
   private async moveItem(vaultId: string, itemId: string, toTypeId: string) {
     const it = this.getItem(vaultId, itemId); if (!it) throw new Error("记录不存在");
     it.typeId = toTypeId; it.updatedAt = Date.now(); it.revision++;
@@ -578,6 +586,7 @@ export class VaultManager {
     H("vault:addItem", (vid, init) => this.addItem(String(vid), init as Partial<Item>));
     H("vault:updateItem", (vid, item) => this.updateItem(String(vid), item as Item));
     H("vault:deleteItem", (vid, iid) => this.deleteItem(String(vid), String(iid)));
+    H("vault:deleteItems", (vid, ids) => this.deleteItems(String(vid), (ids as string[]) || []));
     H("vault:moveItem", (vid, iid, tid) => this.moveItem(String(vid), String(iid), String(tid)));
 
     H("vault:addAttachment", (vid, iid, name, mime, data) => this.addAttachment(String(vid), String(iid), String(name), String(mime), String(data)));

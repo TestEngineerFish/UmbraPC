@@ -152,6 +152,7 @@ contextBridge.exposeInMainWorld("umbraVault", {
   addItem: (vid: string, init: unknown) => ipcRenderer.invoke("vault:addItem", vid, init),
   updateItem: (vid: string, item: unknown) => ipcRenderer.invoke("vault:updateItem", vid, item),
   deleteItem: (vid: string, iid: string) => ipcRenderer.invoke("vault:deleteItem", vid, iid),
+  deleteItems: (vid: string, ids: string[]) => ipcRenderer.invoke("vault:deleteItems", vid, ids),
   moveItem: (vid: string, iid: string, tid: string) => ipcRenderer.invoke("vault:moveItem", vid, iid, tid),
   addAttachment: (vid: string, iid: string, name: string, mime: string, dataB64: string) => ipcRenderer.invoke("vault:addAttachment", vid, iid, name, mime, dataB64),
   readAttachment: (vid: string, aid: string) => ipcRenderer.invoke("vault:readAttachment", vid, aid),

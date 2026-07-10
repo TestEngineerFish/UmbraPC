@@ -27,6 +27,8 @@ interface VaultAPI {
   generatePassword(opts: unknown): Promise<string>;
   listVaults(): Promise<VaultInfo[]>;
   addVault(name: string, owner: string, icon: string): Promise<string>;
+  updateVault(id: string, patch: { name?: string; icon?: string }): Promise<void>;
+  deleteVault(id: string): Promise<void>;
   listTypes(vid: string): Promise<VType[]>;
   addType(vid: string, name: string, icon: string): Promise<string>;
   updateType(vid: string, tid: string, patch: Partial<VType>): Promise<void>;
@@ -35,6 +37,7 @@ interface VaultAPI {
   addItem(vid: string, init: Partial<Item>): Promise<string>;
   updateItem(vid: string, item: Item): Promise<void>;
   deleteItem(vid: string, iid: string): Promise<void>;
+  deleteItems(vid: string, ids: string[]): Promise<number>;
   moveItem(vid: string, iid: string, tid: string): Promise<void>;
   addAttachment(vid: string, iid: string, name: string, mime: string, dataB64: string): Promise<Att>;
   readAttachment(vid: string, aid: string): Promise<string>;
@@ -187,16 +190,21 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
   const [autoEditId, setAutoEditId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const [idOpen, setIdOpen] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
   const [gearOpen, setGearOpen] = useState(false);
   const [imp, setImp] = useState<{ open: boolean; mp: string; sk: string; err: string }>({ open: false, mp: "", sk: "", err: "" });
   const [ctx, setCtx] = useState<Ctx>({ open: false, x: 0, y: 0 });
   const [tctx, setTctx] = useState<TCtx>({ open: false, x: 0, y: 0 });
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [selecting, setSelecting] = useState(false);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(""), 1400); };
+  const toggleCheck = (id: string) => setChecked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const exitSelect = () => { setSelecting(false); setChecked(new Set()); };
 
   useEffect(() => { void api.listVaults().then((v) => { setVaults(v); setVid(v[0]?.id || ""); }); }, []);
   const loadVault = useCallback(async (id: string) => { const [t, it] = await Promise.all([api.listTypes(id), api.listItems(id)]); setTypes(t); setItems(it); }, []);
-  useEffect(() => { if (vid) void loadVault(vid); }, [vid, loadVault]);
+  useEffect(() => { if (vid) void loadVault(vid); setSelecting(false); setChecked(new Set()); }, [vid, loadVault]);
   const refresh = useCallback(async () => { if (vid) await loadVault(vid); }, [vid, loadVault]);
   const closeMenus = () => { setIdOpen(false); setGearOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
   const doExport = async (plain: boolean) => { setGearOpen(false); const r = plain ? await api.exportPlain() : await api.exportBackup(); if (r.ok) flash(plain ? "已导出明文 JSON" : "已导出加密备份 ✓"); };
@@ -216,6 +224,13 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
     return p.join(" ").toLowerCase();
   };
   const visible = items.filter((it) => (cat === "all" || (cat === "fav" ? it.favorite : it.typeId === cat)) && (!q || searchText(it).includes(q.toLowerCase())));
+  const allChecked = visible.length > 0 && visible.every((it) => checked.has(it.id));
+  const toggleAll = () => setChecked(allChecked ? new Set() : new Set(visible.map((it) => it.id)));
+  const batchDelete = async () => {
+    if (!checked.size) return;
+    if (!window.confirm(`确定删除选中的 ${checked.size} 条记录？此操作不可撤销。`)) return;
+    await api.deleteItems(vid, [...checked]); if (checked.has(selId)) setSelId(""); exitSelect(); await refresh(); flash("已删除所选记录");
+  };
   const sel = items.find((i) => i.id === selId) || null;
   const typeName = (id: string) => { const t = types.find((x) => x.id === id); return t?.name || "未分类"; };
   const typeIcon = (id: string) => { const t = types.find((x) => x.id === id); return t?.icon || "📄"; };
@@ -254,6 +269,7 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
               ))}
               <div style={{ height: 1, background: "var(--border)", margin: "6px 4px" }} />
               <div className="v-row" onClick={async () => { const id = await api.addVault("新身份库", "custom", "👤"); setVaults(await api.listVaults()); setVid(id); setIdOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, fontSize: 13, color: "var(--muted)", cursor: "pointer" }}>＋ 新建身份库</div>
+              <div className="v-row" onClick={() => { setIdOpen(false); setManageOpen(true); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, fontSize: 13, color: "var(--muted)", cursor: "pointer" }}>⚙️ 管理身份库…</div>
               {st.biometric ? <div className="v-row" onClick={async () => { if (st.quickUnlock) await api.disableQuickUnlock(); else await api.enableQuickUnlock(); await onStatus(); setIdOpen(false); flash(st.quickUnlock ? "已关闭 Touch ID" : "已启用 Touch ID 快速解锁"); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>☝️ Touch ID 快速解锁 <span style={{ marginLeft: "auto", color: "var(--orange)" }}>{st.quickUnlock ? "✓" : ""}</span></div> : null}
             </div>
           ) : null}
@@ -313,21 +329,35 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
               <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--muted)" }}>🔍</span>
               <input className="v-inp" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索名称/账号/网址…" style={{ width: "100%", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 10, padding: "8px 12px 8px 32px", fontSize: 13, color: "var(--text)", outline: "none" }} />
             </div>
+            {selecting ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 12.5 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", color: "var(--text)" }}><input type="checkbox" checked={allChecked} onChange={toggleAll} />全选</label>
+                <span style={{ color: "var(--muted)" }}>已选 {checked.size}</span>
+                <div style={{ flex: 1 }} />
+                <button className="v-danger" onClick={batchDelete} disabled={!checked.size} style={{ border: "none", background: "transparent", color: "var(--danger)", cursor: checked.size ? "pointer" : "default", opacity: checked.size ? 1 : .5, fontSize: 12.5, padding: "3px 8px", borderRadius: 7 }}>🗑 删除</button>
+                <button onClick={exitSelect} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--muted)", borderRadius: 7, padding: "3px 10px", fontSize: 12, cursor: "pointer" }}>取消</button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
+                <button className="v-ho" onClick={() => setSelecting(true)} style={{ border: "none", background: "transparent", color: "var(--muted)", fontSize: 12, cursor: "pointer", padding: "2px 6px", borderRadius: 6 }}>☑︎ 多选</button>
+              </div>
+            )}
           </div>
           <div style={{ flex: 1, overflowY: "auto", padding: "2px 10px 12px", display: "flex", flexDirection: "column", gap: 3 }}>
             {visible.length ? visible.map((it) => {
               const acc = it.blocks.find((b) => b.type === "account");
-              const isSel = it.id === selId;
+              const isSel = it.id === selId; const isChk = checked.has(it.id);
               return (
-                <div key={it.id} className="v-item" onClick={() => selectItem(it.id)} onContextMenu={(e) => { e.preventDefault(); setCtx({ open: true, x: e.clientX, y: e.clientY, itemId: it.id }); setIdOpen(false); }}
-                  style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 10px", borderRadius: 11, cursor: "pointer", border: "1px solid " + (isSel ? "color-mix(in srgb,var(--orange) 22%,transparent)" : "transparent"), background: isSel ? "var(--orange-soft)" : "transparent" }}>
+                <div key={it.id} className="v-item" onClick={() => (selecting ? toggleCheck(it.id) : selectItem(it.id))} onContextMenu={(e) => { if (selecting) return; e.preventDefault(); setCtx({ open: true, x: e.clientX, y: e.clientY, itemId: it.id }); setIdOpen(false); }}
+                  style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 10px", borderRadius: 11, cursor: "pointer", border: "1px solid " + ((selecting ? isChk : isSel) ? "color-mix(in srgb,var(--orange) 22%,transparent)" : "transparent"), background: (selecting ? isChk : isSel) ? "var(--orange-soft)" : "transparent" }}>
+                  {selecting ? <input type="checkbox" checked={isChk} onChange={() => toggleCheck(it.id)} onClick={(e) => e.stopPropagation()} style={{ flexShrink: 0 }} /> : null}
                   <div style={{ width: 34, height: 34, borderRadius: 10, background: "var(--orange-soft)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{it.icon || typeIcon(it.typeId)}</div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</div>
                     <div style={{ fontSize: 11.5, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 1 }}>{acc ? String(acc.data.username || "") : typeName(it.typeId)}</div>
                   </div>
-                  {it.favorite ? <span style={{ fontSize: 12, color: "var(--orange)" }}>⭐</span> : null}
-                  {isSel ? <span style={{ fontSize: 15, color: "var(--orange)", lineHeight: 1 }}>›</span> : null}
+                  {!selecting && it.favorite ? <span style={{ fontSize: 12, color: "var(--orange)" }}>⭐</span> : null}
+                  {!selecting && isSel ? <span style={{ fontSize: 15, color: "var(--orange)", lineHeight: 1 }}>›</span> : null}
                 </div>
               );
             }) : <div style={{ textAlign: "center", color: "var(--muted)", fontSize: 13, padding: "60px 20px", lineHeight: 1.7, animation: "vDetailIn .3s ease" }}><div style={{ fontSize: 30, opacity: .4 }}>🗒️</div>没有匹配的记录</div>}
@@ -366,6 +396,12 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
         </div>
       ) : null}
 
+      {manageOpen ? (
+        <VaultsManager vaults={vaults} curVid={vid} onClose={() => setManageOpen(false)}
+          reload={async () => setVaults(await api.listVaults())}
+          onDeleted={(deletedId, remaining) => { if (deletedId === vid) { setSelId(""); setCat("all"); setVid(remaining[0]?.id || ""); } }} />
+      ) : null}
+
       {imp.open ? (
         <div style={{ position: "fixed", inset: 0, zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.4)" }} onMouseDown={() => setImp({ open: false, mp: "", sk: "", err: "" })}>
           <div style={{ width: 360, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 16, padding: 20, boxShadow: "var(--shadow)" }} onMouseDown={(e) => e.stopPropagation()}>
@@ -388,6 +424,40 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
 }
 
 const groupHead: CSSProperties = { fontSize: 10.5, fontWeight: 600, letterSpacing: ".08em", color: "var(--muted)", textTransform: "uppercase", padding: "4px 10px 5px" };
+// 身份库管理弹窗：改图标/改名/删除/新建。
+function VaultsManager({ vaults, curVid, onClose, reload, onDeleted }: { vaults: VaultInfo[]; curVid: string; onClose: () => void; reload: () => Promise<void>; onDeleted: (deletedId: string, remaining: VaultInfo[]) => void }) {
+  const [err, setErr] = useState("");
+  const inp: CSSProperties = { border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", borderRadius: 9, padding: "8px 10px", fontSize: 13.5, outline: "none" };
+  const del = async (v: VaultInfo) => {
+    if (!window.confirm(`删除身份库「${v.name}」及其全部记录？此操作不可撤销。`)) return;
+    try { await api.deleteVault(v.id); const remaining = vaults.filter((x) => x.id !== v.id); await reload(); onDeleted(v.id, remaining); }
+    catch (e) { setErr(String(e).replace("Error: ", "")); }
+  };
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.4)" }} onMouseDown={onClose}>
+      <div style={{ width: 420, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 16, padding: 20, boxShadow: "var(--shadow)", maxHeight: "80vh", overflow: "auto" }} onMouseDown={(e) => e.stopPropagation()}>
+        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>管理身份库</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>改图标（emoji）/ 名称即时保存；删除会连同该库全部记录一起删除，至少保留一个。</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {vaults.map((v) => (
+            <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input defaultValue={v.icon} maxLength={2} onBlur={async (e) => { const val = e.target.value.trim(); if (val && val !== v.icon) { await api.updateVault(v.id, { icon: val }); await reload(); } }} style={{ ...inp, width: 44, textAlign: "center", fontSize: 18 }} />
+              <input defaultValue={v.name} onBlur={async (e) => { const val = e.target.value.trim(); if (val && val !== v.name) { await api.updateVault(v.id, { name: val }); await reload(); } }} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} style={{ ...inp, flex: 1 }} />
+              {v.id === curVid ? <span style={{ fontSize: 11, color: "var(--orange)", flexShrink: 0 }}>当前</span> : null}
+              <button className="v-danger" onClick={() => del(v)} disabled={vaults.length <= 1} style={{ border: "none", background: "transparent", color: "var(--danger)", cursor: vaults.length <= 1 ? "default" : "pointer", opacity: vaults.length <= 1 ? .4 : 1, fontSize: 13, padding: "5px 8px", borderRadius: 7 }}>🗑</button>
+            </div>
+          ))}
+        </div>
+        {err ? <div style={{ ...errStyle, textAlign: "left" }}>{err}</div> : null}
+        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "space-between" }}>
+          <button className="v-dash" onClick={async () => { await api.addVault("新身份库", "custom", "👤"); await reload(); }} style={{ border: "1px dashed var(--border)", background: "transparent", color: "var(--muted)", borderRadius: 10, padding: "8px 14px", fontSize: 13, cursor: "pointer" }}>＋ 新建身份库</button>
+          <button className="v-btn" onClick={onClose} style={{ background: "var(--orange)", color: "#fff", border: "none", borderRadius: 10, padding: "8px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>完成</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TypeRow({ icon, name, count, sel, onClick }: { icon: string; name: string; count: number; sel: boolean; onClick: () => void }) {
   return <div className={sel ? "" : "v-row"} onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 9, fontSize: 13, cursor: "pointer", userSelect: "none", background: sel ? "var(--orange-soft)" : "transparent", color: sel ? "var(--orange)" : "var(--text)", fontWeight: sel ? 600 : 500 }}><span style={{ fontSize: 15, width: 18, textAlign: "center" }}>{icon}</span><span style={{ flex: 1 }}>{name}</span><span style={{ fontSize: 11.5, color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>{count || ""}</span></div>;
 }
