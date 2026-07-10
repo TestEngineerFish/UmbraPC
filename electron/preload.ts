@@ -133,6 +133,13 @@ contextBridge.exposeInMainWorld("umbraVault", {
   copy: (text: string) => ipcRenderer.invoke("vault:copy", text),
   syncNow: () => ipcRenderer.invoke("vault:syncNow"),
   syncReset: () => ipcRenderer.invoke("vault:syncReset"),
+  // 主进程委托渲染层用 Chromium 发同步请求（避开 undici 被服务器/CDN 重置）。
+  onHttp: (cb: (msg: { id: string; url: string; method: string; token: string; body: string | null }) => void) => {
+    const l = (_e: unknown, msg: any) => cb(msg);
+    ipcRenderer.on("vault:http", l);
+    return () => ipcRenderer.removeListener("vault:http", l);
+  },
+  httpResult: (id: string, ok: boolean, json: unknown, error?: string) => ipcRenderer.send("vault:httpResult", { id, ok, json, error }),
   setShortcut: (acc: string) => ipcRenderer.invoke("vault:setShortcut", acc),
   exportBackup: () => ipcRenderer.invoke("vault:exportBackup"),
   exportPlain: () => ipcRenderer.invoke("vault:exportPlain"),

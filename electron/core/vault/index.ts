@@ -429,14 +429,21 @@ export class VaultManager {
     }
     return { v: 1, vaults, data };
   }
+  // 网络请求委托给保险箱窗口的渲染层用 Chromium 发（主进程 undici 会被 Cloudflare 等按非浏览器 UA 重置连接）。
+  private httpSeq = 0;
+  private httpWaiters = new Map<string, (r: { ok: boolean; json?: Record<string, unknown>; error?: string }) => void>();
   private async httpVault(method: string, path: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
     const c = this.cfg.get();
     if (!c.serverUrl || !c.token) throw new Error("未配置服务器地址或令牌");
-    const headers: Record<string, string> = { "X-Umbra-Token": c.token };
-    if (body) headers["Content-Type"] = "application/json";
-    const resp = await fetch(`${httpBase(c)}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
-    const json = await resp.json().catch(() => ({}));
-    return { status: resp.status, json: json as Record<string, unknown> };
+    if (!this.win || this.win.isDestroyed()) throw new Error("请在保险箱窗口内同步");
+    const id = `h${this.httpSeq++}`;
+    const r = await new Promise<{ ok: boolean; json?: Record<string, unknown>; error?: string }>((resolve) => {
+      this.httpWaiters.set(id, resolve);
+      this.win!.webContents.send("vault:http", { id, url: `${httpBase(c)}${path}`, method, token: c.token, body: body ? JSON.stringify(body) : null });
+      setTimeout(() => { if (this.httpWaiters.has(id)) { this.httpWaiters.delete(id); resolve({ ok: false, error: "同步请求超时" }); } }, 25_000);
+    });
+    if (!r.ok) throw new Error(r.error || "同步请求失败");
+    return { status: 200, json: r.json || {} };
   }
   // 上传本地快照（乐观并发）。返回 {ok} 或 {conflict, rev}。
   private async syncPush(force = false): Promise<{ ok: boolean; conflict?: boolean; rev?: number }> {
@@ -677,6 +684,10 @@ export class VaultManager {
       ipcMain.handle(name, async (_e, ...args: unknown[]) => { if (needUnlock && !this.unlocked) throw new Error("保险箱已锁定"); this.touch(); return fn(...args); });
 
     ipcMain.handle("vault:openWindow", () => this.openWindow());
+    // 渲染层回传网络请求结果（Chromium fetch 代主进程发的请求）。
+    ipcMain.on("vault:httpResult", (_e, msg: { id: string; ok: boolean; json?: Record<string, unknown>; error?: string }) => {
+      const w = this.httpWaiters.get(msg.id); if (w) { this.httpWaiters.delete(msg.id); w(msg); }
+    });
     ipcMain.handle("vault:status", () => this.status());
     ipcMain.handle("vault:setup", (_e, mp: string) => this.setup(mp));
     ipcMain.handle("vault:unlock", (_e, mp: string, sk?: string) => this.unlock(mp, sk));

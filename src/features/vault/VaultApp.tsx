@@ -20,6 +20,8 @@ interface VaultAPI {
   lock(): Promise<boolean>;
   copy(text: string): Promise<void>;
   syncNow(): Promise<{ ok: boolean; rev: number; pulled: boolean }>;
+  onHttp(cb: (msg: { id: string; url: string; method: string; token: string; body: string | null }) => void): () => void;
+  httpResult(id: string, ok: boolean, json: unknown, error?: string): void;
   exportBackup(): Promise<{ ok: boolean; path?: string }>;
   exportPlain(): Promise<{ ok: boolean; path?: string }>;
   importPick(): Promise<{ ok: boolean; needPassword: boolean }>;
@@ -80,6 +82,17 @@ export function VaultApp() {
   const [ready, setReady] = useState(false);
   const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "", syncConfigured: false, syncRev: 0 });
   useEffect(() => { void api.status().then((s) => { setSt(s); setReady(true); }); }, []);
+  // 代主进程用 Chromium 发同步 HTTP（避开 undici 被 CDN 重置）。
+  useEffect(() => api.onHttp(async (msg) => {
+    try {
+      const headers: Record<string, string> = {};
+      if (msg.token) headers["X-Umbra-Token"] = msg.token;
+      if (msg.body) headers["Content-Type"] = "application/json";
+      const resp = await fetch(msg.url, { method: msg.method, headers, body: msg.body || undefined });
+      const json = await resp.json().catch(() => ({}));
+      api.httpResult(msg.id, true, json);
+    } catch (e) { api.httpResult(msg.id, false, null, String(e)); }
+  }), []);
   const refresh = useCallback(async () => setSt(await api.status()), []);
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
 
