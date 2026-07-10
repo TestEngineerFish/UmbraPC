@@ -40,6 +40,13 @@ export class ClipboardManager {
     return this.store;
   }
 
+  // 隐蔽写入剪贴板：写入后立刻把它设为监听基线 → 不进剪贴板历史（保险箱复制密码用）。
+  async writeConcealed(text: string): Promise<void> {
+    const { clipboard } = await import("electron");
+    clipboard.writeText(text || "");
+    await this.watcher.syncBaseline();
+  }
+
   // ── 面板窗口 ──
   private async ensurePanel(): Promise<Electron.BrowserWindow> {
     if (this.panel && !this.panel.isDestroyed()) return this.panel;

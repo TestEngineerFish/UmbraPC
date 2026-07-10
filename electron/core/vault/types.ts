@@ -7,6 +7,7 @@ export interface VaultMeta {
   secretKeyEnc: string;      // base64，safeStorage 加密后的 Secret Key（设备绑定）
   vaults: VaultInfo[];       // 身份库列表 + 各自被 AUK 包装的 VaultKey
   autoLockMin: number;       // 自动锁定分钟（0=不自动锁）
+  quickUnlockEnc?: string;   // 启用 Touch ID 快速解锁后：safeStorage 加密的 AUK（生物识别通过即解锁）
   createdAt: number;
 }
 export interface VaultInfo {

@@ -316,7 +316,7 @@ app.whenReady().then(async () => {
       if (w.webContents.isLoading()) w.webContents.once("did-finish-load", post); else post();
     }
   });
-  vault = new VaultManager(app.getPath("userData"), winOpts);
+  vault = new VaultManager(app.getPath("userData"), winOpts, { copyConceal: (t) => clipboard.writeConcealed(t) });
   Promise.all([clipboard.init(), screenshot.init(), launcher.init(), vault.init()])
     .then(() => reregisterShortcuts()) // 就绪后统一注册各自快捷键
     .catch((e) => console.error("剪贴板/截图/快捷入口/保险箱初始化失败", e));

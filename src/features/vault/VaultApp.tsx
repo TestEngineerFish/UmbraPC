@@ -8,11 +8,17 @@ interface Att { id: string; name: string; mime: string; size: number; addedAt: n
 interface Block { id: string; type: string; label?: string; data: Record<string, unknown> }
 interface Item { id: string; typeId: string; title: string; icon?: string; favorite?: boolean; tags?: string[]; blocks: Block[]; attachments: Att[]; createdAt: number; updatedAt: number; revision: number }
 
+interface VStatus { exists: boolean; unlocked: boolean; autoLockMin: number; quickUnlock: boolean; biometric: boolean }
 interface VaultAPI {
-  status(): Promise<{ exists: boolean; unlocked: boolean; autoLockMin: number }>;
+  status(): Promise<VStatus>;
   setup(mp: string): Promise<{ secretKey: string }>;
   unlock(mp: string, sk?: string): Promise<boolean>;
+  quickUnlock(): Promise<boolean>;
+  biometricAvailable(): Promise<boolean>;
+  enableQuickUnlock(): Promise<boolean>;
+  disableQuickUnlock(): Promise<boolean>;
   lock(): Promise<boolean>;
+  copy(text: string): Promise<void>;
   generatePassword(opts: unknown): Promise<string>;
   listVaults(): Promise<VaultInfo[]>;
   addVault(name: string, owner: string, icon: string): Promise<string>;
@@ -63,7 +69,7 @@ const CSS = `
 export function VaultApp() {
   const [theme, setTheme] = useState(() => (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   const [ready, setReady] = useState(false);
-  const [st, setSt] = useState({ exists: false, unlocked: false, autoLockMin: 10 });
+  const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false });
   useEffect(() => { void api.status().then((s) => { setSt(s); setReady(true); }); }, []);
   const refresh = useCallback(async () => setSt(await api.status()), []);
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
@@ -72,8 +78,8 @@ export function VaultApp() {
     <div className="v-root" data-theme={theme} style={{ height: "100vh", background: "var(--bg)", color: "var(--text)", fontSize: 14, fontFamily: '-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif' }}>
       <style>{CSS}</style>
       {!ready ? null : !st.exists ? <Setup onDone={refresh} theme={theme} onTheme={toggleTheme} />
-        : !st.unlocked ? <Unlock onDone={refresh} theme={theme} onTheme={toggleTheme} />
-          : <Main onLock={async () => { await api.lock(); await refresh(); }} theme={theme} onTheme={toggleTheme} />}
+        : !st.unlocked ? <Unlock onDone={refresh} st={st} theme={theme} onTheme={toggleTheme} />
+          : <Main onLock={async () => { await api.lock(); await refresh(); }} st={st} onStatus={refresh} theme={theme} onTheme={toggleTheme} />}
     </div>
   );
 }
@@ -120,10 +126,13 @@ function Setup({ onDone, theme, onTheme }: { onDone: () => void; theme: string; 
 }
 
 // ── 解锁 ──
-function Unlock({ onDone, theme, onTheme }: { onDone: () => void; theme: string; onTheme: () => void }) {
+function Unlock({ onDone, st, theme, onTheme }: { onDone: () => void; st: VStatus; theme: string; onTheme: () => void }) {
   const [mp, setMp] = useState(""); const [sk, setSk] = useState(""); const [useSk, setUseSk] = useState(false);
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
+  const canBio = st.quickUnlock && st.biometric;
   const submit = async () => { setBusy(true); try { await api.unlock(mp, useSk ? sk : undefined); await onDone(); } catch (e) { setErr(String(e).replace("Error: ", "")); } finally { setBusy(false); } };
+  const touchId = async () => { setErr(""); try { await api.quickUnlock(); await onDone(); } catch (e) { setErr(String(e).replace("Error: ", "") || "Touch ID 未通过"); } };
+  useEffect(() => { if (canBio) void touchId(); /* 进入即尝试 Touch ID */ }, []); // eslint-disable-line
   const inp: CSSProperties = { width: "100%", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 12, padding: "12px 14px", fontSize: 15, color: "var(--text)", outline: "none", textAlign: "center", letterSpacing: ".12em", fontFamily: "ui-monospace,Menlo,monospace" };
   return (
     <Center theme={theme} onTheme={onTheme}>
@@ -135,6 +144,7 @@ function Unlock({ onDone, theme, onTheme }: { onDone: () => void; theme: string;
         {useSk ? <input className="v-inp" type="text" style={{ ...inp, marginTop: 10, letterSpacing: ".04em" }} placeholder="Secret Key（U1-…）" value={sk} onChange={(e) => setSk(e.target.value)} /> : null}
         {err ? <div style={errStyle}>{err}</div> : null}
         <button className="v-btn" disabled={busy} style={{ ...btnPrimary, marginTop: 12, opacity: busy ? .6 : 1 }} onClick={submit}>{busy ? "解锁中…" : "解锁保险箱"}</button>
+        {canBio ? <button className="v-lock" style={{ marginTop: 10, width: "100%", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", borderRadius: 12, padding: 11, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }} onClick={touchId}>☝️ 使用 Touch ID 解锁</button> : null}
         <button style={{ marginTop: 16, background: "none", border: "none", color: "var(--muted)", fontSize: 11.5, cursor: "pointer" }} onClick={() => setUseSk((v) => !v)}>{useSk ? "← 本机解锁" : "换了新设备？输入 Secret Key"}</button>
         <div style={{ marginTop: 20, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, fontSize: 11.5, color: "var(--muted)" }}><span style={{ color: "var(--success)" }}>🔒</span> 数据以 AES-256-GCM 本地加密 · 永不上传云端</div>
       </div>
@@ -161,7 +171,7 @@ const errStyle: CSSProperties = { color: "var(--danger)", fontSize: 12.5, margin
 type Ctx = { open: boolean; x: number; y: number; itemId?: string };
 type TCtx = { open: boolean; x: number; y: number; typeId?: string };
 
-function Main({ onLock, theme, onTheme }: { onLock: () => void; theme: string; onTheme: () => void }) {
+function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st: VStatus; onStatus: () => Promise<void>; theme: string; onTheme: () => void }) {
   const [vaults, setVaults] = useState<VaultInfo[]>([]);
   const [vid, setVid] = useState("");
   const [types, setTypes] = useState<VType[]>([]);
@@ -229,6 +239,7 @@ function Main({ onLock, theme, onTheme }: { onLock: () => void; theme: string; o
               ))}
               <div style={{ height: 1, background: "var(--border)", margin: "6px 4px" }} />
               <div className="v-row" onClick={async () => { const id = await api.addVault("新身份库", "custom", "👤"); setVaults(await api.listVaults()); setVid(id); setIdOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, fontSize: 13, color: "var(--muted)", cursor: "pointer" }}>＋ 新建身份库</div>
+              {st.biometric ? <div className="v-row" onClick={async () => { if (st.quickUnlock) await api.disableQuickUnlock(); else await api.enableQuickUnlock(); await onStatus(); setIdOpen(false); flash(st.quickUnlock ? "已关闭 Touch ID" : "已启用 Touch ID 快速解锁"); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>☝️ Touch ID 快速解锁 <span style={{ marginLeft: "auto", color: "var(--orange)" }}>{st.quickUnlock ? "✓" : ""}</span></div> : null}
             </div>
           ) : null}
         </div>
@@ -414,7 +425,7 @@ function BlockCard({ vid, itemId, block, edit, idx, count, onData, onDel, onMove
   onData: (k: string, v: unknown) => void; onDel: () => void; onMove: (dir: -1 | 1) => void; onAttAdded: (att: Att) => void; attMeta: Att[]; flash: (m: string) => void;
 }) {
   const [reveal, setReveal] = useState(false);
-  const copy = (v: string, m: string) => { void navigator.clipboard?.writeText(v); flash(m); };
+  const copy = (v: string, m: string) => { void api.copy(v); flash(m + " · 20s 后自动清除"); };
   const gen = async (k: string) => { const p = await api.generatePassword({ length: 20 }); onData(k, p); flash("已生成强密码"); };
   const d = block.data;
   const mask = "•".repeat(10);

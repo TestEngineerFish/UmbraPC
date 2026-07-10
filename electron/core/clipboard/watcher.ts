@@ -78,6 +78,15 @@ export class ClipWatcher {
     this.lastHash = hash;
   }
 
+  // 把「当前剪贴板内容」设为基线：下一轮 tick 不会把它记入历史（保险箱复制密码后调用，避免密码进历史）。
+  async syncBaseline(): Promise<void> {
+    try {
+      const { clipboard } = await import("electron");
+      const d = this.describe(clipboard);
+      this.lastHash = d ? d.hash : "";
+    } catch { /* ignore */ }
+  }
+
   // 启动时读一次，只设 lastHash，不入库（避免把启动前的存量记为新条目）。
   private async prime(): Promise<void> {
     try {

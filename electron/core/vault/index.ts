@@ -38,6 +38,7 @@ function searchableText(it: Item): string {
 }
 
 interface WinOpts { preloadPath: string; devUrl: string; distDir: string }
+interface VaultDeps { copyConceal?: (text: string) => Promise<void> } // 隐蔽写入剪贴板（不进历史）
 
 export class VaultManager {
   private dir: string;
@@ -47,11 +48,24 @@ export class VaultManager {
   private vaultKeys = new Map<string, Buffer>();
   private vdata = new Map<string, VaultData>();
   private lockTimer?: NodeJS.Timeout;
+  private clearTimer?: NodeJS.Timeout;                  // 剪贴板自动清除
   private win: Electron.BrowserWindow | null = null;
 
-  constructor(userData: string, private opts: WinOpts) {
+  constructor(userData: string, private opts: WinOpts, private deps: VaultDeps = {}) {
     this.dir = path.join(userData, "vault");
     this.metaFile = path.join(this.dir, "meta.json");
+  }
+
+  // 复制到剪贴板（隐蔽写入不进历史）+ 20s 后若未被覆盖则自动清空。
+  private async copy(text: string): Promise<void> {
+    const t = String(text || "");
+    if (this.deps.copyConceal) await this.deps.copyConceal(t);
+    else { const { clipboard } = await import("electron"); clipboard.writeText(t); }
+    if (this.clearTimer) clearTimeout(this.clearTimer);
+    this.clearTimer = setTimeout(async () => {
+      const { clipboard } = await import("electron");
+      if (clipboard.readText() === t) { if (this.deps.copyConceal) await this.deps.copyConceal(""); else clipboard.writeText(""); }
+    }, 20_000);
   }
 
   // 独立窗口（带原生标题栏）。关闭时锁定（清内存密钥）。
@@ -79,8 +93,40 @@ export class VaultManager {
     if (!this.existsFile()) return;
     this.meta = JSON.parse(await fs.readFile(this.metaFile, "utf-8"));
   }
-  private status() {
-    return { exists: this.existsFile(), unlocked: this.unlocked, autoLockMin: this.meta?.autoLockMin ?? 10 };
+  private async status() {
+    await this.loadMeta();
+    return {
+      exists: this.existsFile(), unlocked: this.unlocked, autoLockMin: this.meta?.autoLockMin ?? 10,
+      quickUnlock: !!this.meta?.quickUnlockEnc, biometric: await this.biometricAvailable(),
+    };
+  }
+  private async biometricAvailable(): Promise<boolean> {
+    if (process.platform !== "darwin") return false;
+    try { const { systemPreferences } = await import("electron"); return systemPreferences.canPromptTouchID(); } catch { return false; }
+  }
+  // 启用 Touch ID：把当前 AUK 用 safeStorage 存起来（解锁态下调用）。
+  private async enableQuickUnlock(): Promise<boolean> {
+    if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+    this.meta.quickUnlockEnc = await this.encSecret(this.auk.toString("base64"));
+    await this.saveMeta();
+    return true;
+  }
+  private async disableQuickUnlock(): Promise<boolean> {
+    if (!this.meta) return false;
+    delete this.meta.quickUnlockEnc; await this.saveMeta(); return true;
+  }
+  // Touch ID 通过 → 解密 AUK → 校验 → 加载会话（免主密码）。
+  private async quickUnlock(): Promise<boolean> {
+    await this.loadMeta();
+    if (!this.meta?.quickUnlockEnc) throw new Error("未启用 Touch ID");
+    const { systemPreferences } = await import("electron");
+    await systemPreferences.promptTouchID("解锁密码保险箱"); // 失败会抛错
+    const auk = unb64(await this.decSecret(this.meta.quickUnlockEnc));
+    if (verifierOf(authHash(auk, unb64(this.meta.salt))) !== this.meta.verifier) throw new Error("快速解锁校验失败，请用主密码");
+    this.vaultKeys.clear(); this.vdata.clear();
+    for (const v of this.meta.vaults) { const vk = unwrapKey(auk, v.keyWrapped); this.vaultKeys.set(v.id, vk); this.vdata.set(v.id, await this.loadVault(v.id, vk)); }
+    this.auk = auk; this.armAutoLock();
+    return true;
   }
   private armAutoLock(): void {
     if (this.lockTimer) clearTimeout(this.lockTimer);
@@ -333,6 +379,8 @@ export class VaultManager {
     ipcMain.handle("vault:status", () => this.status());
     ipcMain.handle("vault:setup", (_e, mp: string) => this.setup(mp));
     ipcMain.handle("vault:unlock", (_e, mp: string, sk?: string) => this.unlock(mp, sk));
+    ipcMain.handle("vault:quickUnlock", () => this.quickUnlock());
+    ipcMain.handle("vault:biometricAvailable", () => this.biometricAvailable());
     ipcMain.handle("vault:lock", () => { this.lock(); return true; });
     ipcMain.handle("vault:generatePassword", (_e, opts: GenOpts) => generatePassword(opts || {}));
 
@@ -360,5 +408,8 @@ export class VaultManager {
 
     H("vault:search", (q, vid) => this.search(String(q), vid ? String(vid) : undefined));
     H("vault:setAutoLock", (min) => this.setAutoLock(Number(min)));
+    H("vault:copy", (text) => this.copy(String(text)));
+    H("vault:enableQuickUnlock", () => this.enableQuickUnlock());
+    H("vault:disableQuickUnlock", () => this.disableQuickUnlock());
   }
 }
