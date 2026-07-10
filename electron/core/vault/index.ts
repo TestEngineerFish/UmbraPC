@@ -434,7 +434,7 @@ export class VaultManager {
     const r = await dialog.showOpenDialog({ title: "导入备份 / 数据", properties: ["openFile"], filters: [{ name: "备份 / JSON / CSV", extensions: ["umbravault", "json", "csv"] }] });
     if (r.canceled || !r.filePaths[0]) return { ok: false, needPassword: false };
     const p = r.filePaths[0];
-    const text = (await fs.readFile(p, "utf-8")).replace(/^﻿/, "");
+    const text = (await fs.readFile(p, "utf-8")).replace(/^﻿/, ""); // 去 BOM，避免首列表头匹配不上
     if (/\.csv$/i.test(p)) { this.pendingImport = { mode: "bundle", bundle: this.bundleFromCsv(text) }; return { ok: true, needPassword: false }; }
     let file: Record<string, unknown>;
     try { file = JSON.parse(text); } catch { this.pendingImport = { mode: "bundle", bundle: this.bundleFromCsv(text) }; return { ok: true, needPassword: false }; }
@@ -442,8 +442,9 @@ export class VaultManager {
     if (file.kind === "umbra-vault-plain" || file.kind === "umbra-vault-backup") { this.pendingImport = { mode: "bundle", bundle: file as unknown as ImportBundle }; return { ok: true, needPassword: false }; }
     throw new Error("无法识别的文件格式（请用导出的备份、或按模板的 CSV/JSON）");
   }
-  private async importApply(masterPassword?: string, secretKey?: string): Promise<{ ok: boolean; added: number }> {
+  private async importApply(vaultId: string, masterPassword?: string, secretKey?: string): Promise<{ ok: boolean; added: number }> {
     if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+    this.requireKey(vaultId); // 目标身份库必须存在
     const pend = this.pendingImport; if (!pend) throw new Error("请先选择文件");
     let bundle: ImportBundle;
     if (pend.mode === "enc") {
@@ -454,7 +455,7 @@ export class VaultManager {
       if (verifierOf(authHash(auk2, salt)) !== file.verifier) throw new Error("主密码或 Secret Key 不正确");
       bundle = JSON.parse(aesDecrypt(auk2, String(file.blob)).toString("utf8"));
     } else bundle = pend.bundle!;
-    const added = await this.mergeBundle(bundle);
+    const added = await this.importInto(vaultId, bundle);
     this.pendingImport = null;
     return { ok: true, added };
   }
@@ -519,21 +520,31 @@ export class VaultManager {
     await fs.writeFile(r.filePath, "﻿" + csv, "utf8"); // BOM 便于 Excel 正确显示中文
     return { ok: true, path: r.filePath };
   }
-  private async mergeBundle(bundle: ImportBundle): Promise<number> {
-    if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
+  // 合并进「当前身份库」：类型按名称去重合并，条目追加（重发 id 防碰撞），附件字节用目标库密钥重新加密。返回导入条目数。
+  private async importInto(vaultId: string, bundle: ImportBundle): Promise<number> {
+    const d = this.data(vaultId); const vk = this.requireKey(vaultId);
+    let count = 0;
     for (const bv of bundle.vaults || []) {
-      const vk = newVaultKey();
-      const info: VaultInfo = { id: rid("v"), name: `${bv.name}（导入）`, owner: bv.owner || "custom", icon: bv.icon || "📥", order: this.meta.vaults.length, keyWrapped: wrapKey(this.auk, vk) };
-      this.meta.vaults.push(info); this.vaultKeys.set(info.id, vk);
-      await fs.mkdir(this.attDir(info.id), { recursive: true });
-      for (const [aid, data] of Object.entries(bv.attachments || {})) {
-        await fs.writeFile(this.attFile(info.id, aid), aesEncryptBytes(vk, unb64(data)), { mode: 0o600 });
+      const nameToId = new Map<string, string>();
+      for (const t of d.types) nameToId.set(t.name, t.id);
+      const oldToNew = new Map<string, string>();
+      for (const t of bv.types || []) {
+        let tid = nameToId.get(t.name);
+        if (!tid) { const nt: VaultType = { id: rid("t"), name: t.name, icon: t.icon || "📁", order: d.types.length }; d.types.push(nt); nameToId.set(nt.name, nt.id); tid = nt.id; }
+        oldToNew.set(t.id, tid);
       }
-      this.vdata.set(info.id, { types: bv.types && bv.types.length ? bv.types : defaultTypes(), items: bv.items || [] });
-      await this.persistVault(info.id);
+      if (Object.keys(bv.attachments || {}).length) await fs.mkdir(this.attDir(vaultId), { recursive: true });
+      for (const [aid, data] of Object.entries(bv.attachments || {})) {
+        await fs.writeFile(this.attFile(vaultId, aid), aesEncryptBytes(vk, unb64(data)), { mode: 0o600 });
+      }
+      const now = Date.now();
+      for (const it of bv.items || []) {
+        d.items.push({ ...it, id: rid("i"), typeId: oldToNew.get(it.typeId) || "", updatedAt: now, revision: 1 });
+        count++;
+      }
     }
-    await this.saveMeta();
-    return (bundle.vaults || []).length;
+    await this.persistVault(vaultId);
+    return count;
   }
 
   // ── IPC ──
@@ -581,7 +592,7 @@ export class VaultManager {
     H("vault:exportBackup", () => this.exportBackup());
     H("vault:exportPlain", () => this.exportPlain());
     H("vault:importPick", () => this.importPick());
-    H("vault:importApply", (mp, sk) => this.importApply(mp ? String(mp) : undefined, sk ? String(sk) : undefined));
+    H("vault:importApply", (vid, mp, sk) => this.importApply(String(vid), mp ? String(mp) : undefined, sk ? String(sk) : undefined));
     H("vault:downloadTemplate", (kind) => this.downloadTemplate(String(kind || "csv")));
     ipcMain.handle("vault:setShortcut", (_e, acc: string) => this.setShortcut(String(acc || "")));
   }
