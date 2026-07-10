@@ -45,16 +45,21 @@ export function decodeSecretKey(sk: string): Buffer {
   return buf.subarray(0, 16);
 }
 
+const PBKDF2_ITER = 600_000; // 与 iOS(CommonCrypto) 一致，保证跨平台派生同一密钥
 function scrypt(password: string, salt: Buffer): Buffer {
   return crypto.scryptSync(Buffer.from(password, "utf8"), salt, SCRYPT.keylen, { N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, maxmem: SCRYPT.maxmem });
+}
+function pbkdf2(password: string, salt: Buffer): Buffer {
+  return crypto.pbkdf2Sync(Buffer.from(password, "utf8"), salt, PBKDF2_ITER, 32, "sha256");
 }
 function hkdf(ikm: Buffer, salt: Buffer, info: string, len = 32): Buffer {
   return Buffer.from(crypto.hkdfSync("sha256", ikm, salt, Buffer.from(info, "utf8"), len));
 }
 
 // 账户解锁密钥 AUK（主密码 + Secret Key 双密钥派生，2SKD）。
-export function deriveAUK(masterPassword: string, secretKey: string, salt: Buffer): Buffer {
-  const pwKey = scrypt(masterPassword, salt);            // 32B，慢/memory-hard
+// kdf 默认 pbkdf2（iOS 原生可复现，跨端同步用）；scrypt 仅为兼容旧本地库（会自动迁移到 pbkdf2）。
+export function deriveAUK(masterPassword: string, secretKey: string, salt: Buffer, kdf: "pbkdf2" | "scrypt" = "pbkdf2"): Buffer {
+  const pwKey = kdf === "scrypt" ? scrypt(masterPassword, salt) : pbkdf2(masterPassword, salt);
   const sk = decodeSecretKey(secretKey);                 // 16B，设备端高熵
   return hkdf(Buffer.concat([pwKey, sk]), salt, "umbra-vault-auk-v1", 32);
 }

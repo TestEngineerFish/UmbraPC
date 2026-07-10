@@ -2,6 +2,7 @@
 
 export interface VaultMeta {
   v: number;                 // 版本
+  kdf?: string;              // 密钥派生：pbkdf2（默认，跨端）| scrypt（旧本地库，解锁时自动迁移）
   salt: string;              // base64，KDF 盐（账户级）
   verifier: string;          // hex，SHA256(authHash)，服务器/本地校验主密码
   secretKeyEnc: string;      // base64，safeStorage 加密后的 Secret Key（设备绑定）

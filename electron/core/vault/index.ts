@@ -195,7 +195,7 @@ export class VaultManager {
     const vaultKey = newVaultKey();
     const vinfo: VaultInfo = { id: rid("v"), name: "我自己", owner: "self", icon: "🧑", order: 0, keyWrapped: wrapKey(auk, vaultKey) };
     this.meta = {
-      v: 1, salt: b64(salt), verifier: verifierOf(authHash(auk, salt)),
+      v: 1, kdf: "pbkdf2", salt: b64(salt), verifier: verifierOf(authHash(auk, salt)),
       secretKeyEnc: await this.encSecret(secretKey), vaults: [vinfo], autoLockMin: 10, createdAt: Date.now(),
     };
     await fs.mkdir(this.dir, { recursive: true });
@@ -213,7 +213,8 @@ export class VaultManager {
     if (!this.meta) throw new Error("保险箱未初始化");
     const salt = unb64(this.meta.salt);
     const secretKey = secretKeyOverride?.trim() || await this.decSecret(this.meta.secretKeyEnc);
-    const auk = deriveAUK(masterPassword, secretKey, salt);
+    const kdf = (this.meta.kdf as "pbkdf2" | "scrypt") || "scrypt"; // 无 kdf 字段=旧 scrypt 库
+    const auk = deriveAUK(masterPassword, secretKey, salt, kdf);
     if (verifierOf(authHash(auk, salt)) !== this.meta.verifier) throw new Error("主密码或 Secret Key 不正确");
     this.vaultKeys.clear(); this.vdata.clear();
     for (const v of this.meta.vaults) {
@@ -222,6 +223,17 @@ export class VaultManager {
       this.vdata.set(v.id, await this.loadVault(v.id, vk));
     }
     this.auk = auk;
+    // 旧 scrypt 库 → 自动迁移到 pbkdf2（重派生 AUK 并重新包装各库密钥；数据文件不变）。为跨端同步准备。
+    if (kdf !== "pbkdf2") {
+      const newAuk = deriveAUK(masterPassword, secretKey, salt, "pbkdf2");
+      for (const v of this.meta.vaults) { const vk = this.vaultKeys.get(v.id)!; v.keyWrapped = wrapKey(newAuk, vk); }
+      this.meta.kdf = "pbkdf2";
+      this.meta.verifier = verifierOf(authHash(newAuk, salt));
+      delete this.meta.quickUnlockEnc; // 旧 AUK 的 Touch ID 凭据失效，需重新启用
+      this.meta.syncRev = 0;           // 密文变了，云端需重新推
+      this.auk = newAuk;
+      await this.saveMeta();
+    }
     if (secretKeyOverride) { this.meta.secretKeyEnc = await this.encSecret(secretKey); await this.saveMeta(); } // 新设备：写入本机 keychain
     this.armAutoLock();
     void this.autoPull();
@@ -429,7 +441,7 @@ export class VaultManager {
   // 上传本地快照（乐观并发）。返回 {ok} 或 {conflict, rev}。
   private async syncPush(force = false): Promise<{ ok: boolean; conflict?: boolean; rev?: number }> {
     if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
-    const record = JSON.stringify({ v: 1, salt: this.meta.salt, verifier: this.meta.verifier, enc: aesEncrypt(this.auk, Buffer.from(JSON.stringify(await this.buildSnapshot()), "utf8")) });
+    const record = JSON.stringify({ v: 1, kdf: this.meta.kdf || "pbkdf2", salt: this.meta.salt, verifier: this.meta.verifier, enc: aesEncrypt(this.auk, Buffer.from(JSON.stringify(await this.buildSnapshot()), "utf8")) });
     const r = await this.httpVault("PUT", "/vault/sync", { blob: record, baseRev: this.meta.syncRev ?? 0, deviceId: this.cfg.get().deviceId, force });
     if (r.json.ok) { this.meta.syncRev = Number(r.json.rev); await this.saveMeta(); return { ok: true, rev: this.meta.syncRev }; }
     if (r.json.conflict) return { ok: false, conflict: true, rev: Number(r.json.rev) };
