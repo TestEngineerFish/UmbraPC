@@ -23,6 +23,7 @@ interface VaultAPI {
   exportPlain(): Promise<{ ok: boolean; path?: string }>;
   importPick(): Promise<{ ok: boolean; needPassword: boolean }>;
   importApply(mp?: string, sk?: string): Promise<{ ok: boolean; added: number }>;
+  downloadTemplate(kind: string): Promise<{ ok: boolean; path?: string }>;
   generatePassword(opts: unknown): Promise<string>;
   listVaults(): Promise<VaultInfo[]>;
   addVault(name: string, owner: string, icon: string): Promise<string>;
@@ -263,6 +264,7 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
               <MenuItem onClick={() => doExport(true)}>📄 导出明文 JSON</MenuItem>
               <div style={{ height: 1, background: "var(--border)", margin: "4px 4px" }} />
               <MenuItem onClick={doImport}>📥 导入备份 / 数据</MenuItem>
+              <MenuItem onClick={async () => { setGearOpen(false); const r = await api.downloadTemplate("csv"); if (r.ok) flash("已下载 CSV 导入模板"); }}>⬇ 下载导入模板 (CSV)</MenuItem>
             </div>
           ) : null}
         </div>

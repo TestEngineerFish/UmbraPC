@@ -136,6 +136,7 @@ contextBridge.exposeInMainWorld("umbraVault", {
   exportPlain: () => ipcRenderer.invoke("vault:exportPlain"),
   importPick: () => ipcRenderer.invoke("vault:importPick"),
   importApply: (mp?: string, sk?: string) => ipcRenderer.invoke("vault:importApply", mp, sk),
+  downloadTemplate: (kind: string) => ipcRenderer.invoke("vault:downloadTemplate", kind),
   generatePassword: (opts: unknown) => ipcRenderer.invoke("vault:generatePassword", opts),
   listVaults: () => ipcRenderer.invoke("vault:listVaults"),
   addVault: (name: string, owner: string, icon: string) => ipcRenderer.invoke("vault:addVault", name, owner, icon),

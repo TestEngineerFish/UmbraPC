@@ -11,6 +11,9 @@ import {
 import { VaultMeta, VaultInfo, VaultType, VaultData, Item, Attachment } from "./types";
 import { ConfigStore } from "../config";
 
+// 导入用的明文 bundle 结构（每个 vault 会作为新身份库追加）。
+interface ImportBundle { vaults: { name: string; owner?: string; icon?: string; types?: VaultType[]; items?: Item[]; attachments?: Record<string, string> }[] }
+
 const rid = (p = "") => p + randomBytes(9).toString("hex");
 const b64 = (b: Buffer) => b.toString("base64");
 const unb64 = (s: string) => Buffer.from(s, "base64");
@@ -423,33 +426,86 @@ export class VaultManager {
     return { ok: true, path: r.filePath };
   }
   // 导入：先选文件(importPick，缓存)，加密备份返回 needPassword=true；再 importApply(主密码+SecretKey)。
-  private pendingImport: Record<string, unknown> | null = null;
+  // 支持：加密备份(.umbravault) / 明文 bundle JSON / CSV(按模板列)。
+  private pendingImport: { mode: "enc" | "bundle"; file?: Record<string, unknown>; bundle?: ImportBundle } | null = null;
   private async importPick(): Promise<{ ok: boolean; needPassword: boolean }> {
     if (!this.auk) throw new Error("保险箱已锁定");
     const { dialog } = await import("electron");
-    const r = await dialog.showOpenDialog({ title: "导入备份 / 数据", properties: ["openFile"], filters: [{ name: "备份或 JSON", extensions: ["umbravault", "json"] }] });
+    const r = await dialog.showOpenDialog({ title: "导入备份 / 数据", properties: ["openFile"], filters: [{ name: "备份 / JSON / CSV", extensions: ["umbravault", "json", "csv"] }] });
     if (r.canceled || !r.filePaths[0]) return { ok: false, needPassword: false };
-    const file = JSON.parse(await fs.readFile(r.filePaths[0], "utf-8"));
-    if (!["umbra-vault-backup-enc", "umbra-vault-plain", "umbra-vault-backup"].includes(file.kind)) throw new Error("无法识别的文件格式");
-    this.pendingImport = file;
-    return { ok: true, needPassword: file.kind === "umbra-vault-backup-enc" };
+    const p = r.filePaths[0];
+    const text = (await fs.readFile(p, "utf-8")).replace(/^﻿/, "");
+    if (/\.csv$/i.test(p)) { this.pendingImport = { mode: "bundle", bundle: this.bundleFromCsv(text) }; return { ok: true, needPassword: false }; }
+    let file: Record<string, unknown>;
+    try { file = JSON.parse(text); } catch { this.pendingImport = { mode: "bundle", bundle: this.bundleFromCsv(text) }; return { ok: true, needPassword: false }; }
+    if (file.kind === "umbra-vault-backup-enc") { this.pendingImport = { mode: "enc", file }; return { ok: true, needPassword: true }; }
+    if (file.kind === "umbra-vault-plain" || file.kind === "umbra-vault-backup") { this.pendingImport = { mode: "bundle", bundle: file as unknown as ImportBundle }; return { ok: true, needPassword: false }; }
+    throw new Error("无法识别的文件格式（请用导出的备份、或按模板的 CSV/JSON）");
   }
   private async importApply(masterPassword?: string, secretKey?: string): Promise<{ ok: boolean; added: number }> {
     if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
-    const file = this.pendingImport; if (!file) throw new Error("请先选择文件");
-    let bundle: { vaults: { name: string; owner?: string; icon?: string; types?: VaultType[]; items?: Item[]; attachments?: Record<string, string> }[] };
-    if (file.kind === "umbra-vault-backup-enc") {
+    const pend = this.pendingImport; if (!pend) throw new Error("请先选择文件");
+    let bundle: ImportBundle;
+    if (pend.mode === "enc") {
+      const file = pend.file!;
       if (!masterPassword) throw new Error("需要主密码");
       const salt = unb64(String(file.salt));
       const auk2 = deriveAUK(masterPassword, secretKey || await this.decSecret(this.meta.secretKeyEnc), salt);
       if (verifierOf(authHash(auk2, salt)) !== file.verifier) throw new Error("主密码或 Secret Key 不正确");
       bundle = JSON.parse(aesDecrypt(auk2, String(file.blob)).toString("utf8"));
-    } else bundle = file as typeof bundle;
+    } else bundle = pend.bundle!;
     const added = await this.mergeBundle(bundle);
     this.pendingImport = null;
     return { ok: true, added };
   }
-  private async mergeBundle(bundle: { vaults: { name: string; owner?: string; icon?: string; types?: VaultType[]; items?: Item[]; attachments?: Record<string, string> }[] }): Promise<number> {
+
+  // CSV → bundle（列名可中英；缺列按内容尽量映射）。整批作为一个新身份库导入。
+  private bundleFromCsv(text: string): ImportBundle {
+    const lines = text.replace(/\r/g, "").split("\n").filter((l) => l.trim().length);
+    if (!lines.length) throw new Error("CSV 为空");
+    const cells = (line: string): string[] => {
+      const out: string[] = []; let cur = ""; let q = false;
+      for (let i = 0; i < line.length; i++) { const c = line[i];
+        if (q) { if (c === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+        else if (c === ",") { out.push(cur); cur = ""; } else if (c === '"') q = true; else cur += c; }
+      out.push(cur); return out;
+    };
+    const header = cells(lines[0]).map((h) => h.trim().toLowerCase());
+    const col = (names: string[]) => { for (const n of names) { const i = header.indexOf(n.toLowerCase()); if (i >= 0) return i; } return -1; };
+    const ci = { type: col(["类型", "分类", "type", "folder", "category"]), title: col(["名称", "标题", "title", "name"]), user: col(["用户名", "账号", "username", "login", "email"]), pass: col(["密码", "password"]), url: col(["网址", "url", "website"]), note: col(["备注", "notes", "note"]) };
+    const at = (c: string[], i: number) => (i >= 0 ? (c[i] || "").trim() : "");
+    const typeMap = new Map<string, VaultType>(); const types: VaultType[] = []; const items: Item[] = [];
+    for (let r = 1; r < lines.length; r++) {
+      const c = cells(lines[r]);
+      const tname = at(c, ci.type) || "未分类";
+      let t = typeMap.get(tname);
+      if (!t) { t = { id: rid("t"), name: tname, icon: "📁", order: types.length }; typeMap.set(tname, t); types.push(t); }
+      const now = Date.now();
+      const blocks = [{ id: rid("b"), type: "account", label: "登录信息", data: { username: at(c, ci.user), password: at(c, ci.pass), url: at(c, ci.url), otp: false } as Record<string, unknown> }];
+      const note = at(c, ci.note);
+      if (note) blocks.push({ id: rid("b"), type: "text", label: "备注", data: { value: note } });
+      items.push({ id: rid("i"), typeId: t.id, title: at(c, ci.title) || at(c, ci.user) || "未命名", icon: "🔐", favorite: false, tags: [], blocks, attachments: [], createdAt: now, updatedAt: now, revision: 1 });
+    }
+    return { vaults: [{ name: "导入的账号", owner: "custom", icon: "📥", types, items, attachments: {} }] };
+  }
+
+  // 下载导入模板（csv / json）。
+  private async downloadTemplate(kind: string): Promise<{ ok: boolean; path?: string }> {
+    const { dialog } = await import("electron");
+    if (kind === "json") {
+      const tpl = { kind: "umbra-vault-plain", v: 1, vaults: [{ name: "导入示例", icon: "📥", types: [{ id: "t1", name: "登录", icon: "🔑", order: 0 }], items: [{ id: "i1", typeId: "t1", title: "示例账号", icon: "🔐", favorite: false, tags: [], blocks: [{ id: "b1", type: "account", label: "登录信息", data: { username: "you@example.com", password: "改成你的密码", url: "example.com", otp: false } }, { id: "b2", type: "text", label: "备注", data: { value: "可选说明" } }], attachments: [], createdAt: 0, updatedAt: 0, revision: 1 }], attachments: {} }] };
+      const r = await dialog.showSaveDialog({ title: "下载 JSON 导入模板", defaultPath: "umbra-导入模板.json", filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (r.canceled || !r.filePath) return { ok: false };
+      await fs.writeFile(r.filePath, JSON.stringify(tpl, null, 2), "utf8");
+      return { ok: true, path: r.filePath };
+    }
+    const csv = "类型,名称,用户名,密码,网址,备注\n登录,示例-GitHub,you@example.com,把密码填这里,github.com,可选备注\n银行卡,示例-储蓄卡,6225********5678,取款密码,,预留手机 138****5678\n";
+    const r = await dialog.showSaveDialog({ title: "下载 CSV 导入模板", defaultPath: "umbra-导入模板.csv", filters: [{ name: "CSV", extensions: ["csv"] }] });
+    if (r.canceled || !r.filePath) return { ok: false };
+    await fs.writeFile(r.filePath, "﻿" + csv, "utf8"); // BOM 便于 Excel 正确显示中文
+    return { ok: true, path: r.filePath };
+  }
+  private async mergeBundle(bundle: ImportBundle): Promise<number> {
     if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
     for (const bv of bundle.vaults || []) {
       const vk = newVaultKey();
@@ -512,6 +568,7 @@ export class VaultManager {
     H("vault:exportPlain", () => this.exportPlain());
     H("vault:importPick", () => this.importPick());
     H("vault:importApply", (mp, sk) => this.importApply(mp ? String(mp) : undefined, sk ? String(sk) : undefined));
+    H("vault:downloadTemplate", (kind) => this.downloadTemplate(String(kind || "csv")));
     ipcMain.handle("vault:setShortcut", (_e, acc: string) => this.setShortcut(String(acc || "")));
   }
 }
