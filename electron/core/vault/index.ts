@@ -472,7 +472,16 @@ export class VaultManager {
     };
     const header = cells(lines[0]).map((h) => h.trim().toLowerCase());
     const col = (names: string[]) => { for (const n of names) { const i = header.indexOf(n.toLowerCase()); if (i >= 0) return i; } return -1; };
-    const ci = { type: col(["类型", "分类", "type", "folder", "category"]), title: col(["名称", "标题", "title", "name"]), user: col(["用户名", "账号", "username", "login", "email"]), pass: col(["密码", "password"]), url: col(["网址", "url", "website"]), note: col(["备注", "notes", "note"]) };
+    // 列别名（中英/常见密码管理器导出的列名尽量兼容）。
+    const ci = {
+      type: col(["类型", "分类", "类别", "type", "folder", "category", "group"]),
+      title: col(["名称", "标题", "平台", "站点", "网站", "title", "name", "服务", "service"]),
+      user: col(["用户名", "账号", "账户", "帐号", "帐户", "邮箱", "登录名", "username", "login", "user", "email", "e-mail"]),
+      pass: col(["密码", "口令", "password", "pass", "pwd"]),
+      url: col(["网址", "链接", "地址", "url", "website", "site", "link", "网站地址"]),
+      phone: col(["关联手机号", "手机号", "手机", "电话", "phone", "mobile", "tel"]),
+      note: col(["备注", "说明", "描述", "notes", "note", "remark", "memo", "comment", "desc"]),
+    };
     const at = (c: string[], i: number) => (i >= 0 ? (c[i] || "").trim() : "");
     const typeMap = new Map<string, VaultType>(); const types: VaultType[] = []; const items: Item[] = [];
     for (let r = 1; r < lines.length; r++) {
@@ -481,9 +490,14 @@ export class VaultManager {
       let t = typeMap.get(tname);
       if (!t) { t = { id: rid("t"), name: tname, icon: "📁", order: types.length }; typeMap.set(tname, t); types.push(t); }
       const now = Date.now();
-      const blocks = [{ id: rid("b"), type: "account", label: "登录信息", data: { username: at(c, ci.user), password: at(c, ci.pass), url: at(c, ci.url), otp: false } as Record<string, unknown> }];
-      const note = at(c, ci.note);
-      if (note) blocks.push({ id: rid("b"), type: "text", label: "备注", data: { value: note } });
+      const phone = at(c, ci.phone);
+      let url = at(c, ci.url);
+      if (!url && /^https?:\/\//i.test(phone)) url = phone;                 // 手机号列里放的是链接 → 当网址
+      const blocks = [{ id: rid("b"), type: "account", label: "登录信息", data: { username: at(c, ci.user), password: at(c, ci.pass), url, otp: false } as Record<string, unknown> }];
+      const noteParts: string[] = [];
+      const note = at(c, ci.note); if (note) noteParts.push(note);
+      if (phone && phone !== url) noteParts.push(`关联手机号: ${phone}`);      // 手机号并入备注（账号控件无手机字段）
+      if (noteParts.length) blocks.push({ id: rid("b"), type: "text", label: "备注", data: { value: noteParts.join("\n") } });
       items.push({ id: rid("i"), typeId: t.id, title: at(c, ci.title) || at(c, ci.user) || "未命名", icon: "🔐", favorite: false, tags: [], blocks, attachments: [], createdAt: now, updatedAt: now, revision: 1 });
     }
     return { vaults: [{ name: "导入的账号", owner: "custom", icon: "📥", types, items, attachments: {} }] };
