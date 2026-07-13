@@ -1,7 +1,7 @@
-// 截图覆盖窗（React）· 无感打开 + 框选 + 六种工具(对象化) + 选中/移动/手柄缩放·旋转 + 文字(IME) + 马赛克 + 复制/保存。
+// 截图覆盖窗（React）· 无感打开 + 框选(可二次调整) + 指针/六种工具(对象化) + 单选·框选多选 + 移动/缩放/旋转 + 复制粘贴 + 文字(IME) + 马赛克 + 保存。
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Obj, Point, Selection, Tool, TextObj, COLORS, FONT_SIZES, uid } from "./types";
+import { Obj, Point, Selection, UITool, TextObj, COLORS, FONT_SIZES, uid } from "./types";
 import { drawObj, buildMosaicBase } from "./draw";
 import {
   handlePoints,
@@ -18,6 +18,14 @@ import {
   rotateStart,
   applyRotate,
   rotHandleAnchor,
+  objectsInRect,
+  regionHandles,
+  hitRegionHandle,
+  onRegionBorder,
+  applyRegionResize,
+  clampRegion,
+  REGION_CURSOR,
+  RegionHandle,
   ScaleSnap,
   HandleId,
 } from "./geometry";
@@ -48,7 +56,8 @@ declare global {
 const shot = window.umbraShot;
 
 type Phase = "wait" | "select" | "annotate";
-type GestureMode = "none" | "select" | "draw" | "move" | "scale" | "rotate" | "endpoint";
+// select=拉截图区域；region/regionMove=二次调整截图区域；marquee=框选多个对象。
+type GestureMode = "none" | "select" | "draw" | "move" | "scale" | "rotate" | "endpoint" | "marquee" | "region" | "regionMove";
 
 interface TextEdit {
   id: string;
@@ -56,6 +65,7 @@ interface TextEdit {
   value: string;
   fontSize: number;
   wrapWidth: number;
+  autoWidth: boolean;
   rotation: number;
   color: string;
   isNew: boolean;
@@ -65,14 +75,15 @@ interface TextEdit {
 export function App() {
   const { t } = useTranslation();
   const [imgSrc, setImgSrc] = useState("");
-  const [tool, setTool] = useState<Tool>("rect");
+  const [tool, setTool] = useState<UITool>("rect");
   const [colorIdx, setColorIdx] = useState(0);
   const [sizeIdx, setSizeIdx] = useState<0 | 1 | 2>(1);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [objects, setObjects] = useState<Obj[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [phase, setPhase] = useState<Phase>("wait");
   const [editing, setEditing] = useState<TextEdit | null>(null);
+  const [cursor, setCursor] = useState("crosshair");
   const [result, setResult] = useState<{ loading: boolean; title: string; text: string; error?: string; kind?: "ocr" | "translate" } | null>(null);
 
   const imgRef = useRef<HTMLImageElement>(null);
@@ -81,6 +92,8 @@ export function App() {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const sampleRef = useRef<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; ratio: number } | null>(null);
   const cursorRef = useRef<Point>({ x: 0, y: 0 });
+  const clipRef = useRef<Obj[]>([]); // 图形剪贴板（复制/粘贴，仅本窗口内）
+  const histRef = useRef<Obj[][]>([]); // 撤销栈（对象数组快照）
 
   const g = useRef<{
     mode: GestureMode;
@@ -88,25 +101,66 @@ export function App() {
     last: Point;
     selStart: Point;
     draft: Obj | null;
-    moveId: string | null;
+    moveIds: string[];
     handle: HandleId | null;
     scaleSnap: ScaleSnap | null;
     rotSnap: { center: Point; offset: number } | null;
-    clickTargetId: string | null;
-  }>({ mode: "none", start: { x: 0, y: 0 }, last: { x: 0, y: 0 }, selStart: { x: 0, y: 0 }, draft: null, moveId: null, handle: null, scaleSnap: null, rotSnap: null, clickTargetId: null });
+    regionHandle: RegionHandle | null;
+    regionBase: Selection | null;
+    marqueeBase: string[];
+    snap: Obj[] | null; // 手势开始时的对象快照（首次真正改动时入撤销栈）
+    pushed: boolean;
+    textSnap: Obj[] | null;
+  }>({
+    mode: "none",
+    start: { x: 0, y: 0 },
+    last: { x: 0, y: 0 },
+    selStart: { x: 0, y: 0 },
+    draft: null,
+    moveIds: [],
+    handle: null,
+    scaleSnap: null,
+    rotSnap: null,
+    regionHandle: null,
+    regionBase: null,
+    marqueeBase: [],
+    snap: null,
+    pushed: false,
+    textSnap: null,
+  });
 
-  const st = useRef({ tool, colorIdx, sizeIdx, selection, objects, selectedId, phase, editing, result });
-  st.current = { tool, colorIdx, sizeIdx, selection, objects, selectedId, phase, editing, result };
+  const st = useRef({ tool, colorIdx, sizeIdx, selection, objects, selectedIds, phase, editing, result });
+  st.current = { tool, colorIdx, sizeIdx, selection, objects, selectedIds, phase, editing, result };
+
+  // ── 撤销栈 ──
+  function pushHist(snapshot?: Obj[]) {
+    histRef.current.push(snapshot ?? st.current.objects);
+    if (histRef.current.length > 60) histRef.current.shift();
+  }
+  function undo() {
+    const prev = histRef.current.pop();
+    if (!prev) return;
+    setObjects(prev);
+    setSelectedIds([]);
+  }
+  // 拖拽类手势：只有真的动了才记一步撤销。
+  function markMutation() {
+    if (g.current.pushed) return;
+    pushHist(g.current.snap ?? st.current.objects);
+    g.current.pushed = true;
+  }
 
   // ── 会话 ──
   const startSession = useCallback((cap: CaptureData) => {
     setPhase("wait");
     setSelection(null);
     setObjects([]);
-    setSelectedId(null);
+    setSelectedIds([]);
     setEditing(null);
     g.current.mode = "none";
     g.current.draft = null;
+    histRef.current = [];
+    clipRef.current = [];
     mosaicBaseRef.current = null;
     sampleRef.current = null;
     setImgSrc("");
@@ -189,6 +243,9 @@ export function App() {
       ctx.strokeRect(sel.x + 0.5, sel.y + 0.5, Math.max(0, sel.w - 1), Math.max(0, sel.h - 1));
     }
 
+    // 截图区域的 8 个调整手柄（标注阶段可二次改大小/位置）
+    if (sel && st.current.phase === "annotate" && g.current.mode !== "marquee") drawRegionHandles(ctx, sel);
+
     const opts = { mosaicBase: mosaicBaseRef.current };
     for (const o of st.current.objects) {
       if (st.current.editing && o.id === st.current.editing.id) continue; // 正在编辑的文字用输入框显示
@@ -196,12 +253,43 @@ export function App() {
     }
     if (g.current.draft) drawObj(ctx, g.current.draft, opts);
 
-    // 选中对象：包围盒 + 手柄
-    const selObj = st.current.objects.find((o) => o.id === st.current.selectedId);
-    if (selObj && !st.current.editing) drawSelection(ctx, selObj);
+    // 选中对象：单选=包围盒+手柄；多选=各自虚线框（不显示手柄）
+    if (!st.current.editing) {
+      const picked = st.current.objects.filter((o) => st.current.selectedIds.includes(o.id));
+      if (picked.length === 1) drawSelection(ctx, picked[0], true);
+      else for (const o of picked) drawSelection(ctx, o, false);
+    }
+
+    // 框选橡皮筋
+    if (g.current.mode === "marquee") {
+      const m = currentSel();
+      ctx.save();
+      ctx.fillStyle = "rgba(10,132,255,0.12)";
+      ctx.fillRect(m.x, m.y, m.w, m.h);
+      ctx.strokeStyle = "#0A84FF";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(m.x + 0.5, m.y + 0.5, Math.max(0, m.w - 1), Math.max(0, m.h - 1));
+      ctx.restore();
+    }
   }, []);
 
-  function drawSelection(ctx: CanvasRenderingContext2D, obj: Obj) {
+  // 选区 8 手柄（白底蓝边小方块）
+  function drawRegionHandles(ctx: CanvasRenderingContext2D, sel: Selection) {
+    ctx.save();
+    for (const h of regionHandles(sel)) {
+      ctx.beginPath();
+      ctx.rect(h.p.x - 3.5, h.p.y - 3.5, 7, 7);
+      ctx.fillStyle = "#fff";
+      ctx.fill();
+      ctx.strokeStyle = "#0A84FF";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawSelection(ctx: CanvasRenderingContext2D, obj: Obj, withHandles: boolean) {
     const b = localBBox(obj);
     const c = objCenter(obj);
     const corners = bboxCorners(b).map((p) => rotateAbout(p, c, obj.rotation));
@@ -214,6 +302,10 @@ export function App() {
     ctx.closePath();
     ctx.stroke();
     ctx.setLineDash([]);
+    if (!withHandles) {
+      ctx.restore();
+      return;
+    }
     // 旋转手柄连线（非箭头）
     if (obj.kind !== "arrow") {
       const anchor = rotHandleAnchor(obj);
@@ -240,7 +332,7 @@ export function App() {
 
   useEffect(() => {
     redraw();
-  }, [selection, objects, selectedId, phase, editing, redraw]);
+  }, [selection, objects, selectedIds, phase, editing, redraw]);
 
   function currentSel(): Selection {
     const a = g.current.selStart;
@@ -253,6 +345,15 @@ export function App() {
 
   // ── 指针 ──
   const pt = (e: MouseEvent | React.MouseEvent): Point => ({ x: e.clientX, y: e.clientY });
+
+  // 复制一组对象（新 id + 偏移）。
+  function cloneObjs(objs: Obj[], dx: number, dy: number): Obj[] {
+    return objs.map((o) => translateObj({ ...o, id: uid() } as Obj, dx, dy));
+  }
+  function selectedObjs(): Obj[] {
+    const s = st.current;
+    return s.objects.filter((o) => s.selectedIds.includes(o.id));
+  }
 
   const onCanvasDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -269,60 +370,106 @@ export function App() {
       attach();
       return;
     }
-    if (s.phase !== "annotate") return;
+    if (s.phase !== "annotate" || !s.selection) return;
+    g.current.snap = s.objects;
+    g.current.pushed = false;
 
-    // 1) 手柄（仅对已选中对象）
-    const selObj = s.objects.find((o) => o.id === s.selectedId);
-    if (selObj) {
-      const h = hitHandle(selObj, p);
+    // 1) 对象手柄（仅单选时）
+    const one = s.selectedIds.length === 1 ? s.objects.find((o) => o.id === s.selectedIds[0]) : null;
+    if (one) {
+      const h = hitHandle(one, p);
       if (h) {
         if (h === "rot") {
           g.current.mode = "rotate";
-          g.current.rotSnap = rotateStart(selObj, p);
+          g.current.rotSnap = rotateStart(one, p);
         } else if (h === "p1" || h === "p2") {
           g.current.mode = "endpoint";
           g.current.handle = h;
-          g.current.moveId = selObj.id;
         } else {
           g.current.mode = "scale";
-          g.current.scaleSnap = scaleStart(selObj, h);
+          g.current.scaleSnap = scaleStart(one, h);
         }
-        g.current.moveId = selObj.id;
+        g.current.moveIds = [one.id];
         g.current.last = p;
         attach();
         return;
       }
     }
 
-    // 2) 命中对象 → 选中
-    const hit = hitObject(s.objects, p);
-    if (hit) {
-      // 已选中同一文字再单击 → 进入编辑
-      if (hit.kind === "text" && hit.id === s.selectedId) {
-        startEditText(hit);
-        return;
-      }
-      setSelectedId(hit.id);
-      setTool(hit.kind);
-      g.current.clickTargetId = hit.id;
-      g.current.mode = "move";
-      g.current.moveId = hit.id;
+    // 2) 截图区域手柄 → 二次调整大小
+    const rh = hitRegionHandle(s.selection, p);
+    if (rh) {
+      g.current.mode = "region";
+      g.current.regionHandle = rh;
+      g.current.regionBase = s.selection;
       g.current.last = p;
       attach();
       return;
     }
 
-    // 3) 空白
-    const inside = s.selection && pointInSel(p, s.selection);
-    if (!inside) {
-      setSelectedId(null);
+    // 3) 命中对象 → 选中 / 多选切换 / 拖动（⌥ 拖动=复制）
+    const hit = hitObject(s.objects, p);
+    if (hit) {
+      if (e.shiftKey) {
+        setSelectedIds((prev) => (prev.includes(hit.id) ? prev.filter((i) => i !== hit.id) : [...prev, hit.id]));
+        return;
+      }
+      // 已单选的文字再单击 → 进入编辑
+      if (hit.kind === "text" && s.selectedIds.length === 1 && s.selectedIds[0] === hit.id) {
+        startEditText(hit);
+        return;
+      }
+      let ids = s.selectedIds.includes(hit.id) ? s.selectedIds : [hit.id];
+      if (!s.selectedIds.includes(hit.id)) {
+        setSelectedIds(ids);
+        if (s.tool !== "select") setTool(hit.kind);
+      }
+      if (e.altKey) {
+        // ⌥ 拖动 = 就地复制一份并拖动副本
+        const copies = cloneObjs(s.objects.filter((o) => ids.includes(o.id)), 0, 0);
+        pushHist(s.objects);
+        g.current.pushed = true;
+        ids = copies.map((o) => o.id);
+        setObjects((prev) => [...prev, ...copies]);
+        setSelectedIds(ids);
+      }
+      g.current.mode = "move";
+      g.current.moveIds = ids;
+      g.current.last = p;
+      attach();
+      return;
+    }
+
+    // 4) 截图区域边框 → 整体拖移区域
+    if (onRegionBorder(s.selection, p)) {
+      g.current.mode = "regionMove";
+      g.current.regionBase = s.selection;
+      g.current.start = p;
+      g.current.last = p;
+      attach();
+      return;
+    }
+
+    // 5) 区域内空白
+    if (!pointInSel(p, s.selection)) {
+      setSelectedIds([]);
+      return;
+    }
+    if (s.tool === "select") {
+      // 指针工具：橡皮筋框选（⇧ 累加）
+      g.current.mode = "marquee";
+      g.current.selStart = p;
+      g.current.last = p;
+      g.current.marqueeBase = e.shiftKey ? s.selectedIds : [];
+      if (!e.shiftKey) setSelectedIds([]);
+      attach();
       return;
     }
     if (s.tool === "text") {
       placeText(p);
       return;
     }
-    setSelectedId(null);
+    setSelectedIds([]);
     g.current.mode = "draw";
     g.current.start = p;
     g.current.last = p;
@@ -341,33 +488,45 @@ export function App() {
   function onMove(e: MouseEvent) {
     const p = pt(e);
     const gm = g.current.mode;
-    if (gm === "select") {
+    if (gm === "select" || gm === "marquee") {
       g.current.last = p;
       redraw();
+    } else if (gm === "region" && g.current.regionHandle && g.current.regionBase) {
+      setSelection(applyRegionResize(g.current.regionBase, g.current.regionHandle, p));
+    } else if (gm === "regionMove" && g.current.regionBase) {
+      const b = g.current.regionBase;
+      setSelection(clampRegion({ x: b.x + (p.x - g.current.start.x), y: b.y + (p.y - g.current.start.y), w: b.w, h: b.h }));
     } else if (gm === "draw" && g.current.draft) {
       const d = g.current.draft;
       if (d.kind === "pen" || d.kind === "mosaic") d.points.push(p);
       else (d as { to: Point }).to = p;
       redraw();
-    } else if (gm === "move" && g.current.moveId) {
+    } else if (gm === "move" && g.current.moveIds.length) {
       const dx = p.x - g.current.last.x;
       const dy = p.y - g.current.last.y;
+      if (dx || dy) markMutation();
       g.current.last = p;
-      setObjects((prev) => prev.map((o) => (o.id === g.current.moveId ? translateObj(o, dx, dy) : o)));
+      const ids = g.current.moveIds;
+      setObjects((prev) => prev.map((o) => (ids.includes(o.id) ? translateObj(o, dx, dy) : o)));
     } else if (gm === "scale" && g.current.scaleSnap) {
+      markMutation();
       const next = applyScale(g.current.scaleSnap, p);
-      setObjects((prev) => prev.map((o) => (o.id === g.current.moveId ? next : o)));
-    } else if (gm === "rotate" && g.current.rotSnap && g.current.moveId) {
-      const cur = st.current.objects.find((o) => o.id === g.current.moveId);
+      setObjects((prev) => prev.map((o) => (o.id === next.id ? next : o)));
+    } else if (gm === "rotate" && g.current.rotSnap && g.current.moveIds[0]) {
+      const id = g.current.moveIds[0];
+      const cur = st.current.objects.find((o) => o.id === id);
       if (cur) {
+        markMutation();
         const next = applyRotate(cur, p, g.current.rotSnap);
-        setObjects((prev) => prev.map((o) => (o.id === g.current.moveId ? next : o)));
+        setObjects((prev) => prev.map((o) => (o.id === id ? next : o)));
       }
-    } else if (gm === "endpoint" && g.current.handle && g.current.moveId) {
-      const cur = st.current.objects.find((o) => o.id === g.current.moveId);
+    } else if (gm === "endpoint" && g.current.handle && g.current.moveIds[0]) {
+      const id = g.current.moveIds[0];
+      const cur = st.current.objects.find((o) => o.id === id);
       if (cur) {
+        markMutation();
         const next = applyEndpoint(cur, g.current.handle, p);
-        setObjects((prev) => prev.map((o) => (o.id === g.current.moveId ? next : o)));
+        setObjects((prev) => prev.map((o) => (o.id === id ? next : o)));
       }
     }
   }
@@ -381,18 +540,64 @@ export function App() {
       if (sel.w <= 3 || sel.h <= 3) return;
       setSelection(sel);
       setPhase("annotate");
+    } else if (gm === "marquee") {
+      const m = currentSel();
+      const base = g.current.marqueeBase;
+      if (m.w <= 2 && m.h <= 2) setSelectedIds(base);
+      else {
+        const hits = objectsInRect(st.current.objects, m).map((o) => o.id);
+        setSelectedIds(Array.from(new Set([...base, ...hits])));
+      }
+      redraw();
     } else if (gm === "draw" && g.current.draft) {
       const d = g.current.draft;
       g.current.draft = null;
       const b = localBBox(d);
       const meaningful = d.kind === "pen" || d.kind === "mosaic" ? d.points.length > 1 : b.w > 3 || b.h > 3;
-      if (meaningful) setObjects((prev) => [...prev, d]);
-      else redraw();
+      if (meaningful) {
+        pushHist(g.current.snap ?? st.current.objects);
+        setObjects((prev) => [...prev, d]);
+      } else redraw();
     }
     g.current.scaleSnap = null;
     g.current.rotSnap = null;
     g.current.handle = null;
+    g.current.regionHandle = null;
+    g.current.regionBase = null;
+    g.current.snap = null;
+    g.current.pushed = false;
   }
+
+  // 悬停光标反馈（手柄/边框/对象）
+  const onCanvasHover = (e: React.MouseEvent) => {
+    const s = st.current;
+    if (g.current.mode !== "none") return;
+    if (s.phase !== "annotate" || !s.selection) {
+      setCursor("crosshair");
+      return;
+    }
+    const p = pt(e);
+    const one = s.selectedIds.length === 1 ? s.objects.find((o) => o.id === s.selectedIds[0]) : null;
+    if (one && hitHandle(one, p)) {
+      setCursor("pointer");
+      return;
+    }
+    const rh = hitRegionHandle(s.selection, p);
+    if (rh) {
+      setCursor(REGION_CURSOR[rh]);
+      return;
+    }
+    if (hitObject(s.objects, p)) {
+      setCursor("move");
+      return;
+    }
+    if (onRegionBorder(s.selection, p)) {
+      setCursor("move");
+      return;
+    }
+    if (!pointInSel(p, s.selection)) setCursor("default");
+    else setCursor(s.tool === "select" ? "default" : s.tool === "text" ? "text" : "crosshair");
+  };
 
   const attached = useRef(false);
   function attach() {
@@ -411,15 +616,18 @@ export function App() {
   function placeText(p: Point) {
     const s = st.current;
     const sel = s.selection!;
+    // wrapWidth = 到选区右缘（折行上限）；显示宽度随内容自适应（autoWidth）。
     const wrapWidth = Math.max(60, sel.x + sel.w - p.x - 4);
-    setSelectedId(null);
-    setEditing({ id: uid(), at: p, value: "", fontSize: FONT_SIZES[s.sizeIdx], wrapWidth, rotation: 0, color: COLORS[s.colorIdx], isNew: true });
+    g.current.textSnap = s.objects;
+    setSelectedIds([]);
+    setEditing({ id: uid(), at: p, value: "", fontSize: FONT_SIZES[s.sizeIdx], wrapWidth, autoWidth: true, rotation: 0, color: COLORS[s.colorIdx], isNew: true });
     shot.setInputMode(true);
   }
   function startEditText(obj: TextObj) {
-    setSelectedId(null);
+    g.current.textSnap = st.current.objects;
+    setSelectedIds([]);
     setObjects((prev) => prev.filter((o) => o.id !== obj.id));
-    setEditing({ id: obj.id, at: obj.at, value: obj.value, fontSize: obj.fontSize, wrapWidth: obj.wrapWidth, rotation: obj.rotation, color: obj.color, isNew: false, orig: obj });
+    setEditing({ id: obj.id, at: obj.at, value: obj.value, fontSize: obj.fontSize, wrapWidth: obj.wrapWidth, autoWidth: obj.autoWidth !== false, rotation: obj.rotation, color: obj.color, isNew: false, orig: obj });
     shot.setInputMode(true);
   }
   function commitText() {
@@ -427,9 +635,15 @@ export function App() {
     if (!ed) return;
     shot.setInputMode(false);
     setEditing(null);
+    const snap = g.current.textSnap;
+    g.current.textSnap = null;
     const value = ed.value.replace(/\s+$/g, "");
-    if (!value) return; // 清空=删除
-    const obj: TextObj = { id: ed.id, kind: "text", color: ed.color, size: 0, rotation: ed.rotation, at: ed.at, value: ed.value, fontSize: ed.fontSize, wrapWidth: ed.wrapWidth };
+    if (!value) {
+      if (!ed.isNew && snap) pushHist(snap); // 清空=删除，可撤销
+      return;
+    }
+    if (snap) pushHist(snap);
+    const obj: TextObj = { id: ed.id, kind: "text", color: ed.color, size: 0, rotation: ed.rotation, at: ed.at, value: ed.value, fontSize: ed.fontSize, wrapWidth: ed.wrapWidth, autoWidth: ed.autoWidth };
     setObjects((prev) => [...prev.filter((o) => o.id !== ed.id), obj]);
   }
   function cancelText() {
@@ -437,6 +651,7 @@ export function App() {
     if (!ed) return;
     shot.setInputMode(false);
     setEditing(null);
+    g.current.textSnap = null;
     if (ed.orig) setObjects((prev) => [...prev, ed.orig!]); // 还原
   }
   // 编辑时聚焦 + 贴底上移
@@ -455,6 +670,39 @@ export function App() {
     return () => clearTimeout(t);
   }, [editing]);
 
+  // ── 复制 / 粘贴 / 再制 ──
+  const PASTE_OFFSET = 14;
+  function copySel() {
+    const picked = selectedObjs();
+    if (picked.length) clipRef.current = picked.map((o) => ({ ...o }) as Obj);
+  }
+  function pasteClip() {
+    const src = clipRef.current;
+    if (!src.length) return;
+    const copies = cloneObjs(src, PASTE_OFFSET, PASTE_OFFSET);
+    pushHist();
+    setObjects((prev) => [...prev, ...copies]);
+    setSelectedIds(copies.map((o) => o.id));
+    clipRef.current = copies.map((o) => ({ ...o }) as Obj); // 连续粘贴逐次偏移
+    setTool("select");
+  }
+  function duplicateSel() {
+    const picked = selectedObjs();
+    if (!picked.length) return;
+    const copies = cloneObjs(picked, PASTE_OFFSET, PASTE_OFFSET);
+    pushHist();
+    setObjects((prev) => [...prev, ...copies]);
+    setSelectedIds(copies.map((o) => o.id));
+    setTool("select");
+  }
+  function deleteSel() {
+    const s = st.current;
+    if (!s.selectedIds.length) return;
+    pushHist();
+    setObjects((prev) => prev.filter((o) => !s.selectedIds.includes(o.id)));
+    setSelectedIds([]);
+  }
+
   // ── 键盘 ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -466,29 +714,43 @@ export function App() {
         }
         return; // 其余交给输入框
       }
+      const mod = e.metaKey || e.ctrlKey;
       if (e.key === "Escape") {
         e.preventDefault();
         if (s.result) setResult(null);
-        else if (s.selectedId) setSelectedId(null);
+        else if (s.selectedIds.length) setSelectedIds([]);
         else if (s.phase === "annotate") {
           setSelection(null);
           setObjects([]);
-          setSelectedId(null);
+          setSelectedIds([]);
+          histRef.current = [];
           setPhase("select");
         } else shot.cancel();
-      } else if ((e.key === "Delete" || e.key === "Backspace") && s.selectedId) {
+      } else if ((e.key === "Delete" || e.key === "Backspace") && s.selectedIds.length) {
         e.preventDefault();
-        setObjects((prev) => prev.filter((o) => o.id !== s.selectedId));
-        setSelectedId(null);
-      } else if ((e.metaKey || e.ctrlKey) && (e.key === "z" || e.key === "Z")) {
+        deleteSel();
+      } else if (mod && (e.key === "a" || e.key === "A") && s.phase === "annotate") {
+        e.preventDefault(); // 全选对象
+        setSelectedIds(s.objects.map((o) => o.id));
+        setTool("select");
+      } else if (mod && (e.key === "z" || e.key === "Z")) {
         e.preventDefault();
-        setObjects((prev) => prev.slice(0, -1));
-        setSelectedId(null);
-      } else if ((e.metaKey || e.ctrlKey) && (e.key === "c" || e.key === "C") && s.phase === "select") {
-        // 取色：复制光标处颜色 HEX
+        undo();
+      } else if (mod && (e.key === "c" || e.key === "C")) {
+        if (s.phase === "annotate" && s.selectedIds.length) {
+          e.preventDefault();
+          copySel();
+        } else if (s.phase === "select") {
+          e.preventDefault(); // 取色：复制光标处颜色 HEX
+          const c = cursorRef.current;
+          navigator.clipboard.writeText(sampleColor(c.x, c.y));
+        }
+      } else if (mod && (e.key === "v" || e.key === "V") && s.phase === "annotate") {
         e.preventDefault();
-        const c = cursorRef.current;
-        navigator.clipboard.writeText(sampleColor(c.x, c.y));
+        pasteClip();
+      } else if (mod && (e.key === "d" || e.key === "D") && s.phase === "annotate" && s.selectedIds.length) {
+        e.preventDefault();
+        duplicateSel();
       } else if (e.key === "Enter" && s.phase === "annotate") {
         e.preventDefault();
         finish();
@@ -572,19 +834,22 @@ export function App() {
     else if (!hit) finish();
   };
 
-  // 面板改颜色/尺寸 → 同时作用于选中对象
+  // 面板改颜色/尺寸 → 同时作用于所有选中对象
   function applyColor(i: number) {
     setColorIdx(i);
-    const id = st.current.selectedId;
-    if (id) setObjects((prev) => prev.map((o) => (o.id === id ? { ...o, color: COLORS[i] } : o)));
+    const ids = st.current.selectedIds;
+    if (!ids.length) return;
+    pushHist();
+    setObjects((prev) => prev.map((o) => (ids.includes(o.id) ? { ...o, color: COLORS[i] } : o)));
   }
   function applySize(i: 0 | 1 | 2) {
     setSizeIdx(i);
-    const id = st.current.selectedId;
-    if (!id) return;
+    const ids = st.current.selectedIds;
+    if (!ids.length) return;
+    pushHist();
     setObjects((prev) =>
       prev.map((o) => {
-        if (o.id !== id) return o;
+        if (!ids.includes(o.id)) return o;
         if (o.kind === "text") return { ...o, fontSize: FONT_SIZES[i] };
         return { ...o, size: i };
       }),
@@ -596,8 +861,8 @@ export function App() {
     <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }}>
       <style>{TOOLBAR_CSS}</style>
       {imgSrc ? <img ref={imgRef} src={imgSrc} onLoad={onImgLoad} draggable={false} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} alt="" /> : null}
-      <canvas ref={canvasRef} onMouseDown={onCanvasDown} onDoubleClick={onCanvasDbl} style={{ position: "absolute", inset: 0, cursor: phase === "select" ? "crosshair" : "default" }} />
-      {(phase === "select" || phase === "annotate") && (selection || g.current.mode === "select") ? <SizeBadge get={() => (g.current.mode === "select" ? currentSel() : selection)} /> : null}
+      <canvas ref={canvasRef} onMouseDown={onCanvasDown} onMouseMove={onCanvasHover} onDoubleClick={onCanvasDbl} style={{ position: "absolute", inset: 0, cursor: phase === "select" ? "crosshair" : cursor }} />
+      {(phase === "select" || phase === "annotate") && (selection || g.current.mode === "select") ? <SizeBadge get={() => (g.current.mode === "select" ? currentSel() : st.current.selection)} /> : null}
       {phase === "select" ? <Magnifier getCursor={() => cursorRef.current} sample={() => sampleRef.current} colorAt={sampleColor} /> : null}
       {editing ? <TextEditor edit={editing} onChange={(v) => setEditing((e) => (e ? { ...e, value: v } : e))} onBlurCommit={commitText} taRef={textAreaRef} /> : null}
       {phase === "annotate" && selection ? (
@@ -609,7 +874,7 @@ export function App() {
           onTool={setTool}
           onColor={applyColor}
           onSize={applySize}
-          onUndo={() => setObjects((p) => p.slice(0, -1))}
+          onUndo={undo}
           onCancel={() => shot.cancel()}
           onSave={save}
           onFinish={finish}
@@ -739,8 +1004,11 @@ function Magnifier({ getCursor, sample, colorAt }: { getCursor: () => Point; sam
 }
 
 // 文字编辑框（旋转用 CSS transform 同角度；字符折行与 canvas 一致）
+// 宽度不再撑满选区：随内容实测宽增长（+光标余量），上限=wrapWidth（到选区右缘）。
 function TextEditor({ edit, onChange, onBlurCommit, taRef }: { edit: TextEdit; onChange: (v: string) => void; onBlurCommit: () => void; taRef: React.RefObject<HTMLTextAreaElement> }) {
-  const h = textSize({ id: edit.id, kind: "text", color: edit.color, size: 0, rotation: 0, at: edit.at, value: edit.value || " ", fontSize: edit.fontSize, wrapWidth: edit.wrapWidth }).h;
+  const probe: TextObj = { id: edit.id, kind: "text", color: edit.color, size: 0, rotation: 0, at: edit.at, value: edit.value || " ", fontSize: edit.fontSize, wrapWidth: edit.wrapWidth, autoWidth: edit.autoWidth };
+  const { w, h } = textSize(probe);
+  const boxW = edit.autoWidth ? Math.min(edit.wrapWidth, w + Math.ceil(edit.fontSize * 0.6)) : edit.wrapWidth;
   return (
     <textarea
       ref={taRef}
@@ -753,10 +1021,10 @@ function TextEditor({ edit, onChange, onBlurCommit, taRef }: { edit: TextEdit; o
         position: "absolute",
         left: edit.at.x,
         top: edit.at.y,
-        width: edit.wrapWidth,
+        width: boxW,
         height: Math.max(edit.fontSize * 1.35, h),
         transform: `rotate(${edit.rotation}rad)`,
-        transformOrigin: `${edit.wrapWidth / 2}px ${h / 2}px`,
+        transformOrigin: `${boxW / 2}px ${h / 2}px`,
         font: `${edit.fontSize}px ${FONT_FAMILY}`,
         lineHeight: 1.35,
         color: edit.color,
@@ -787,7 +1055,12 @@ function Ic({ d, fill }: { d: string; fill?: boolean }) {
     </svg>
   );
 }
-const TOOL_ICON: Record<Tool, React.ReactNode> = {
+const TOOL_ICON: Record<UITool, React.ReactNode> = {
+  select: (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 3l14 8.5-6.2 1.4L9.6 19 5 3z" />
+    </svg>
+  ),
   rect: <Ic d="M4 6.5h16v11H4z" />,
   ellipse: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
@@ -811,8 +1084,9 @@ const TOOL_ICON: Record<Tool, React.ReactNode> = {
     </svg>
   ),
 };
-const TOOL_ORDER: Tool[] = ["rect", "ellipse", "arrow", "pen", "mosaic", "text"];
-const TOOL_TIP_KEY: Record<Tool, string> = {
+const TOOL_ORDER: UITool[] = ["select", "rect", "ellipse", "arrow", "pen", "mosaic", "text"];
+const TOOL_TIP_KEY: Record<UITool, string> = {
+  select: "screenshot.toolSelect",
   rect: "screenshot.toolRect",
   ellipse: "screenshot.toolEllipse",
   arrow: "screenshot.toolArrow",
@@ -844,10 +1118,10 @@ const ICON = {
 
 function Toolbar(props: {
   sel: Selection;
-  tool: Tool;
+  tool: UITool;
   colorIdx: number;
   sizeIdx: 0 | 1 | 2;
-  onTool: (t: Tool) => void;
+  onTool: (t: UITool) => void;
   onColor: (i: number) => void;
   onSize: (i: 0 | 1 | 2) => void;
   onUndo: () => void;
@@ -863,7 +1137,7 @@ function Toolbar(props: {
   const sizeTip = [t("common.sizeSmall"), t("common.sizeMedium"), t("common.sizeLarge")] as const;
   const colorTip = [t("common.colorRed"), t("common.colorYellow"), t("common.colorBlue")] as const;
   const gap = 10;
-  const barW = 440;
+  const barW = 500;
   let top = sel.y + sel.h + gap;
   const above = top + 100 > window.innerHeight;
   if (above) top = Math.max(gap, sel.y - 104);

@@ -341,6 +341,7 @@
     "fileCount": "{{count}} files"
   },
   "screenshot": {
+    "toolSelect": "Select (marquee, multi-select, ⌥drag to duplicate)",
     "toolRect": "Rectangle",
     "toolEllipse": "Ellipse",
     "toolArrow": "Arrow",

@@ -341,6 +341,7 @@
     "fileCount": "{{count}} 个文件"
   },
   "screenshot": {
+    "toolSelect": "选择 / 框选（可多选、拖动、⌥拖动复制）",
     "toolRect": "矩形",
     "toolEllipse": "椭圆",
     "toolArrow": "箭头",

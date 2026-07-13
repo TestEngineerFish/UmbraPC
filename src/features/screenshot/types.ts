@@ -1,6 +1,8 @@
 // 截图标注 · 对象模型与常量。对象化架构：每个标注是带 id 的对象，存于数组（非位图涂改）。
 export type Point = { x: number; y: number };
 export type Tool = "rect" | "ellipse" | "arrow" | "pen" | "mosaic" | "text";
+// 工具栏可选项：绘制工具 + 指针（框选/多选/移动，不产生对象）。
+export type UITool = Tool | "select";
 
 // BaseObj: id + 颜色 + 尺寸档位(0|1|2) + 旋转(弧度，绕包围盒中心)。
 export interface BaseObj {
@@ -25,7 +27,8 @@ export interface TextObj extends BaseObj {
   at: Point; // 左上角
   value: string;
   fontSize: number; // 实际 px
-  wrapWidth: number; // 折行宽度（提交时固化）
+  wrapWidth: number; // 折行宽度上限（新建时=到选区右缘；手柄拖宽后固化为该宽度）
+  autoWidth?: boolean; // true=宽度随内容自适应（wrapWidth 仅作上限）；拖手柄改宽后置 false
 }
 export type Obj = ShapeObj | PathObj | TextObj;
 
@@ -52,3 +55,5 @@ export function uid(): string {
 }
 
 export const TEXT_LINE_HEIGHT = 1.35;
+// 自适应宽度文字的最小宽度（空文本时的光标位）。
+export const TEXT_MIN_WIDTH = 26;

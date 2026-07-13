@@ -43,6 +43,7 @@ export interface Item {
   createdAt: number;
   updatedAt: number;
   revision: number;
+  deleted?: boolean;         // 删除墓碑：标记删除后仍参与同步（界面过滤），让删除能跨端传播
 }
 
 // 一个身份库解密后的内容（存 v-<id>.enc）。

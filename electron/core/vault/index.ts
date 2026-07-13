@@ -317,7 +317,7 @@ export class VaultManager {
 
   // ── 记录 ──
   private listItems(vaultId: string) {
-    return this.data(vaultId).items.slice().sort((a, b) => b.updatedAt - a.updatedAt);
+    return this.data(vaultId).items.filter((i) => !i.deleted).sort((a, b) => b.updatedAt - a.updatedAt);
   }
   private getItem(vaultId: string, itemId: string): Item | null {
     return this.data(vaultId).items.find((i) => i.id === itemId) || null;
@@ -338,18 +338,20 @@ export class VaultManager {
     d.items[idx] = { ...prev, ...item, attachments: prev.attachments, updatedAt: Date.now(), revision: prev.revision + 1 };
     await this.persistVault(vaultId);
   }
+  // 删除 = 打墓碑（保留条目参与同步，抬 revision；清空明文内容与附件）。
+  private async tombstone(vaultId: string, it: Item) {
+    for (const a of it.attachments) await fs.rm(this.attFile(vaultId, a.id), { force: true });
+    it.deleted = true; it.blocks = []; it.attachments = []; it.tags = [];
+    it.updatedAt = Date.now(); it.revision += 1;
+  }
   private async deleteItem(vaultId: string, itemId: string) {
-    const d = this.data(vaultId);
-    const it = d.items.find((i) => i.id === itemId);
-    if (it) for (const a of it.attachments) await fs.rm(this.attFile(vaultId, a.id), { force: true });
-    d.items = d.items.filter((i) => i.id !== itemId);
+    const it = this.data(vaultId).items.find((i) => i.id === itemId);
+    if (it) await this.tombstone(vaultId, it);
     await this.persistVault(vaultId);
   }
   private async deleteItems(vaultId: string, ids: string[]) {
-    const d = this.data(vaultId);
     const set = new Set(ids);
-    for (const it of d.items) if (set.has(it.id)) for (const a of it.attachments) await fs.rm(this.attFile(vaultId, a.id), { force: true });
-    d.items = d.items.filter((i) => !set.has(i.id));
+    for (const it of this.data(vaultId).items) if (set.has(it.id) && !it.deleted) await this.tombstone(vaultId, it);
     await this.persistVault(vaultId);
     return ids.length;
   }
@@ -402,7 +404,7 @@ export class VaultManager {
     const vids = vaultId ? [vaultId] : [...this.vdata.keys()];
     for (const vid of vids) {
       const d = this.vdata.get(vid); if (!d) continue;
-      for (const it of d.items) if (searchableText(it).includes(q)) out.push({ vaultId: vid, itemId: it.id, title: it.title, icon: it.icon, typeId: it.typeId });
+      for (const it of d.items) if (!it.deleted && searchableText(it).includes(q)) out.push({ vaultId: vid, itemId: it.id, title: it.title, icon: it.icon, typeId: it.typeId });
     }
     return out.slice(0, 50);
   }

@@ -149,7 +149,7 @@ export function applyScale(snap: ScaleSnap, pt: Point): Obj {
     const A = sub(anchorOffset, { x: nb.w / 2, y: nb.h / 2 });
     const rotA = rotate(A, theta);
     const at = sub(sub(snap.anchorVisual, { x: nb.w / 2, y: nb.h / 2 }), rotA);
-    return { ...obj, at, wrapWidth: newW, fontSize: newFont };
+    return { ...obj, at, wrapWidth: newW, fontSize: newFont, autoWidth: false }; // 手动拖宽 → 固化宽度
   }
 
   const sx = Math.abs(origVec.x) < 1e-3 ? 1 : d.x / origVec.x;
@@ -178,6 +178,88 @@ export function translateObj(obj: Obj, dx: number, dy: number): Obj {
   if ("points" in obj) return { ...obj, points: obj.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) };
   return { ...obj, from: { x: obj.from.x + dx, y: obj.from.y + dy }, to: { x: obj.to.x + dx, y: obj.to.y + dy } };
 }
+
+// ── 世界包围盒 / 框选 ──
+// 含旋转的轴对齐包围盒（世界坐标），用于矩形框选命中。
+export function worldBBox(obj: Obj): Selection {
+  const b = localBBox(obj);
+  const c = bboxCenter(b);
+  const pts = bboxCorners(b).map((p) => rotateAbout(p, c, obj.rotation));
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, w: Math.max(...xs) - x, h: Math.max(...ys) - y };
+}
+export function rectsIntersect(a: Selection, b: Selection): boolean {
+  return a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h;
+}
+// 与框选矩形相交的对象（保持原 z 序）。
+export function objectsInRect(objects: Obj[], rect: Selection): Obj[] {
+  return objects.filter((o) => rectsIntersect(worldBBox(o), rect));
+}
+
+// ── 截图区域（选区）二次调整：8 手柄缩放 + 边框拖移 ──
+export type RegionHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+export const REGION_TOL = 8;
+
+export function regionHandles(sel: Selection): { id: RegionHandle; p: Point }[] {
+  const { x, y, w, h } = sel;
+  const mx = x + w / 2;
+  const my = y + h / 2;
+  return [
+    { id: "nw", p: { x, y } },
+    { id: "n", p: { x: mx, y } },
+    { id: "ne", p: { x: x + w, y } },
+    { id: "e", p: { x: x + w, y: my } },
+    { id: "se", p: { x: x + w, y: y + h } },
+    { id: "s", p: { x: mx, y: y + h } },
+    { id: "sw", p: { x, y: y + h } },
+    { id: "w", p: { x, y: my } },
+  ];
+}
+export function hitRegionHandle(sel: Selection, pt: Point): RegionHandle | null {
+  for (const h of regionHandles(sel)) {
+    if (Math.abs(pt.x - h.p.x) <= REGION_TOL && Math.abs(pt.y - h.p.y) <= REGION_TOL) return h.id;
+  }
+  return null;
+}
+// 指针是否落在选区边框上（用于整体拖移选区）。
+export function onRegionBorder(sel: Selection, pt: Point): boolean {
+  const t = 5;
+  const inOuter = pt.x >= sel.x - t && pt.x <= sel.x + sel.w + t && pt.y >= sel.y - t && pt.y <= sel.y + sel.h + t;
+  const inInner = pt.x >= sel.x + t && pt.x <= sel.x + sel.w - t && pt.y >= sel.y + t && pt.y <= sel.y + sel.h - t;
+  return inOuter && !inInner;
+}
+const MIN_REGION = 8;
+export function clampRegion(sel: Selection): Selection {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const w = Math.max(MIN_REGION, Math.min(sel.w, W));
+  const h = Math.max(MIN_REGION, Math.min(sel.h, H));
+  return { x: Math.max(0, Math.min(sel.x, W - w)), y: Math.max(0, Math.min(sel.y, H - h)), w, h };
+}
+export function applyRegionResize(base: Selection, id: RegionHandle, pt: Point): Selection {
+  let x1 = base.x;
+  let y1 = base.y;
+  let x2 = base.x + base.w;
+  let y2 = base.y + base.h;
+  if (id.includes("n")) y1 = pt.y;
+  if (id.includes("s")) y2 = pt.y;
+  if (id.includes("w")) x1 = pt.x;
+  if (id.includes("e")) x2 = pt.x;
+  return clampRegion({ x: Math.min(x1, x2), y: Math.min(y1, y2), w: Math.abs(x2 - x1), h: Math.abs(y2 - y1) });
+}
+export const REGION_CURSOR: Record<RegionHandle, string> = {
+  nw: "nwse-resize",
+  se: "nwse-resize",
+  ne: "nesw-resize",
+  sw: "nesw-resize",
+  n: "ns-resize",
+  s: "ns-resize",
+  e: "ew-resize",
+  w: "ew-resize",
+};
 
 // 旋转感知命中检测：把指针逆旋转到对象局部空间再判。检测顺序由调用方保证（手柄 > 对象 > 空白）。
 export function hitObject(objects: Obj[], pt: Point): Obj | null {
