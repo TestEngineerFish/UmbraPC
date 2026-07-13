@@ -289,17 +289,32 @@ export function App() {
     ctx.restore();
   }
 
+  // 选中框：外扩 3px，蓝底 + 白色蚂蚁线双层描边（任何底色上都看得清）。
   function drawSelection(ctx: CanvasRenderingContext2D, obj: Obj, withHandles: boolean) {
     const b = localBBox(obj);
     const c = objCenter(obj);
-    const corners = bboxCorners(b).map((p) => rotateAbout(p, c, obj.rotation));
+    const pad = 3;
+    const corners = bboxCorners({ x: b.x - pad, y: b.y - pad, w: b.w + pad * 2, h: b.h + pad * 2 }).map((p) => rotateAbout(p, c, obj.rotation));
+    const box = () => {
+      ctx.beginPath();
+      corners.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+      ctx.closePath();
+    };
     ctx.save();
+    ctx.lineJoin = "round";
+    // 底层：深蓝实线 + 阴影，压住任何底色
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 3;
+    ctx.strokeStyle = "#0A84FF";
+    ctx.lineWidth = 2.5;
+    box();
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    // 上层：白色虚线（蚂蚁线）
     ctx.strokeStyle = "#fff";
-    ctx.lineWidth = 1;
-    ctx.setLineDash([5, 4]);
-    ctx.beginPath();
-    corners.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
-    ctx.closePath();
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    box();
     ctx.stroke();
     ctx.setLineDash([]);
     if (!withHandles) {
@@ -314,17 +329,25 @@ export function App() {
         ctx.beginPath();
         ctx.moveTo(anchor.x, anchor.y);
         ctx.lineTo(rot.p.x, rot.p.y);
+        ctx.strokeStyle = "#0A84FF";
+        ctx.lineWidth = 2;
+        ctx.shadowColor = "rgba(0,0,0,0.5)";
+        ctx.shadowBlur = 3;
         ctx.stroke();
+        ctx.shadowBlur = 0;
       }
     }
-    // 手柄圆点
+    // 手柄圆点（白底蓝边 + 阴影）
     for (const h of handlePoints(obj)) {
       ctx.beginPath();
-      ctx.arc(h.p.x, h.p.y, 4, 0, Math.PI * 2);
+      ctx.arc(h.p.x, h.p.y, 5, 0, Math.PI * 2);
       ctx.fillStyle = "#fff";
+      ctx.shadowColor = "rgba(0,0,0,0.45)";
+      ctx.shadowBlur = 3;
       ctx.fill();
+      ctx.shadowBlur = 0;
       ctx.strokeStyle = "#0A84FF";
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.8;
       ctx.stroke();
     }
     ctx.restore();

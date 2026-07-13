@@ -194,9 +194,71 @@ export function worldBBox(obj: Obj): Selection {
 export function rectsIntersect(a: Selection, b: Selection): boolean {
   return a.x <= b.x + b.w && b.x <= a.x + a.w && a.y <= b.y + b.h && b.y <= a.y + a.h;
 }
+
+// 对象轮廓的世界坐标线段集（矩形=四条边、椭圆=多边形近似、箭头/画笔/马赛克=折线；文字无轮廓=实心块）。
+function outlineSegments(obj: Obj): [Point, Point][] {
+  const c = objCenter(obj);
+  const R = (p: Point) => rotateAbout(p, c, obj.rotation);
+  const chain = (pts: Point[]): [Point, Point][] => {
+    const out: [Point, Point][] = [];
+    for (let i = 1; i < pts.length; i++) out.push([pts[i - 1], pts[i]]);
+    return out;
+  };
+  if (obj.kind === "rect") {
+    const cs = bboxCorners(localBBox(obj)).map(R);
+    return [
+      [cs[0], cs[1]],
+      [cs[1], cs[2]],
+      [cs[2], cs[3]],
+      [cs[3], cs[0]],
+    ];
+  }
+  if (obj.kind === "ellipse") {
+    const cx = (obj.from.x + obj.to.x) / 2;
+    const cy = (obj.from.y + obj.to.y) / 2;
+    const rx = Math.abs(obj.to.x - obj.from.x) / 2;
+    const ry = Math.abs(obj.to.y - obj.from.y) / 2;
+    const N = 48;
+    const pts: Point[] = [];
+    for (let i = 0; i <= N; i++) {
+      const a = (i / N) * Math.PI * 2;
+      pts.push(R({ x: cx + rx * Math.cos(a), y: cy + ry * Math.sin(a) }));
+    }
+    return chain(pts);
+  }
+  if (obj.kind === "arrow") return [[R(obj.from), R(obj.to)]];
+  if ("points" in obj) return chain(obj.points.map(R));
+  return []; // text
+}
+
+function pointInRect(p: Point, r: Selection): boolean {
+  return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
+function segSeg(a: Point, b: Point, c: Point, d: Point): boolean {
+  const cross = (o: Point, p: Point, q: Point) => (p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+  const d1 = cross(c, d, a);
+  const d2 = cross(c, d, b);
+  const d3 = cross(a, b, c);
+  const d4 = cross(a, b, d);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+// 线段与矩形是否相交（端点落入 或 与任一边相交）。
+function segHitsRect(a: Point, b: Point, r: Selection): boolean {
+  if (pointInRect(a, r) || pointInRect(b, r)) return true;
+  const c = bboxCorners(r);
+  for (let i = 0; i < 4; i++) if (segSeg(a, b, c[i], c[(i + 1) % 4])) return true;
+  return false;
+}
+
 // 与框选矩形相交的对象（保持原 z 序）。
+// 关键：矩形/椭圆按“描边”判定 —— 框选完全落在其内部（只圈住了里面的文字）时不会误选外框。
 export function objectsInRect(objects: Obj[], rect: Selection): Obj[] {
-  return objects.filter((o) => rectsIntersect(worldBBox(o), rect));
+  return objects.filter((o) => {
+    if (o.kind === "text") return rectsIntersect(worldBBox(o), rect); // 文字=实心块
+    const segs = outlineSegments(o);
+    if (!segs.length) return rectsIntersect(worldBBox(o), rect);
+    return segs.some(([a, b]) => segHitsRect(a, b, rect));
+  });
 }
 
 // ── 截图区域（选区）二次调整：8 手柄缩放 + 边框拖移 ──
