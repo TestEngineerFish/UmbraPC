@@ -1,20 +1,23 @@
 // 实时聊天：连接 /ws/chat，按现有协议驱动设计稿里的聊天组件
 // （流式回复、工具轨迹、任务进度卡、执行前确认、完成通知、图片预览、跨端同步）。
 //
-// 多会话（Phase 2）：
-//   - 'assistant'  = 你↔秘书主会话（可发送）
-//   - 'device:<id>' = 服务端↔某设备的编排流（默认只读，设置里可开启发送）
-//   顶部会话条切换；每个会话各自维护消息/分页/未读；服务端推送按 msg.conversation 路由。
+// 微信式三栏（Phase 3）：
+//   左：联系人列表 —— 秘书 + 所有已知设备（在线绿点 / 离线灰点、最后一条消息、未读点）
+//   中：聊天详情   —— 会话消息 + 输入框（设备会话可直接发送，服务端会把「目标设备=这台」注入上下文）
+//   右：设备详情   —— 点标题栏 ⓘ 展开：平台 / 在线状态 / 最后在线 / 设备 ID / 能力目录（程序→技能）
+//
+// 会话 id：'assistant' = 你↔秘书；'device:<id>' = 与某台设备（含它的编排流）。
 import {
   chatConn,
   fetchHistory,
   fetchConversations,
-  fetchDevices,
+  fetchAllDevices,
+  forgetDevice,
   clearHistory,
   getServerUrl,
-  getAllowDeviceSend,
   getAutoApproveOperate,
   setAutoApproveOperate,
+  type KnownDevice,
 } from "../../services/server";
 import { getDesktopConfig } from "../../services/desktop";
 import { t } from "../../i18n";
@@ -39,16 +42,18 @@ interface ConvState {
   loaded: boolean; // 首屏历史是否已拉过
   loading: boolean; // 首屏历史加载中
   unread: boolean;
+  lastText: string; // 联系人列表的消息预览
+  lastAt?: string | number;
 }
 
 const MAIN = "assistant";
 const PAGE = 20;
 
 const convs: Record<string, ConvState> = {};
-let convOrder: string[] = [MAIN]; // 会话条显示顺序（主会话恒在首位）
 let activeConv = MAIN;
-// 设备会话友好名：convId → 设备名（如 device:pc-… → MacBook-Pro-2.local）。
-const convNames: Record<string, string> = {};
+// 已知设备（含离线），联系人列表的数据源。
+let devices: KnownDevice[] = [];
+let detailOpen = false;
 
 let container: HTMLElement | null = null;
 let started = false;
@@ -57,8 +62,8 @@ let appRerender: (() => void) | null = null;
 let stick = true;
 let forceScroll = false;
 let loadingOlder = false;
-// 输入草稿：切换模块/重挂载后仍保留，避免已输入内容丢失。
-let draftText = "";
+// 输入草稿：按会话各存一份，切换联系人不串味。
+const drafts: Record<string, string> = {};
 // 正在清空历史：清空期间禁发消息，避免新消息被服务端的会话重置一起删掉。
 let clearing = false;
 
@@ -73,29 +78,37 @@ function newConvState(): ConvState {
     loaded: false,
     loading: false,
     unread: false,
+    lastText: "",
   };
 }
 
 function cs(id: string): ConvState {
   let s = convs[id];
-  if (!s) {
-    s = convs[id] = newConvState();
-    if (!convOrder.includes(id)) convOrder.push(id);
-  }
+  if (!s) s = convs[id] = newConvState();
   return s;
 }
 
-// 设备会话是否只读（非主会话且未开启“允许向设备发送”）。
-function isReadonly(id: string): boolean {
-  return id !== MAIN && !getAllowDeviceSend();
+// 联系人顺序：秘书恒在首位 → 在线设备 → 离线设备（服务端已排好序）。
+function contactIds(): string[] {
+  return [MAIN, ...devices.map((d) => `device:${d.device_id}`)];
 }
-
-// 会话展示名：'assistant'→秘书；设备优先用友好名，否则退回 id。
+function deviceIdOf(conv: string): string {
+  return conv.startsWith("device:") ? conv.slice("device:".length) : "";
+}
+function deviceOf(conv: string): KnownDevice | null {
+  const id = deviceIdOf(conv);
+  return id ? devices.find((d) => d.device_id === id) || null : null;
+}
 function convLabel(id: string): string {
   if (id === MAIN) return t("chat.secretary");
-  if (convNames[id]) return convNames[id];
-  if (id.startsWith("device:")) return id.slice("device:".length);
-  return id;
+  return deviceOf(id)?.device_name || deviceIdOf(id) || id;
+}
+// 平台 → 头像图标。
+function platformIcon(platform?: string): string {
+  const p = (platform || "").toLowerCase();
+  if (p === "ios" || p === "android") return "📱";
+  if (p === "macos" || p === "windows" || p === "linux") return "💻";
+  return "🖥️";
 }
 
 function rowToBlock(m: { role: string; content: string; created_at?: string }): Block {
@@ -137,36 +150,32 @@ function ensureStarted(): void {
     onMessage: onMessage,
   });
   chatConn.connect();
-  // 拉会话列表（含历史设备会话）+ 在线设备（恒显示房间），并加载主会话首屏历史。
   loadConversationsList();
   loadDevices();
   loadConvHistory(MAIN);
-  // 设备可能稍后上线：定时刷新，让新设备的房间及时出现。
-  window.setInterval(loadDevices, 15000);
+  // 设备上下线有 device_presence 实时推送；这里兜底轮询，防止推送漏掉。
+  window.setInterval(loadDevices, 30000);
 }
 
-// 为每个在线设备恒建一个会话房间（哪怕还没有交互记录），并记录友好名。
+// 已知设备（含离线）：联系人列表的数据源。
 async function loadDevices(): Promise<void> {
-  const devices = await fetchDevices();
-  let changed = false;
-  for (const d of devices) {
-    if (!d.device_id) continue;
-    const id = `device:${d.device_id}`;
-    if (!convOrder.includes(id)) { cs(id); changed = true; }
-    if (d.device_name && convNames[id] !== d.device_name) { convNames[id] = d.device_name; changed = true; }
-  }
-  if (changed) renderConvBar();
+  devices = await fetchAllDevices();
+  renderContacts();
+  renderHeader();
+  if (detailOpen) renderDetail();
 }
 
+// 各会话的最后一条消息（联系人列表的预览文案）。
 async function loadConversationsList(): Promise<void> {
   const rows = await fetchConversations();
   for (const r of rows) {
-    if (r.conversation === MAIN) continue;
-    if (!convOrder.includes(r.conversation)) {
-      cs(r.conversation); // 建状态 + 入列
+    const s = cs(r.conversation);
+    if (!s.lastText) {
+      s.lastText = r.last_content || "";
+      s.lastAt = r.last_at;
     }
   }
-  renderConvBar();
+  renderContacts();
 }
 
 // 拉某会话首屏历史（首次进入时懒加载）。
@@ -214,7 +223,7 @@ async function loadOlder(): Promise<void> {
   if (el) el.scrollTop = prevTop + (el.scrollHeight - prevH);
 }
 
-// 推送归属的会话：job_update 带 conversation；流式/同步消息属于主会话。
+// 推送归属的会话：服务端已给所有事件打上 conversation 标签；缺省视为主会话。
 function convOf(msg: any): string {
   const c = msg && typeof msg.conversation === "string" ? msg.conversation : "";
   return c || MAIN;
@@ -237,15 +246,15 @@ function autoApproveIfEnabled(taskId: string | undefined): void {
 }
 
 function onMessage(msg: any): void {
-  let target = MAIN;
+  let target = convOf(msg);
   switch (msg.type) {
     case "delta": {
-      const a = currentAssistant();
+      const a = assistantOf(target);
       if (a) { a.thinking = false; a.text += msg.text || ""; }
       break;
     }
     case "tool_call": {
-      const a = currentAssistant();
+      const a = assistantOf(target);
       if (a) {
         if (a.text.trim()) { a.trace.push("💭 " + a.text.trim()); a.text = ""; }
         let args = "";
@@ -256,7 +265,7 @@ function onMessage(msg: any): void {
       break;
     }
     case "tool_result": {
-      const a = currentAssistant();
+      const a = assistantOf(target);
       if (a) {
         let p = String(msg.preview || "").replace(/\s+/g, " ").trim();
         if (p.length > 160) p = p.slice(0, 160) + "…";
@@ -265,26 +274,33 @@ function onMessage(msg: any): void {
       break;
     }
     case "reply": {
-      const a = currentAssistant();
+      const a = assistantOf(target);
       if (a) { a.thinking = false; a.streaming = false; a.text = msg.text || a.text; }
-      cs(MAIN).assistantIdx = null;
+      cs(target).assistantIdx = null;
+      cs(target).lastText = msg.text || "";
+      cs(target).lastAt = Date.now();
       break;
     }
     case "job_update":
       target = handleJob(msg);
       break;
+    case "device_presence": {
+      // 设备上/下线：刷新联系人列表（顺带更新能力目录）。
+      loadDevices();
+      return;
+    }
     case "device_message": {
-      // 服务端↔设备的直接交互（非 Job），落到对应设备会话（只读）。
-      target = convOf(msg);
+      // 服务端↔设备的直接交互（非 Job），落到对应设备会话。
       const s = cs(target);
       const ts = msg.created_at || Date.now();
       if (msg.role === "device") s.blocks.push({ kind: "device", text: msg.text || "", ts });
       else s.blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts });
+      s.lastText = msg.text || "";
+      s.lastAt = ts;
       break;
     }
     case "confirm_request":
-      // 执行前授权卡：默认落在主会话，供用户处理（Job 路径的确认卡随 job_update 落到设备会话）。
-      target = convOf(msg);
+      // 执行前授权卡：落在事件所属会话，供用户处理。
       if (msg.task_id) {
         const s = cs(target);
         if (!s.blocks.some((b) => b.kind === "confirm" && b.taskId === msg.task_id)) {
@@ -295,43 +311,44 @@ function onMessage(msg: any): void {
       break;
     case "confirm_resolved":
       resolveConfirm(msg.task_id || "", Boolean(msg.approved)); // 跨会话统一更新
-      renderConvBar();
+      renderMessages();
       return;
     case "history_cleared": {
-      // 其它端清空了主会话历史 → 本端同步清空。
-      const conv = convOf(msg);
-      const s = cs(conv);
+      // 其它端清空了某个会话 → 本端同步清空。
+      const s = cs(target);
       s.blocks = []; s.assistantIdx = null; s.jobMap = {}; s.doneJobs.clear();
-      s.oldestId = null; s.hasMore = false;
-      if (conv === activeConv) renderMessages();
+      s.oldestId = null; s.hasMore = false; s.lastText = "";
+      if (target === activeConv) renderMessages();
+      renderContacts();
       return;
     }
     case "chat_message": {
-      const s = cs(MAIN);
-      if (msg.role === "user") s.blocks.push({ kind: "user", text: msg.text || "", ts: Date.now() });
-      else s.blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts: Date.now() });
+      // 其它端发出的消息（跨端同步）。
+      const s = cs(target);
+      const ts = Date.now();
+      if (msg.role === "user") s.blocks.push({ kind: "user", text: msg.text || "", ts });
+      else s.blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts });
+      s.lastText = msg.text || "";
+      s.lastAt = ts;
       break;
     }
     case "error": {
-      const s = cs(MAIN);
-      if (s.assistantIdx !== null) { const a = currentAssistant(); if (a) { a.thinking = false; a.streaming = false; } s.assistantIdx = null; }
+      const s = cs(target);
+      if (s.assistantIdx !== null) { const a = assistantOf(target); if (a) { a.thinking = false; a.streaming = false; } s.assistantIdx = null; }
       s.blocks.push({ kind: "error", text: msg.message || t("chat.error") });
       break;
     }
     default:
       return;
   }
-  // 目标会话不是当前查看的 → 标记未读并刷新会话条；否则刷新消息区。
-  if (target !== activeConv) {
-    cs(target).unread = true;
-    renderConvBar();
-  } else {
-    renderMessages();
-  }
+  // 目标会话不是当前查看的 → 标记未读；否则刷新消息区。
+  if (target !== activeConv) cs(target).unread = true;
+  else renderMessages();
+  renderContacts();
 }
 
-function currentAssistant(): Extract<Block, { kind: "assistant" }> | null {
-  const s = cs(MAIN);
+function assistantOf(conv: string): Extract<Block, { kind: "assistant" }> | null {
+  const s = cs(conv);
   if (s.assistantIdx === null) return null;
   const b = s.blocks[s.assistantIdx];
   return b && b.kind === "assistant" ? b : null;
@@ -364,6 +381,8 @@ function handleJob(msg: any): string {
     s.doneJobs.add(id);
     s.blocks.push({ kind: "done", goal: b.goal, results: msg.results || b.results || [] });
   }
+  s.lastText = b.message || b.goal;
+  s.lastAt = Date.now();
   return conv;
 }
 
@@ -400,8 +419,8 @@ function blockHtml(b: Block, i: number): string {
     return `<div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
 
   if (b.kind === "device") {
-    // 设备上报（服务端↔设备只读流里的“设备”一侧）：靠右、青色气泡区分秘书。
-    return `<div style="align-self:flex-end;max-width:78%;background:var(--track);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
+    // 设备上报（服务端↔设备编排流里的“设备”一侧）：靠左、描边气泡区分秘书。
+    return `<div style="align-self:flex-start;max-width:78%;background:var(--track);border:1px dashed var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-start")}`;
   }
 
   if (b.kind === "assistant") {
@@ -417,7 +436,6 @@ function blockHtml(b: Block, i: number): string {
 
   if (b.kind === "job") {
     const color = b.status === "done" ? "var(--success)" : b.status === "failed" ? "var(--danger)" : "var(--orange)";
-    // 授权按钮在任意会话都可点（只读仅限制文本输入，不限制确认操作）。
     const confirm = b.confirmTaskId ? confirmButtons(b.confirmTaskId) : "";
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-left:3px solid ${color};border-radius:10px;padding:13px 15px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;"><span style="font-weight:600;">${esc(b.goal)}</span><span style="font-size:12px;color:var(--orange-text);font-weight:600;">${b.pct}%</span></div>
@@ -453,25 +471,155 @@ function blockHtml(b: Block, i: number): string {
   return `<div style="align-self:flex-start;max-width:80%;border:1px solid rgba(180,35,24,.3);background:var(--danger-soft);color:var(--danger);padding:11px 14px;border-radius:10px;">${esc(b.text)}</div>`;
 }
 
-// 会话切换条（主会话 + 各设备会话）。
-function renderConvBar(): void {
-  if (!container) return;
-  const bar = container.querySelector("#uconvbar") as HTMLElement | null;
-  if (!bar) return;
-  if (convOrder.length <= 1) {
-    bar.style.display = "none";
-    return;
+// ── 左栏：联系人列表 ─────────────────────────────────────────────────────────
+function avatarHtml(conv: string, size = 40): string {
+  const fs = Math.round(size * 0.5);
+  if (conv === MAIN) {
+    return `<span style="flex:none;width:${size}px;height:${size}px;border-radius:10px;background:var(--orange);color:#fff;font-weight:700;font-size:${fs}px;display:flex;align-items:center;justify-content:center;">U</span>`;
   }
-  bar.style.display = "flex";
-  bar.innerHTML = convOrder
+  const d = deviceOf(conv);
+  const dim = d && !d.online ? "filter:grayscale(1);opacity:.55;" : "";
+  return `<span style="flex:none;width:${size}px;height:${size}px;border-radius:10px;background:var(--track);border:1px solid var(--border);font-size:${fs}px;display:flex;align-items:center;justify-content:center;${dim}">${platformIcon(d?.platform)}</span>`;
+}
+
+function presenceDot(conv: string): string {
+  if (conv === MAIN) return "";
+  const d = deviceOf(conv);
+  const on = !!d?.online;
+  const color = on ? "var(--success)" : "var(--muted)";
+  return `<span title="${esc(on ? t("chat.online") : t("chat.offline"))}" style="flex:none;width:8px;height:8px;border-radius:999px;background:${color};box-shadow:0 0 0 2px var(--card);"></span>`;
+}
+
+function renderContacts(): void {
+  if (!container) return;
+  const el = container.querySelector("#ucontacts") as HTMLElement | null;
+  if (!el) return;
+  el.innerHTML = contactIds()
     .map((id) => {
       const s = convs[id];
       const on = id === activeConv;
-      const dot = s && s.unread && !on ? `<span style="width:6px;height:6px;border-radius:999px;background:var(--orange);"></span>` : "";
-      const lock = id !== MAIN && isReadonly(id) ? `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.7;"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>` : "";
-      return `<button data-conv="${esc(id)}" style="display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-size:12.5px;cursor:pointer;white-space:nowrap;border:1px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange-soft)" : "var(--card)"};color:${on ? "var(--orange-text)" : "var(--text)"};font-weight:${on ? 600 : 400};">${lock}${esc(convLabel(id))}${dot}</button>`;
+      const preview = (s?.lastText || "").replace(/\s+/g, " ").slice(0, 40);
+      const time = s?.lastAt ? fmtMsgTime(s.lastAt) : "";
+      const unread = s?.unread && !on ? `<span style="flex:none;width:8px;height:8px;border-radius:999px;background:var(--orange);"></span>` : "";
+      return `<button data-conv="${esc(id)}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 12px;border:none;border-radius:9px;cursor:pointer;background:${on ? "var(--orange-soft)" : "transparent"};color:var(--text);">
+        <span style="position:relative;display:flex;">${avatarHtml(id)}<span style="position:absolute;right:-2px;bottom:-2px;">${presenceDot(id)}</span></span>
+        <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
+          <span style="display:flex;align-items:center;gap:6px;">
+            <span style="flex:1;min-width:0;font-size:13.5px;font-weight:${on ? 600 : 500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(convLabel(id))}</span>
+            <span style="flex:none;font-size:10.5px;color:var(--muted);">${esc(time)}</span>
+          </span>
+          <span style="display:flex;align-items:center;gap:6px;">
+            <span style="flex:1;min-width:0;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(preview || (id === MAIN ? t("chat.secretaryDesc") : t("chat.devicePreviewEmpty")))}</span>
+            ${unread}
+          </span>
+        </span>
+      </button>`;
     })
     .join("");
+}
+
+// ── 中栏标题栏 ──────────────────────────────────────────────────────────────
+function renderHeader(): void {
+  if (!container) return;
+  const el = container.querySelector("#uchathead") as HTMLElement | null;
+  if (!el) return;
+  const d = deviceOf(activeConv);
+  const sub =
+    activeConv === MAIN
+      ? t("chat.secretaryDesc")
+      : d
+        ? d.online
+          ? t("chat.online")
+          : d.last_seen
+            ? t("chat.lastSeenAt", { time: fmtMsgTime(d.last_seen) })
+            : t("chat.offline")
+        : t("chat.offline");
+  const info =
+    activeConv === MAIN
+      ? ""
+      : `<button id="udetailbtn" title="${esc(t("chat.deviceDetail"))}" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid ${detailOpen ? "var(--orange)" : "var(--border)"};background:${detailOpen ? "var(--orange-soft)" : "var(--card)"};color:${detailOpen ? "var(--orange-text)" : "var(--text)"};border-radius:8px;cursor:pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 16v-4M12 8h.01"></path></svg></button>`;
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
+      ${avatarHtml(activeConv, 32)}
+      <div style="min-width:0;">
+        <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(convLabel(activeConv))}</div>
+        <div style="font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:5px;">${presenceDot(activeConv)}${esc(sub)}</div>
+      </div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex:none;">
+      ${info}
+      <button id="clearhist" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path></svg>${esc(t("chat.clearHistory"))}</button>
+    </div>`;
+  el.querySelector("#clearhist")?.addEventListener("click", clearActiveHistory);
+  el.querySelector("#udetailbtn")?.addEventListener("click", () => {
+    detailOpen = !detailOpen;
+    renderHeader();
+    renderDetail();
+  });
+}
+
+// ── 右栏：设备详情（能力目录）────────────────────────────────────────────────
+function renderDetail(): void {
+  if (!container) return;
+  const el = container.querySelector("#udetail") as HTMLElement | null;
+  if (!el) return;
+  const d = deviceOf(activeConv);
+  if (!detailOpen || activeConv === MAIN || !d) {
+    el.style.display = "none";
+    el.innerHTML = "";
+    return;
+  }
+  el.style.display = "block";
+  const provs = d.providers || [];
+  const caps = provs.length
+    ? provs
+        .map((m) => {
+          const avail = m.available !== false;
+          const skills = m.skills || [];
+          return `<div style="border:1px solid var(--border);border-radius:9px;padding:10px 12px;background:var(--card);">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="width:6px;height:6px;border-radius:999px;background:${avail ? "var(--success)" : "var(--muted)"};"></span>
+              <span style="font-size:13px;font-weight:600;">${esc(m.display_name || m.provider)}</span>
+              ${m.version ? `<span style="font-size:10.5px;color:var(--muted);">v${esc(m.version)}</span>` : ""}
+            </div>
+            ${!avail && m.unavailable_reason ? `<div style="font-size:11px;color:var(--muted);margin-top:4px;">${esc(m.unavailable_reason)}</div>` : ""}
+            ${skills.length
+              ? `<div style="margin-top:7px;display:flex;flex-direction:column;gap:4px;">${skills
+                  .map((s) => `<div style="font-size:11.5px;color:var(--muted);"><span style="font-family:ui-monospace,Menlo,monospace;color:var(--text);">${esc(s.name)}</span>${s.description ? ` · ${esc(s.description)}` : ""}</div>`)
+                  .join("")}</div>`
+              : ""}
+          </div>`;
+        })
+        .join("")
+    : `<div style="font-size:12.5px;color:var(--muted);">${esc(t("chat.noCapabilities"))}</div>`;
+
+  el.innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:14px;padding:18px 16px;">
+      <div style="display:flex;flex-direction:column;align-items:center;gap:8px;">
+        ${avatarHtml(activeConv, 56)}
+        <div style="font-size:15px;font-weight:600;">${esc(d.device_name)}</div>
+        <div style="font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:5px;">${presenceDot(activeConv)}${esc(d.online ? t("chat.online") : d.last_seen ? t("chat.lastSeenAt", { time: fmtMsgTime(d.last_seen) }) : t("chat.offline"))}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;font-size:12px;">
+        <div style="display:flex;justify-content:space-between;gap:8px;"><span style="color:var(--muted);">${esc(t("chat.platform"))}</span><span>${esc(d.platform || "-")}</span></div>
+        <div style="display:flex;justify-content:space-between;gap:8px;"><span style="flex:none;color:var(--muted);">${esc(t("chat.deviceId"))}</span><span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;word-break:break-all;text-align:right;">${esc(d.device_id)}</span></div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="font-size:12px;font-weight:600;color:var(--muted);">${esc(t("chat.capabilities"))}</div>
+        ${caps}
+      </div>
+      ${!d.online ? `<button id="uforget" style="margin-top:4px;padding:7px 12px;border:1px solid var(--danger);background:transparent;color:var(--danger);border-radius:8px;font-size:12.5px;cursor:pointer;">${esc(t("chat.forgetDevice"))}</button>` : ""}
+    </div>`;
+
+  el.querySelector("#uforget")?.addEventListener("click", async () => {
+    if (!window.confirm(t("chat.forgetConfirm", { name: d.device_name }))) return;
+    if (await forgetDevice(d.device_id)) {
+      detailOpen = false;
+      if (activeConv === `device:${d.device_id}`) switchConv(MAIN);
+      await loadDevices();
+      renderDetail();
+    }
+  });
 }
 
 function renderMessages(preserve = false): void {
@@ -481,10 +629,10 @@ function renderMessages(preserve = false): void {
   const s = cs(activeConv);
   const prevTop = el.scrollTop;
   if (s.blocks.length === 0) {
-    const emptyHint = activeConv === MAIN ? t("chat.emptyHint") : t("chat.deviceEmptyHint");
+    const emptyHint = activeConv === MAIN ? t("chat.emptyHint") : t("chat.deviceEmptyHint", { name: convLabel(activeConv) });
     el.innerHTML = s.loading
       ? `<div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--muted);gap:9px;min-height:300px;font-size:14px;">${dots}<span>${esc(t("common.loading"))}</span></div>`
-      : `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;"><span style="width:46px;height:46px;border-radius:12px;background:var(--orange);color:#fff;font-weight:700;font-size:24px;display:flex;align-items:center;justify-content:center;opacity:.92;">U</span><span style="font-size:15px;">${esc(emptyHint)}</span></div>`;
+      : `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;">${avatarHtml(activeConv, 46)}<span style="font-size:14px;text-align:center;max-width:280px;line-height:1.5;">${esc(emptyHint)}</span></div>`;
   } else {
     // 每条消息包一层 flex:none，避免纵向 flex 在内容（高图片）超高时压缩重叠。
     el.innerHTML = s.blocks
@@ -501,34 +649,36 @@ function renderMessages(preserve = false): void {
   }
 }
 
-// 根据当前会话是否只读，切换输入区（可发送）/只读提示。
+// 输入区：所有会话都可发送；设备会话的占位符点名该设备，离线时给一行提示。
 function refreshComposer(): void {
   if (!container) return;
   const wrap = container.querySelector("#ucomposer") as HTMLElement | null;
   if (!wrap) return;
-  if (isReadonly(activeConv)) {
-    wrap.innerHTML = `<div style="display:flex;align-items:center;gap:8px;padding:12px 16px;color:var(--muted);font-size:12.5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg><span>${esc(t("chat.deviceConvReadonly"))}</span></div>`;
-    return;
-  }
-  // 可发送：若还不是输入框（从只读切过来），重建输入区并绑定事件。
+  const d = deviceOf(activeConv);
+  const ph = activeConv === MAIN ? t("chat.placeholder") : t("chat.placeholderDevice", { name: convLabel(activeConv) });
   if (!wrap.querySelector("#draft")) {
     wrap.innerHTML = `
+      <div id="uoffline"></div>
       <div style="display:flex;gap:10px;align-items:flex-end;padding:12px 16px;">
-        <textarea id="draft" placeholder="${esc(t("chat.placeholder"))}" rows="2" style="flex:1;resize:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;padding:9px 12px;font-size:13.5px;line-height:1.5;font-family:inherit;outline:none;max-height:120px;"></textarea>
+        <textarea id="draft" rows="2" style="flex:1;resize:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;padding:9px 12px;font-size:13.5px;line-height:1.5;font-family:inherit;outline:none;max-height:120px;"></textarea>
         <button id="sendbtn" style="flex:none;display:flex;align-items:center;gap:6px;padding:9px 16px;height:40px;background:var(--orange);color:#fff;border:none;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;align-self:center;">${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
       </div>`;
     wrap.querySelector("#sendbtn")!.addEventListener("click", send);
     const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
-    ta.value = draftText; // 恢复草稿（切模块/重挂载后不丢）
-    ta.addEventListener("input", () => { draftText = ta.value; });
+    ta.addEventListener("input", () => { drafts[activeConv] = ta.value; });
     ta.addEventListener("keydown", (e) => {
       if (e.isComposing || e.keyCode === 229) return;
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
     });
-  } else {
-    const ta = wrap.querySelector("#draft") as HTMLTextAreaElement | null;
-    if (ta) ta.placeholder = t("chat.placeholder");
   }
+  const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
+  ta.placeholder = ph;
+  if (ta.value !== (drafts[activeConv] || "")) ta.value = drafts[activeConv] || "";
+  const off = wrap.querySelector("#uoffline") as HTMLElement;
+  off.innerHTML =
+    d && !d.online
+      ? `<div style="display:flex;align-items:center;gap:7px;padding:8px 16px 0;font-size:11.5px;color:var(--muted);"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><circle cx="12" cy="12" r="9"></circle></svg><span>${esc(t("chat.deviceOfflineHint"))}</span></div>`
+      : "";
 }
 
 function send(): void {
@@ -539,37 +689,51 @@ function send(): void {
   const text = ta.value.trim();
   if (!text) return;
   ta.value = "";
-  draftText = "";
-  sendText(text);
+  drafts[activeConv] = "";
+  sendTo(activeConv, text);
 }
 
-// 直接发送一段文本到主会话（供快捷入口「发给秘书」调用；不依赖输入框/是否已挂载聊天页）。
-export function sendText(text: string): void {
+// 发送到指定会话（主会话或某台设备）。
+function sendTo(conv: string, text: string): void {
   const t2 = (text || "").trim();
   if (!t2 || clearing) return;
   stick = true;
   forceScroll = true;
-  const s = cs(MAIN);
+  const s = cs(conv);
   const now = Date.now();
   s.blocks.push({ kind: "user", text: t2, ts: now });
   s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
   s.assistantIdx = s.blocks.length - 1;
-  if (!chatConn.sendMessage(t2, operateAutoApprove())) {
+  s.lastText = t2;
+  s.lastAt = now;
+  if (!chatConn.sendMessage(t2, operateAutoApprove(), conv)) {
     s.blocks.push({ kind: "error", text: t("chat.notConnected") });
     s.assistantIdx = null;
   }
-  if (activeConv !== MAIN) switchConv(MAIN);
+  if (activeConv !== conv) switchConv(conv);
   else renderMessages();
+  renderContacts();
+}
+
+// 直接发送一段文本到主会话（供快捷入口「发给秘书」调用；不依赖输入框/是否已挂载聊天页）。
+export function sendText(text: string): void {
+  sendTo(MAIN, text);
 }
 
 function switchConv(id: string): void {
-  if (id === activeConv) return;
+  if (id === activeConv) {
+    renderMessages();
+    return;
+  }
   activeConv = id;
   const s = cs(id);
   s.unread = false;
   stick = true;
   forceScroll = true;
-  renderConvBar();
+  detailOpen = false;
+  renderContacts();
+  renderHeader();
+  renderDetail();
   renderMessages();
   if (!s.loaded) loadConvHistory(id);
 }
@@ -583,6 +747,7 @@ async function clearActiveHistory(): Promise<void> {
   clearing = true;
   resetConv(conv);
   renderMessages();
+  renderContacts();
   try {
     await clearHistory(conv);
   } finally {
@@ -598,46 +763,42 @@ function resetConv(convId: string): void {
   s.doneJobs.clear();
   s.oldestId = null;
   s.hasMore = false;
+  s.lastText = "";
+  s.lastAt = undefined;
   s.loaded = true; // 已清空，无需再拉历史
 }
 
 // 把聊天屏渲染进 container；只在首次写入外壳，事件只刷新消息区（保留输入框焦点）。
 let chatShellEl: HTMLElement | null = null;
 
-function refreshChatShell(el: HTMLElement): void {
-  const h1 = el.querySelector("h1");
-  if (h1) h1.textContent = t("nav.chat");
-  const clearBtn = el.querySelector("#clearhist");
-  if (clearBtn) {
-    clearBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path></svg>${esc(t("chat.clearHistory"))}`;
-  }
-}
-
 export function mount(el: HTMLElement): void {
   container = el;
   ensureStarted();
   if (chatShellEl === el) {
-    refreshChatShell(el);
-    renderConvBar();
+    renderContacts();
+    renderHeader();
+    renderDetail();
     renderMessages();
     return;
   }
   chatShellEl = el;
   el.innerHTML = `
-    <div style="display:flex;flex-direction:column;height:100%;min-height:0;position:relative;">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 22px;border-bottom:1px solid var(--border);flex:none;">
-        <h1 style="margin:0;font-size:16px;font-weight:600;">${esc(t("nav.chat"))}</h1>
-        <button id="clearhist" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path></svg>${esc(t("chat.clearHistory"))}</button>
-      </div>
-      <div id="uconvbar" style="display:none;gap:8px;padding:10px 18px;border-bottom:1px solid var(--border);flex:none;overflow-x:auto;"></div>
-      <div id="umsgs" style="flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:16px;min-height:0;"></div>
-      <div id="ucomposer" style="flex:none;border-top:1px solid var(--border);background:var(--card);"></div>
-      <div id="ulightbox"></div>
+    <div style="display:flex;height:100%;min-height:0;">
+      <aside style="flex:none;width:236px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;background:var(--card);">
+        <div style="padding:14px 16px 10px;font-size:12px;font-weight:600;color:var(--muted);flex:none;">${esc(t("chat.contacts"))}</div>
+        <div id="ucontacts" style="flex:1;overflow-y:auto;padding:0 8px 10px;display:flex;flex-direction:column;gap:2px;min-height:0;"></div>
+      </aside>
+      <section style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;">
+        <div id="uchathead" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 18px;border-bottom:1px solid var(--border);flex:none;"></div>
+        <div id="umsgs" style="flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:16px;min-height:0;"></div>
+        <div id="ucomposer" style="flex:none;border-top:1px solid var(--border);background:var(--card);"></div>
+        <div id="ulightbox"></div>
+      </section>
+      <aside id="udetail" style="display:none;flex:none;width:272px;border-left:1px solid var(--border);overflow-y:auto;background:var(--card);"></aside>
     </div>`;
 
-  el.querySelector("#clearhist")!.addEventListener("click", clearActiveHistory);
-  const barEl = el.querySelector("#uconvbar") as HTMLElement;
-  barEl.addEventListener("click", (e) => {
+  const contactsEl = el.querySelector("#ucontacts") as HTMLElement;
+  contactsEl.addEventListener("click", (e) => {
     const btn = (e.target as HTMLElement).closest("[data-conv]") as HTMLElement | null;
     if (btn && btn.dataset.conv) switchConv(btn.dataset.conv);
   });
@@ -649,38 +810,40 @@ export function mount(el: HTMLElement): void {
     if (msgsEl.scrollTop < 60) loadOlder(); // 滚到顶附近 → 加载更早历史
   });
   forceScroll = true; // 首次挂载滚到底
-  renderConvBar();
+  renderContacts();
+  renderHeader();
+  renderDetail();
   renderMessages();
 }
 
 function onMsgsClick(e: Event): void {
-  const t = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img]") as HTMLElement | null;
-  if (!t) return;
-  if (t.dataset.trace !== undefined) {
-    const b = cs(activeConv).blocks[Number(t.dataset.trace)];
+  const el = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img]") as HTMLElement | null;
+  if (!el) return;
+  if (el.dataset.trace !== undefined) {
+    const b = cs(activeConv).blocks[Number(el.dataset.trace)];
     if (b && b.kind === "assistant") { b.traceOpen = !b.traceOpen; renderMessages(); }
-  } else if (t.dataset.approveAlways) {
+  } else if (el.dataset.approveAlways) {
     // 总是允许：打开「自动批准电脑操作」（设置里同步）+ 批准本次。
     setAutoApproveOperate(true);
-    chatConn.sendConfirm(t.dataset.approveAlways, true);
-    resolveConfirm(t.dataset.approveAlways, true);
+    chatConn.sendConfirm(el.dataset.approveAlways, true);
+    resolveConfirm(el.dataset.approveAlways, true);
     renderMessages();
-  } else if (t.dataset.approve) {
-    chatConn.sendConfirm(t.dataset.approve, true);
-    resolveConfirm(t.dataset.approve, true);
+  } else if (el.dataset.approve) {
+    chatConn.sendConfirm(el.dataset.approve, true);
+    resolveConfirm(el.dataset.approve, true);
     renderMessages();
-  } else if (t.dataset.deny) {
-    chatConn.sendConfirm(t.dataset.deny, false);
-    resolveConfirm(t.dataset.deny, false);
+  } else if (el.dataset.deny) {
+    chatConn.sendConfirm(el.dataset.deny, false);
+    resolveConfirm(el.dataset.deny, false);
     renderMessages();
-  } else if (t.dataset.img) {
-    openLightbox(t.dataset.img);
+  } else if (el.dataset.img) {
+    openLightbox(el.dataset.img);
   }
 }
 
 // 标记某个确认已被处理（所有会话里的 Job 卡片 + 独立确认卡片都更新）。
 function resolveConfirm(taskId: string, approved: boolean): void {
-  for (const id of convOrder) {
+  for (const id of Object.keys(convs)) {
     const s = convs[id];
     if (!s) continue;
     for (const b of s.blocks) {

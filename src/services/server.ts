@@ -113,7 +113,7 @@ export interface DeviceInfo {
   platform?: string;
 }
 
-// 在线设备列表：用于给每个设备恒显示一个会话房间（哪怕还没有交互记录）。
+// 在线设备列表。
 export async function fetchDevices(): Promise<DeviceInfo[]> {
   try {
     const r = await fetch(`${getServerUrl()}/devices`);
@@ -124,13 +124,48 @@ export async function fetchDevices(): Promise<DeviceInfo[]> {
   }
 }
 
-// 聊天设置：是否允许向设备会话发送消息（默认关，设备会话仅查看）。
-const LS_ALLOW_DEVICE_SEND = "umbra.allowDeviceSend";
-export function getAllowDeviceSend(): boolean {
-  return localStorage.getItem(LS_ALLOW_DEVICE_SEND) === "1";
+// 设备能力目录（程序 → 技能），设备详情页用；与 /capabilities 同一形状。
+export interface DeviceSkill {
+  name: string;
+  description?: string;
 }
-export function setAllowDeviceSend(v: boolean): void {
-  localStorage.setItem(LS_ALLOW_DEVICE_SEND, v ? "1" : "0");
+export interface DeviceProvider {
+  provider: string;
+  display_name?: string;
+  kind?: string;
+  available?: boolean;
+  unavailable_reason?: string;
+  version?: string;
+  skills?: DeviceSkill[];
+}
+// 已知设备（含离线）：聊天页的「联系人列表」。
+export interface KnownDevice {
+  device_id: string;
+  device_name: string;
+  platform: string;
+  online: boolean;
+  last_seen?: string | null;
+  providers: DeviceProvider[];
+}
+
+export async function fetchAllDevices(): Promise<KnownDevice[]> {
+  try {
+    const r = await fetch(`${getServerUrl()}/devices/all`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch {
+    return [];
+  }
+}
+
+// 把某台（离线的）设备从联系人列表移除；它下次上线会重新出现。
+export async function forgetDevice(deviceId: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${getServerUrl()}/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+    return r.ok;
+  } catch {
+    return false;
+  }
 }
 
 // 设置：自动批准电脑操作授权（默认关；开启后确认卡自动批准，不再每次询问）。
@@ -386,8 +421,13 @@ class ChatConnection {
     return false;
   }
 
-  sendMessage(content: string, autoApproveOperate = false): boolean {
-    return this.rawSend({ type: "message", content, client_id: getClientId(), auto_approve_operate: autoApproveOperate });
+  // conversation：'assistant' 主会话；'device:<id>' = 在某台设备的聊天窗口里说话
+  //（服务端会把「目标设备=这台」作为上下文，端侧任务直接派给它）。
+  sendMessage(content: string, autoApproveOperate = false, conversation = "assistant"): boolean {
+    return this.rawSend({
+      type: "message", content, client_id: getClientId(),
+      auto_approve_operate: autoApproveOperate, conversation,
+    });
   }
 
   sendConfirm(taskId: string, approved: boolean): boolean {

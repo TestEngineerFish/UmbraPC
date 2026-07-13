@@ -2,7 +2,7 @@
 // 业务逻辑复用 server.ts / desktop.ts 与 main.ts 导出的处理器。
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { chatConn, getServerUrl, getDeviceName, getAllowDeviceSend, setAllowDeviceSend, getAutoApproveOperate, setAutoApproveOperate } from "../../services/server";
+import { chatConn, getServerUrl, getDeviceName, getAutoApproveOperate, setAutoApproveOperate } from "../../services/server";
 import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/locale";
@@ -58,7 +58,6 @@ export function Settings() {
   const [device, setDevice] = useState(getDeviceName());
   const [glmKey, setGlmKey] = useState("");
   const [clipAutoPaste, setClipAutoPaste] = useState(false);
-  const [allowDeviceSend, setAllowDeviceSendState] = useState(getAllowDeviceSend());
   const [autoApprove, setAutoApproveState] = useState(getAutoApproveOperate());
   const [skillPolicy, setSkillPolicy] = useState<Record<string, "allow" | "deny">>(
     desktop.getDesktopConfig()?.computerSkillPolicy || {},
@@ -151,20 +150,6 @@ export function Settings() {
         ) : null}
 
         <Card title={t("nav.chat")}>
-          <div className="flex items-center gap-3 py-1">
-            <div className="flex-1">
-              <div className="text-[13.5px]">{t("chat.allowDeviceSend")}</div>
-              <div className="text-[11.5px] text-muted mt-px">{t("chat.allowDeviceSendHint")}</div>
-            </div>
-            <Toggle
-              on={allowDeviceSend}
-              onClick={() => {
-                const next = !allowDeviceSend;
-                setAllowDeviceSend(next);
-                setAllowDeviceSendState(next);
-              }}
-            />
-          </div>
           <div className="flex items-center gap-3 py-1">
             <div className="flex-1">
               <div className="text-[13.5px]">{t("settings.autoApproveOperate")}</div>

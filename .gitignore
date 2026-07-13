@@ -5,3 +5,7 @@ release/
 .DS_Store
 *.log
 .vite/
+
+# 含真实账号密码，永不入库
+doc/umbra-导入模板.csv
+doc/*.csv
