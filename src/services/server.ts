@@ -185,6 +185,10 @@ export interface Job {
   channel?: string | null;
   created_at?: string;
   updated_at?: string;
+  // 代理任务（可追问的长任务）：kind='agent'；agent_state=working/idle/suspended/closed。
+  // idle = 干完一轮、**等你确认**（改还是收工）——这才是它真实的状态，不是「执行中」。
+  kind?: string;
+  agent_state?: string | null;
 }
 export interface Subtask {
   id: string;

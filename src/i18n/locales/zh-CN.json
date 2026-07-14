@@ -202,7 +202,8 @@
     "confirmDeleteBtn": "确认删除",
     "deleteEmpty": "请先选择要删除的任务",
     "copyDetail": "复制详情",
-    "copied": "已复制"
+    "copied": "已复制",
+    "statusAwaitingReview": "待确认"
   },
   "inspiration": {
     "title": "灵感",
@@ -327,7 +328,8 @@
     "forgetDevice": "从联系人列表移除",
     "forgetConfirm": "把「{{name}}」从联系人列表移除？（它下次上线会重新出现，聊天记录不会删除）",
     "placeholderDevice": "对「{{name}}」说点什么，Enter 发送",
-    "deviceOfflineHint": "这台设备当前离线，端侧任务无法执行"
+    "deviceOfflineHint": "这台设备当前离线，端侧任务无法执行",
+    "awaitingReview": "待确认"
   },
   "clipboard": {
     "searchPh": "搜索剪贴板…",

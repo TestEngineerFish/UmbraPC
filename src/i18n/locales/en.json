@@ -202,7 +202,8 @@
     "confirmDeleteBtn": "Delete",
     "deleteEmpty": "Select tasks to delete first",
     "copyDetail": "Copy details",
-    "copied": "Copied"
+    "copied": "Copied",
+    "statusAwaitingReview": "Awaiting review"
   },
   "inspiration": {
     "title": "Ideas",
@@ -327,7 +328,8 @@
     "forgetDevice": "Remove from contacts",
     "forgetConfirm": "Remove \"{{name}}\" from contacts? (It will reappear next time it comes online; chat history is kept.)",
     "placeholderDevice": "Message {{name}} — Enter to send",
-    "deviceOfflineHint": "This device is offline; on-device tasks can't run"
+    "deviceOfflineHint": "This device is offline; on-device tasks can't run",
+    "awaitingReview": "Awaiting review"
   },
   "clipboard": {
     "searchPh": "Search clipboard…",

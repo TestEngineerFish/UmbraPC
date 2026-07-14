@@ -22,6 +22,7 @@ function stepShot(s: Subtask): string | null {
 
 type Kind = "ok" | "run" | "wait" | "fail" | "off";
 const STATUS_KEYS: Record<string, [string, Kind]> = {
+  awaiting_review: ["tasks.statusAwaitingReview", "wait"],
   done: ["tasks.statusDone", "ok"],
   running: ["tasks.statusRunning", "run"],
   pending: ["tasks.statusPending", "wait"],
@@ -40,6 +41,12 @@ function Badge({ status }: { status: string }) {
   const { t } = useTranslation();
   const [key, kind] = STATUS_KEYS[status] || [status, "wait"];
   return <span className={`px-[10px] py-[2px] rounded-full text-[11px] font-semibold shrink-0 ${KIND_CLS[kind]}`}>{t(key)}</span>;
+}
+
+// 代理任务干完一轮会停在 idle —— 对用户来说那不是「执行中」，是**待确认**。
+function displayStatus(job: { status: string; kind?: string; agent_state?: string | null }): string {
+  if (job.kind === "agent" && job.agent_state === "idle" && job.status === "running") return "awaiting_review";
+  return job.status;
 }
 
 function isImg(u: string) {
@@ -182,7 +189,7 @@ function TaskRow({
           <div className="font-medium truncate">{job.goal}</div>
           <div className={`text-[11.5px] mt-0.5 truncate ${failed ? "text-danger" : "text-muted"}`}>{sub || " "}</div>
         </div>
-        <Badge status={job.status} />
+        <Badge status={displayStatus(job)} />
         <span title={job.updated_at || ""} className="text-[12px] text-muted whitespace-nowrap shrink-0">
           {legacy.fmtListTime(job.updated_at)}
         </span>
@@ -242,7 +249,7 @@ function DrawerBody({ d, onClose }: { d: JobDetail; onClose: () => void }) {
         <div className="min-w-0">
           <div className="font-semibold text-[15px]">{d.job.goal}</div>
           <div className="mt-[5px]">
-            <Badge status={d.job.status} />
+            <Badge status={displayStatus(d.job)} />
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">

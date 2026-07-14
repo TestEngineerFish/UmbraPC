@@ -26,7 +26,7 @@ type Block =
   | { kind: "user"; text: string; ts?: string | number }
   | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number }
   | { kind: "device"; text: string; ts?: string | number }
-  | { kind: "job"; jobId: string; goal: string; pct: number; status: string; message: string; confirmTaskId?: string; confirmScope?: string; results?: { title: string; url: string }[] }
+  | { kind: "job"; jobId: string; goal: string; pct: number; status: string; message: string; agentState?: string; confirmTaskId?: string; confirmScope?: string; results?: { title: string; url: string }[] }
   | { kind: "done"; goal: string; results: { title: string; url: string }[] }
   | { kind: "confirm"; taskId: string; summary: string; detail?: unknown; scope?: string; resolved?: "approved" | "denied" }
   | { kind: "error"; text: string };
@@ -375,6 +375,7 @@ function handleJob(msg: any): string {
   b.pct = pct;
   b.status = msg.status || b.status;
   b.message = msg.message || b.message;
+  if (msg.agent_state) b.agentState = msg.agent_state;
   if (msg.goal) b.goal = msg.goal;
   b.confirmTaskId = msg.event === "confirm" && msg.needs_confirm ? msg.confirm_task_id : undefined;
   b.confirmScope = msg.scope;
@@ -442,12 +443,18 @@ function blockHtml(b: Block, i: number): string {
   }
 
   if (b.kind === "job") {
+    // 代理任务干完一轮会停在 idle —— 那不是「90%」，那是**待确认**（等你说改还是收工）。
+    const awaiting = b.agentState === "idle" && b.status !== "done" && b.status !== "failed";
     const color = b.status === "done" ? "var(--success)" : b.status === "failed" ? "var(--danger)" : "var(--orange)";
     const confirm = b.confirmTaskId ? confirmButtons(b.confirmTaskId, b.confirmScope) : "";
+    const tag = awaiting
+      ? `<span style="font-size:11.5px;color:var(--orange-text);font-weight:600;background:var(--orange-soft);border:1px solid var(--orange);border-radius:999px;padding:1px 8px;">${esc(t("chat.awaitingReview"))}</span>`
+      : `<span style="font-size:12px;color:var(--orange-text);font-weight:600;">${b.pct}%</span>`;
+    // 长摘要（agent 的输出动辄几百字）限高可滚，别撑破卡片。
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-left:3px solid ${color};border-radius:10px;padding:13px 15px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;"><span style="font-weight:600;">${esc(b.goal)}</span><span style="font-size:12px;color:var(--orange-text);font-weight:600;">${b.pct}%</span></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px;"><span style="font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(b.goal)}</span>${tag}</div>
         <div style="height:6px;border-radius:999px;background:var(--track);overflow:hidden;margin-bottom:8px;"><div style="height:100%;width:${b.pct}%;background:${color};border-radius:999px;"></div></div>
-        <div style="font-size:12.5px;color:var(--muted);display:flex;align-items:center;gap:6px;"><span style="width:6px;height:6px;border-radius:999px;background:${color};"></span>${esc(b.message)}</div>
+        <div style="font-size:12.5px;color:var(--muted);display:flex;align-items:flex-start;gap:6px;max-height:150px;overflow-y:auto;"><span style="flex:none;width:6px;height:6px;border-radius:999px;background:${color};margin-top:6px;"></span><span style="flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;">${esc(b.message)}</span></div>
         ${confirm}
       </div>`;
   }

@@ -284,6 +284,35 @@ async function capture(cfg: UmbraConfig): Promise<unknown> {
   return up;
 }
 
+// 用系统默认程序打开文件/目录/网址（macOS: open / Windows: start / Linux: xdg-open）。
+// 不经 shell（spawn argv），避免命令注入；网址只放行 http(s)。
+async function openPath(params: Record<string, any>): Promise<unknown> {
+  const raw = String(params.path || params.target || "").trim();
+  if (!raw) throw new Error("缺少 path（要打开的文件/目录/网址）");
+
+  const isUrl = /^https?:\/\//i.test(raw);
+  if (!isUrl && /^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    throw new Error(`只允许打开本地路径或 http(s) 网址：${raw}`);
+  }
+  const target = isUrl ? raw : expand(raw);
+  if (!isUrl) {
+    try {
+      await fs.access(target);
+    } catch {
+      throw new Error(`路径不存在：${target}`);
+    }
+  }
+
+  const plat = process.platform;
+  const cmd = plat === "darwin" ? "open" : plat === "win32" ? "cmd" : "xdg-open";
+  const args = plat === "win32" ? ["/c", "start", "", target] : [target];
+  const res = await run(cmd, args, { timeoutMs: 15_000 });
+  if (res.code !== 0 && res.code !== null) {
+    throw new Error(`打开失败（exit=${res.code}）：${res.output.slice(-200)}`);
+  }
+  return { opened: target, kind: isUrl ? "url" : "path" };
+}
+
 const FS_SKILLS: Manifest["skills"] = {
   find_file: { description: "在某目录下递归查找匹配文件", params: { path: "起始目录，如 ~/Desktop", pattern: "通配符，如 *.pdf" } },
   read_file: { description: "读取文本文件内容", params: { path: "文件路径", max_bytes: "可选，最多读取字节数" } },
@@ -295,6 +324,11 @@ const SHOT_SKILLS: Manifest["skills"] = {
   ocr_screen: { description: "截屏 + 带坐标 OCR：返回图片链接与每段文字的归一化中心坐标，用于精确定位", params: {} },
 };
 const APP_SKILLS: Manifest["skills"] = {
+  // 打开文件/目录/网址：一条命令的事，别让 GUI agent 去 Finder 里翻箱倒柜找图标双击。
+  open_path: {
+    description: "用系统默认方式打开文件/目录/网址（等价于双击；比 GUI 操作可靠得多，优先用它）",
+    params: { path: "文件或目录的绝对路径，或 http(s) 网址" },
+  },
   app_exists: { description: "检查某个应用是否已安装（返回 exists 与匹配路径）", params: { app: "应用名，如 Claude" } },
   frontmost_app: { description: "返回当前前台应用名（{app}），用于判断某应用是否已在前台/初始化就绪", params: {} },
   ax_dump: { description: "导出某应用前台窗口的界面元素结构(Accessibility)，含输入框与按钮列表，用于判断能否精确操作", params: { app: "应用名，如 Claude", max_depth: "可选，遍历深度(默认10)" } },
@@ -314,6 +348,7 @@ export function registerSystem(r: Registry, cfg: UmbraConfig): void {
   r.register(manifest, async (skill, params) => {
     if (skill === "capture") return capture(cfg);
     if (skill === "ocr_screen") return ocrScreen(cfg);
+    if (skill === "open_path") return openPath(params);
     if (skill === "app_exists") return appExists(params);
     if (skill === "frontmost_app") return frontmostApp();
     if (skill === "ax_dump") return axDump(params);
