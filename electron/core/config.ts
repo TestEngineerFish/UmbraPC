@@ -17,6 +17,10 @@ export interface UmbraConfig {
   codingBaseDir: string;     // 代码产物根目录
   codingTimeout: number;     // 秒
   codingAllowExec: AllowExec;
+  // ── 代理任务（Agent Task）──
+  workspacesDir: string;     // 工作区根目录（长期存在，Job 只是对它的一次委托）
+  agentTurnTimeout: number;  // 单轮超时（秒）：写代码/装依赖可能很久
+  agentIdleCloseMin: number; // 会话空闲多少分钟后收敛（防陈旧上下文污染注意力；0=不收敛）
   confirmTimeout: number;    // 秒
   providersFile: string;     // providers.json 路径
   // ── computer-use（GUI 自动化，高权限，默认关）──
@@ -132,6 +136,9 @@ function defaults(configDir: string): UmbraConfig {
     codingBaseDir: process.env.UMBRA_CODING_BASE_DIR || "~/Umbra/projects",
     codingTimeout: Number(process.env.UMBRA_CODING_TIMEOUT || 600),
     codingAllowExec: (process.env.UMBRA_CODING_ALLOW_EXEC || "confirm").toLowerCase() as AllowExec,
+    workspacesDir: process.env.UMBRA_WORKSPACES_DIR || "~/UmbraWorks",
+    agentTurnTimeout: Number(process.env.UMBRA_AGENT_TURN_TIMEOUT || 3000),
+    agentIdleCloseMin: Number(process.env.UMBRA_AGENT_IDLE_CLOSE_MIN || 30),
     confirmTimeout: Number(process.env.UMBRA_CONFIRM_TIMEOUT || 300),
     providersFile: process.env.UMBRA_PROVIDERS_FILE || path.join(configDir, "providers.json"),
     computerUseEnabled: envBool("UMBRA_COMPUTER_USE", false),

@@ -26,9 +26,9 @@ type Block =
   | { kind: "user"; text: string; ts?: string | number }
   | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number }
   | { kind: "device"; text: string; ts?: string | number }
-  | { kind: "job"; jobId: string; goal: string; pct: number; status: string; message: string; confirmTaskId?: string; results?: { title: string; url: string }[] }
+  | { kind: "job"; jobId: string; goal: string; pct: number; status: string; message: string; confirmTaskId?: string; confirmScope?: string; results?: { title: string; url: string }[] }
   | { kind: "done"; goal: string; results: { title: string; url: string }[] }
-  | { kind: "confirm"; taskId: string; summary: string; detail?: unknown; resolved?: "approved" | "denied" }
+  | { kind: "confirm"; taskId: string; summary: string; detail?: unknown; scope?: string; resolved?: "approved" | "denied" }
   | { kind: "error"; text: string };
 
 // 每个会话的独立状态。
@@ -238,8 +238,10 @@ function operateAutoApprove(): boolean {
   return ["open_app", "click", "type", "key"].every((k) => pol[k] === "allow");
 }
 // 满足自动批准条件时，收到确认请求就自动批准，不再每次询问。
-function autoApproveIfEnabled(taskId: string | undefined): void {
-  if (!taskId || autoApproved.has(taskId) || !operateAutoApprove()) return;
+// 注意：「总是允许」只对**电脑操作(operate)**生效。代理任务(scope=agent)的执行模式授权
+// 必须你亲自点——否则一个为了少弹窗打开的开关，会顺手放开所有任务的跑命令/装依赖权限。
+function autoApproveIfEnabled(taskId: string | undefined, scope?: string): void {
+  if (!taskId || autoApproved.has(taskId) || scope === "agent" || !operateAutoApprove()) return;
   autoApproved.add(taskId);
   chatConn.sendConfirm(taskId, true);
   resolveConfirm(taskId, true);
@@ -304,9 +306,9 @@ function onMessage(msg: any): void {
       if (msg.task_id) {
         const s = cs(target);
         if (!s.blocks.some((b) => b.kind === "confirm" && b.taskId === msg.task_id)) {
-          s.blocks.push({ kind: "confirm", taskId: msg.task_id, summary: msg.summary || t("chat.needConfirm"), detail: msg.detail });
+          s.blocks.push({ kind: "confirm", taskId: msg.task_id, summary: msg.summary || t("chat.needConfirm"), detail: msg.detail, scope: msg.scope });
         }
-        autoApproveIfEnabled(msg.task_id);
+        autoApproveIfEnabled(msg.task_id, msg.scope);
       }
       break;
     case "confirm_resolved":
@@ -375,7 +377,8 @@ function handleJob(msg: any): string {
   b.message = msg.message || b.message;
   if (msg.goal) b.goal = msg.goal;
   b.confirmTaskId = msg.event === "confirm" && msg.needs_confirm ? msg.confirm_task_id : undefined;
-  if (b.confirmTaskId) autoApproveIfEnabled(b.confirmTaskId);
+  b.confirmScope = msg.scope;
+  if (b.confirmTaskId) autoApproveIfEnabled(b.confirmTaskId, b.confirmScope);
   if (msg.results) b.results = msg.results;
   if (msg.status === "done" && !s.doneJobs.has(id)) {
     s.doneJobs.add(id);
@@ -405,11 +408,15 @@ const timeLine = (ts: string | number | undefined, align: "flex-start" | "flex-e
 };
 
 // 授权卡按钮：批准 / 总是允许 / 拒绝。「总是允许」= 打开自动批准 + 批准本次。
-function confirmButtons(taskId: string): string {
+function confirmButtons(taskId: string, scope?: string): string {
   const tid = esc(taskId);
+  // scope=agent：授权只在这个任务内有效（端侧只问一次），因此不提供「总是允许(全局)」。
+  const always = scope === "agent"
+    ? ""
+    : `<button data-approve-always="${tid}" style="padding:7px 15px;background:var(--orange-soft);color:var(--orange-text);border:1px solid var(--orange);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approveAlways"))}</button>`;
   return `<div style="display:flex;gap:9px;margin-top:11px;flex-wrap:wrap;">`
     + `<button data-approve="${tid}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approve"))}</button>`
-    + `<button data-approve-always="${tid}" style="padding:7px 15px;background:var(--orange-soft);color:var(--orange-text);border:1px solid var(--orange);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approveAlways"))}</button>`
+    + always
     + `<button data-deny="${tid}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.reject"))}</button>`
     + `</div>`;
 }
@@ -436,7 +443,7 @@ function blockHtml(b: Block, i: number): string {
 
   if (b.kind === "job") {
     const color = b.status === "done" ? "var(--success)" : b.status === "failed" ? "var(--danger)" : "var(--orange)";
-    const confirm = b.confirmTaskId ? confirmButtons(b.confirmTaskId) : "";
+    const confirm = b.confirmTaskId ? confirmButtons(b.confirmTaskId, b.confirmScope) : "";
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-left:3px solid ${color};border-radius:10px;padding:13px 15px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;"><span style="font-weight:600;">${esc(b.goal)}</span><span style="font-size:12px;color:var(--orange-text);font-weight:600;">${b.pct}%</span></div>
         <div style="height:6px;border-radius:999px;background:var(--track);overflow:hidden;margin-bottom:8px;"><div style="height:100%;width:${b.pct}%;background:${color};border-radius:999px;"></div></div>
@@ -459,7 +466,7 @@ function blockHtml(b: Block, i: number): string {
     const detail = b.detail != null ? (typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail)) : "";
     const foot = b.resolved
       ? `<div style="font-size:12.5px;font-weight:600;margin-top:9px;color:${b.resolved === "approved" ? "var(--success)" : "var(--danger)"};">${b.resolved === "approved" ? `✅ ${esc(t("chat.approved"))}` : `🚫 ${esc(t("chat.denied"))}`}</div>`
-      : confirmButtons(b.taskId);
+      : confirmButtons(b.taskId, b.scope);
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--orange-soft);border:1px solid var(--orange);border-radius:10px;padding:13px 15px;">
         <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>${esc(t("chat.needConfirm"))}</div>
         <div style="font-size:13px;line-height:1.55;color:var(--text);">${esc(b.summary)}</div>

@@ -3,6 +3,7 @@ import { UmbraConfig } from "../config";
 import { Registry } from "./registry";
 import { registerSystem } from "./system";
 import { registerCoding } from "./coding";
+import { registerAgent } from "./agent";
 import { registerConfigProviders } from "./config-providers";
 import { registerComputer } from "../computer";
 
@@ -11,6 +12,7 @@ export async function buildRegistry(cfg: UmbraConfig): Promise<Registry> {
   const r = new Registry();
   registerSystem(r, cfg);
   registerCoding(r, cfg);
+  registerAgent(r, cfg); // 代理任务：可追问的长任务（服务端只拿 job_id 说话）
   registerComputer(r, cfg);
   await registerConfigProviders(r, cfg);
   // 用户在能力页手动停用的程序：标记为不可用（仍上报以便在页面上看到并可重新开启）。
