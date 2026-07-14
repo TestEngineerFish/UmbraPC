@@ -252,6 +252,17 @@ function registerIpc(): void {
     await shell.openPath(file);
     return file;
   });
+  // 日志页「打开日志文件夹」：日志本来只存在内存里（没有文件夹可开，所以点了没反应）。
+  // 现在把当前日志落成一个文件再打开目录 —— 这样这个按钮才真的有用（可以直接发给我看）。
+  ipcMain.handle("umbra:openLogsFolder", async (_e, lines: string[]) => {
+    const dir = path.join(app.getPath("userData"), "logs");
+    await fs.mkdir(dir, { recursive: true });
+    const file = path.join(dir, "umbra-device.log");
+    await fs.writeFile(file, (lines || []).join("\n") + "\n", "utf-8");
+    shell.showItemInFolder(file); // 打开目录并选中该文件
+    return file;
+  });
+
   // 能力页：启用/停用某程序（写 disabledProviders）。
   ipcMain.handle("umbra:setDisabled", async (_e, list: string[]) => {
     await store.save({ disabledProviders: Array.isArray(list) ? list : [] });

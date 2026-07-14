@@ -46,6 +46,7 @@ interface UmbraBridge {
   pauseShortcuts(): Promise<void>;
   resumeShortcuts(): Promise<void>;
   openProvidersFile(): Promise<string>;
+  openLogsFolder(lines: string[]): Promise<string>;
   setDisabled(list: string[]): Promise<PublicConfig>;
   getProvidersConfig(): Promise<CustomProviderCfg[]>;
   saveProvidersConfig(providers: CustomProviderCfg[]): Promise<boolean>;
@@ -124,6 +125,11 @@ export function resumeShortcuts(): void {
 }
 
 // 打开 providers.json 供用户编辑（系统默认编辑器）。
+// 把当前设备日志导出成文件并在访达里选中（日志本身只存在内存里）。
+export function openLogsFolder(): void {
+  if (isDesktop()) window.umbra!.openLogsFolder(transport.getLogs());
+}
+
 export function openProvidersFile(): void {
   if (isDesktop()) window.umbra!.openProvidersFile();
 }

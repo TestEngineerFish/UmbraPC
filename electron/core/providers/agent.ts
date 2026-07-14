@@ -14,7 +14,7 @@
 //      被反复 --continue 喂回去，污染模型注意力。
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { run } from "../shared/util";
+import { killTree, run } from "../shared/util";
 import { UmbraConfig } from "../config";
 import { Confirm, Manifest, Registry, Report } from "./registry";
 import { availableEngines, enginePath, pickEngine, safeProjectDir } from "./coding";
@@ -78,10 +78,20 @@ const VERIFY_HINT =
   "\n\n完成后，如果这个项目存在可自动验证「没写坏」的命令（如 npm run build / pytest），" +
   "请在输出的最后单独一行写：VERIFY: <命令>；没有就写 VERIFY: none。";
 
+// 你是被一个自动化流程调起来的，不是坐在终端前跟人对话：
+// 绝不能起任何**不会自己退出**的进程（dev server / watch / tail -f），否则这一轮永远不结束。
+// 上一版就是栽在这儿：claude 写完游戏后好心起了个 http.server 给用户预览，
+// 那个服务器攥着 stdout 管道不放，任务就永远停在「执行中」。
+const NO_DAEMON_GUARD =
+  "\n\n执行环境约束（重要）：你是被自动化流程以非交互方式调起的。" +
+  "**不要启动任何长驻进程**——不要起开发服务器（http.server / npm run dev / serve / vite / watch 模式），" +
+  "不要 tail -f，不要跑任何不会自己退出的命令，也不要打开浏览器。" +
+  "需要预览时，只把文件写好即可，用户会自己打开。所有命令都必须能在几秒内自行结束。";
+
 function buildPrompt(body: string, execMode: boolean, spec: string | null): string {
   const specPart = spec ? `\n\n【需求文档（验收以它为准）】\n${spec}` : "";
   const guard = execMode
-    ? ""
+    ? NO_DAEMON_GUARD
     : "\n\n严格约束：只在当前目录创建或修改文件来完成需求；不要运行任何命令、不要联网、不要安装依赖。";
   return `${body}${specPart}${guard}${VERIFY_HINT}`;
 }
@@ -225,6 +235,7 @@ async function runTurn(
     cwd: s.workspaceDir, // ← 目录就是这么"交给"agent 的：它在这里启动，天然在这里干活
     timeoutMs: cfg.agentTurnTimeout * 1000,
     env: { PATH: enginePath() },
+    detached: true, // 独立进程组：万一它还是拉起了后台服务，收工/超时时能整组带走
     onSpawn: (child) => {
       s.child = child; // 记住它：收工或退出时要杀掉，别留孤儿进程
     },
@@ -390,12 +401,8 @@ async function agentStop(params: Record<string, unknown>): Promise<unknown> {
 function killChild(s: AgentSession): void {
   const c = s.child;
   s.child = undefined;
-  if (!c || c.killed) return;
-  try {
-    c.kill("SIGKILL");
-  } catch {
-    /* ignore */
-  }
+  if (!c) return;
+  killTree(c); // 整个进程组：把它可能拉起的 dev server 一并带走，否则会一直占着端口
 }
 
 // 客户端退出时把所有还在跑的引擎进程带走（Electron 关闭不会自动杀子进程）。

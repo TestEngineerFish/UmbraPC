@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld("umbra", {
   resumeShortcuts: () => ipcRenderer.invoke("umbra:resumeShortcuts"),
   // 打开 providers.json 供编辑
   openProvidersFile: () => ipcRenderer.invoke("umbra:openProvidersFile"),
+  openLogsFolder: (lines: string[]) => ipcRenderer.invoke("umbra:openLogsFolder", lines),
   // 能力页：启用/停用程序 + 自定义程序读写
   setDisabled: (list: string[]) => ipcRenderer.invoke("umbra:setDisabled", list),
   getProvidersConfig: () => ipcRenderer.invoke("umbra:getProvidersConfig"),
