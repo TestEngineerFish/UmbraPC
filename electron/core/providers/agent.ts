@@ -13,12 +13,11 @@
 //   4. 会话空闲太久就收敛，之后重开会话续做——防止陈旧上下文（失败命令、调试噪音）
 //      被反复 --continue 喂回去，污染模型注意力。
 import { promises as fs } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { run } from "../shared/util";
 import { UmbraConfig } from "../config";
 import { Confirm, Manifest, Registry, Report } from "./registry";
-import { availableEngines, pickEngine, safeProjectDir } from "./coding";
+import { availableEngines, enginePath, pickEngine, safeProjectDir } from "./coding";
 
 const ENGINE_BIN: Record<string, string> = { claude: "claude", codex: "codex" };
 
@@ -32,20 +31,38 @@ interface AgentSession {
   execAllowed: boolean | null; // 本 job 的执行模式授权：null=还没问过
   lastActiveAt: number;
   closed: boolean;
+  child?: import("node:child_process").ChildProcess; // 正在跑的引擎进程（收工/退出时要杀掉）
 }
 
 const sessions = new Map<string, AgentSession>(); // job_id → session
-// 同一工作区串行执行的队列尾（Promise 链）。
+// 同一工作区串行执行的队列尾（Promise 链）+ 是否有在跑的一轮（用于「排队中」提示）。
 const workspaceQueue = new Map<string, Promise<unknown>>();
+const workspaceBusy = new Set<string>();
 
-function enqueue<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const prev = workspaceQueue.get(key) || Promise.resolve();
-  const next = prev.then(fn, fn);
-  workspaceQueue.set(
-    key,
-    next.catch(() => undefined),
-  );
-  return next;
+// 同一工作区串行。关键：**绝不无限期地静默等待前一轮**——
+// 上一轮如果因为任何原因永远不结束（比如一个等交互授权的僵尸 claude），
+// 新任务会一声不吭地卡在队列里，服务端只看到 dispatched，什么事件都没有。
+// 所以排队要可见，而且有上限：超过就如实报错，让任务失败得明明白白。
+async function enqueue<T>(key: string, waitMs: number, report: Report, fn: () => Promise<T>): Promise<T> {
+  const prev = workspaceQueue.get(key);
+  if (prev && workspaceBusy.has(key)) {
+    await report(`同一工作区上一轮还在跑，排队等待…（最多 ${Math.round(waitMs / 1000)}s）`, { progress: 0.05 });
+    const timeout = new Promise<never>((_, rej) =>
+      setTimeout(() => rej(new Error(`等待同一工作区的上一轮超过 ${Math.round(waitMs / 1000)}s，已放弃排队。`
+        + `可能上一轮卡死了——可以在任务页把它收工，或重启 Umbra 客户端。`)), waitMs),
+    );
+    await Promise.race([prev.catch(() => undefined), timeout]);
+  }
+  workspaceBusy.add(key);
+  const task = (async () => {
+    try {
+      return await fn();
+    } finally {
+      workspaceBusy.delete(key);
+    }
+  })();
+  workspaceQueue.set(key, task.catch(() => undefined));
+  return task;
 }
 
 // ── 工作区 ──────────────────────────────────────────────────────────────────
@@ -94,19 +111,6 @@ function buildArgs(engine: string, prompt: string, execMode: boolean, resume: bo
   return { bin, args: [...extra, prompt] };
 }
 
-// GUI 启动的 Electron 拿不到登录 shell 的 PATH（只有 /usr/bin:/bin:…），
-// 而 claude/codex 常装在 homebrew / npm-global / bun 下——补齐，免得子进程自己找不到 node。
-function enrichedPath(): string {
-  const home = os.homedir();
-  const extra = [
-    "/opt/homebrew/bin", "/usr/local/bin",
-    path.join(home, ".local/bin"), path.join(home, ".bun/bin"),
-    path.join(home, ".npm-global/bin"), path.join(home, ".volta/bin"),
-    "/usr/bin", "/bin", "/usr/sbin", "/sbin",
-  ];
-  const cur = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
-  return [...new Set([...cur, ...extra])].join(path.delimiter);
-}
 
 // ── 产物快照（变更清单）─────────────────────────────────────────────────────
 type Snap = Map<string, string>;
@@ -220,7 +224,10 @@ async function runTurn(
   const res = await run(bin, args, {
     cwd: s.workspaceDir, // ← 目录就是这么"交给"agent 的：它在这里启动，天然在这里干活
     timeoutMs: cfg.agentTurnTimeout * 1000,
-    env: { PATH: enrichedPath() },
+    env: { PATH: enginePath() },
+    onSpawn: (child) => {
+      s.child = child; // 记住它：收工或退出时要杀掉，别留孤儿进程
+    },
     onLine: (line) => {
       // 如实上报 agent 的真实动静（不是 PC 编出来的步骤）
       sawOutput = true;
@@ -232,6 +239,7 @@ async function runTurn(
     },
   });
   clearInterval(beat);
+  s.child = undefined;
 
   const after = await snapshot(s.workspaceDir);
   const changed = diffSnapshots(before, after);
@@ -314,8 +322,12 @@ async function agentStart(
   sessions.set(jobId, s);
   reapIdle(cfg);
 
+  // 先报一声「已受理」——排队/授权都可能让第一条实质进度迟迟不来，
+  // 服务端时间线上必须先有一条，否则「没收到任务」和「收到但卡住」长得一模一样。
+  await report(`已受理：${engine} @ ${workspaceDir}`, { progress: 0.05 });
+
   // 同一工作区串行（并行写同一目录必然打架）
-  return enqueue(workspaceDir, () =>
+  return enqueue(workspaceDir, cfg.agentTurnTimeout * 1000, report, () =>
     runTurn(s, goal, params.spec_path ? String(params.spec_path) : undefined, cfg, report, confirm),
   );
 }
@@ -356,7 +368,8 @@ async function agentContinue(
     ? message
     : `接着这个目录里已有的工作继续（先看一眼现有文件了解上下文）：\n\n${message}`;
 
-  return enqueue(session.workspaceDir, () =>
+  await report(`已受理追问：${session.engine} @ ${session.workspaceDir}`, { progress: 0.05 });
+  return enqueue(session.workspaceDir, cfg.agentTurnTimeout * 1000, report, () =>
     runTurn(session, body, params.spec_path ? String(params.spec_path) : undefined, cfg, report, confirm),
   );
 }
@@ -369,8 +382,25 @@ async function agentStop(params: Record<string, unknown>): Promise<unknown> {
     s.hasEngineSession = false;
     s.execAllowed = null; // 本任务的授权随任务一起作废（不泄漏到别的任务）
     s.lastActiveAt = Date.now();
+    killChild(s); // 还在跑就杀掉——否则会留下孤儿进程，把这个工作区的队列永久堵死
   }
   return { job_id: jobId, agent_state: "closed" };
+}
+
+function killChild(s: AgentSession): void {
+  const c = s.child;
+  s.child = undefined;
+  if (!c || c.killed) return;
+  try {
+    c.kill("SIGKILL");
+  } catch {
+    /* ignore */
+  }
+}
+
+// 客户端退出时把所有还在跑的引擎进程带走（Electron 关闭不会自动杀子进程）。
+export function killAllAgentChildren(): void {
+  for (const s of sessions.values()) killChild(s);
 }
 
 // ── 注册 ────────────────────────────────────────────────────────────────────

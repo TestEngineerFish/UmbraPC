@@ -14,6 +14,7 @@ import { ScreenshotManager } from "./core/screenshot";
 import { LauncherManager } from "./core/launcher";
 import { VaultManager } from "./core/vault";
 import { getMainLocale, resolveLocale, setMainLocale } from "./i18n";
+import { killAllAgentChildren } from "./core/providers/agent";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
 
@@ -334,6 +335,9 @@ app.on("before-quit", () => {
 
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
+  // 带走还在跑的引擎进程（claude/codex）：否则会留下孤儿进程，
+  // 下次同一工作区的任务会被永久堵在队列里。
+  killAllAgentChildren();
 });
 
 app.on("window-all-closed", () => {

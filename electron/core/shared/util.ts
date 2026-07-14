@@ -1,11 +1,11 @@
 // 小工具：which 探测命令是否安装；run 跑子进程并捕获输出（带超时与逐行回调）。
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { accessSync, constants } from "node:fs";
 import * as path from "node:path";
 
 // 在 PATH 中查找可执行文件，返回绝对路径或 null（对齐 Python shutil.which）。
-export function which(cmd: string): string | null {
-  const dirs = (process.env.PATH || "").split(path.delimiter);
+export function which(cmd: string, pathStr?: string): string | null {
+  const dirs = (pathStr || process.env.PATH || "").split(path.delimiter);
   const exts = process.platform === "win32" ? (process.env.PATHEXT || ".EXE;.CMD;.BAT").split(";") : [""];
   for (const dir of dirs) {
     if (!dir) continue;
@@ -33,6 +33,9 @@ export interface RunOpts {
   timeoutMs?: number;
   onLine?: (line: string) => void;
   env?: Record<string, string>;  // 追加环境变量（并入 process.env）；工作流脚本注入变量用
+  // 拿到子进程句柄：长任务（agent）需要在收工/退出时把它杀掉，
+  // 否则会留下孤儿进程（上次那个等交互授权的 claude 就一直没死）。
+  onSpawn?: (child: ChildProcess) => void;
 }
 
 // 以 argv 形式启动子进程（不经 shell），合并 stdout/stderr，带超时与逐行回调。
@@ -43,6 +46,7 @@ export function run(cmd: string, args: string[], opts: RunOpts = {}): Promise<Ru
       env: opts.env ? { ...process.env, ...opts.env } : process.env,
       stdio: ["ignore", "pipe", "pipe"],
     });
+    opts.onSpawn?.(child);
     let output = "";
     let timedOut = false;
     let buf = "";

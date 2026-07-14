@@ -12,7 +12,22 @@ const ENGINE_BIN: Record<string, string> = { claude: "claude", codex: "codex" };
 
 // 本机实际可用（已安装）的引擎，按配置优先级排列。
 export function availableEngines(cfg: UmbraConfig): string[] {
-  return cfg.codingEngines.filter((e) => which(ENGINE_BIN[e] || e) !== null);
+  const p = enginePath();
+  return cfg.codingEngines.filter((e) => which(ENGINE_BIN[e] || e, p) !== null);
+}
+
+// 打包后的 GUI 应用只有 /usr/bin:/bin:… —— claude/codex 常装在 homebrew / npm-global / bun 下。
+// which 与子进程都要用这份补齐后的 PATH，否则「能力页说已就绪、真跑起来找不到」。
+export function enginePath(): string {
+  const home = os.homedir();
+  const extra = [
+    "/opt/homebrew/bin", "/usr/local/bin",
+    path.join(home, ".local/bin"), path.join(home, ".bun/bin"),
+    path.join(home, ".npm-global/bin"), path.join(home, ".volta/bin"),
+    "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+  ];
+  const cur = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  return [...new Set([...cur, ...extra])].join(path.delimiter);
 }
 
 // 在 baseDir 下解析隔离的项目目录，拒绝路径逃逸。
@@ -150,7 +165,7 @@ const SKILLS: Manifest["skills"] = {
 };
 
 function manifestFor(provider: string, displayName: string, bin: string): Manifest {
-  const available = which(bin) !== null;
+  const available = which(bin, enginePath()) !== null;
   return {
     provider,
     display_name: displayName,
