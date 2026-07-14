@@ -385,6 +385,40 @@ async function agentContinue(
   );
 }
 
+// 验收用：在工作区里跑一条「能自动判定没写坏」的命令（npm run build / pytest …）。
+// 它不判断好不好，只判断有没有明显坏掉 —— 那是秘书能拿到的唯一硬信号。
+// 命令由 agent 自己提议（结果里的 suggested_verify），秘书原样转发。
+async function agentVerify(
+  params: Record<string, unknown>,
+  cfg: UmbraConfig,
+  report: Report,
+): Promise<unknown> {
+  const command = String(params.command || "").trim();
+  const workspace = String(params.workspace || "").trim();
+  if (!command) throw new Error("缺少 command（要跑什么验证）");
+  if (!workspace) throw new Error("缺少 workspace");
+  const dir = workspaceDirOf(cfg, workspace);
+
+  await report(`验证：${command}`, { progress: 0.5 });
+  // 经登录 shell 跑：验证命令常带管道/&&，而且要能找到 node/python。
+  const res = await run("/bin/sh", ["-lc", command], {
+    cwd: dir,
+    timeoutMs: 120_000, // 验证不该跑很久；跑不完就是它自己的问题
+    env: { PATH: enginePath() },
+    detached: true,
+  });
+  const tail = (res.output || "").trim().slice(-1200);
+  return {
+    command,
+    workspace,
+    workspace_dir: dir,
+    exit_code: res.timedOut ? null : res.code,
+    timed_out: res.timedOut,
+    passed: !res.timedOut && res.code === 0,
+    output_tail: tail,
+  };
+}
+
 async function agentStop(params: Record<string, unknown>): Promise<unknown> {
   const jobId = String(params.job_id || "").trim();
   const s = sessions.get(jobId);
@@ -424,6 +458,10 @@ const SKILLS: Manifest["skills"] = {
     description: "收工：结束这个任务的会话（工作区保留，以后可以再委托）",
     params: { job_id: "任务句柄" },
   },
+  verify: {
+    description: "在工作区里跑一条验证命令（npm run build / pytest），返回 exit_code 与输出尾部；只判断有没有写坏",
+    params: { workspace: "工作区名", command: "要跑的命令（由 agent 自己提议）" },
+  },
 };
 
 export function registerAgent(r: Registry, cfg: UmbraConfig): void {
@@ -447,6 +485,7 @@ export function registerAgent(r: Registry, cfg: UmbraConfig): void {
     if (skill === "agent_start") return agentStart(params, cfg, report, confirm);
     if (skill === "agent_continue") return agentContinue(params, cfg, report, confirm);
     if (skill === "agent_stop") return agentStop(params);
+    if (skill === "verify") return agentVerify(params, cfg, report);
     throw new Error(`agent 不支持技能：${skill}`);
   });
 }

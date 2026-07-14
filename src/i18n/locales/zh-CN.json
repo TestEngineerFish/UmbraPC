@@ -329,7 +329,14 @@
     "forgetConfirm": "把「{{name}}」从联系人列表移除？（它下次上线会重新出现，聊天记录不会删除）",
     "placeholderDevice": "对「{{name}}」说点什么，Enter 发送",
     "deviceOfflineHint": "这台设备当前离线，端侧任务无法执行",
-    "awaitingReview": "待确认"
+    "awaitingReview": "待确认",
+    "questionSubmit": "提交",
+    "questionNext": "下一题",
+    "questionPrev": "上一题",
+    "questionMulti": "可多选",
+    "questionCustom": "其它（自己写）",
+    "questionAnswer": "在这里作答",
+    "questionSubmitted": "已提交，秘书这就去安排"
   },
   "clipboard": {
     "searchPh": "搜索剪贴板…",

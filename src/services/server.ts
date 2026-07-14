@@ -438,6 +438,11 @@ class ChatConnection {
     return this.rawSend({ type: "job_confirm_response", task_id: taskId, approved });
   }
 
+  // 问答卡：多题答完后一次性提交（秘书在派活前把歧义问清楚）。
+  sendAnswers(cardId: string, answers: Record<string, string[]>): boolean {
+    return this.rawSend({ type: "question_answer", card_id: cardId, answers });
+  }
+
   // 紧急停止：让服务端中止正在运行的 operate 循环。
   sendOperateStop(): boolean {
     return this.rawSend({ type: "operate_stop" });

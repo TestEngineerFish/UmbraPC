@@ -29,7 +29,17 @@ type Block =
   | { kind: "job"; jobId: string; goal: string; pct: number; status: string; message: string; agentState?: string; confirmTaskId?: string; confirmScope?: string; results?: { title: string; url: string }[] }
   | { kind: "done"; goal: string; results: { title: string; url: string }[] }
   | { kind: "confirm"; taskId: string; summary: string; detail?: unknown; scope?: string; resolved?: "approved" | "denied" }
+  // 问答卡：秘书在派活前把歧义问清楚（多题、单选/多选、可自定义、逐题推进、统一提交）。
+  | { kind: "question"; cardId: string; title: string; questions: QCard[]; at: number; picked: Record<string, string[]>; custom: Record<string, string>; done?: boolean }
   | { kind: "error"; text: string };
+
+interface QCard {
+  id: string;
+  text: string;
+  multi: boolean;
+  options: string[];
+  allow_custom: boolean;
+}
 
 // 每个会话的独立状态。
 interface ConvState {
@@ -311,6 +321,29 @@ function onMessage(msg: any): void {
         autoApproveIfEnabled(msg.task_id, msg.scope);
       }
       break;
+    case "question_card": {
+      const s = cs(target);
+      if (!s.blocks.some((b) => b.kind === "question" && b.cardId === msg.card_id)) {
+        s.blocks.push({
+          kind: "question", cardId: msg.card_id, title: msg.title || "",
+          questions: (msg.questions || []) as QCard[],
+          at: 0, picked: {}, custom: {},
+        });
+        s.lastText = msg.title || "有几个问题要确认";
+        s.lastAt = Date.now();
+      }
+      break;
+    }
+    case "question_resolved": {
+      // 别的端已经答过了 → 本端把卡片标成已完成，别重复作答。
+      for (const id of Object.keys(convs)) {
+        for (const b of convs[id].blocks) {
+          if (b.kind === "question" && b.cardId === msg.card_id) b.done = true;
+        }
+      }
+      renderMessages();
+      return;
+    }
     case "confirm_resolved":
       resolveConfirm(msg.task_id || "", Boolean(msg.approved)); // 跨会话统一更新
       renderMessages();
@@ -482,7 +515,52 @@ function blockHtml(b: Block, i: number): string {
       </div>`;
   }
 
+  if (b.kind === "question") return questionCardHtml(b, i);
+
   return `<div style="align-self:flex-start;max-width:80%;border:1px solid rgba(180,35,24,.3);background:var(--danger-soft);color:var(--danger);padding:11px 14px;border-radius:10px;">${esc(b.text)}</div>`;
+}
+
+// 问答卡：一次一题（可回上一题改），全部答完统一提交。
+// 为什么要这个：歧义必须在派活**之前**消除——「写个棋牌小程序」是微信还是支付宝？
+// 带着歧义开工，返工的代价远大于问一句。
+function questionCardHtml(b: Extract<Block, { kind: "question" }>, i: number): string {
+  const total = b.questions.length;
+  if (b.done) {
+    return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 15px;">
+      <div style="font-weight:600;margin-bottom:6px;">${esc(b.title)}</div>
+      <div style="font-size:12.5px;color:var(--success);">✅ ${esc(t("chat.questionSubmitted"))}</div>
+    </div>`;
+  }
+  const q = b.questions[Math.min(b.at, total - 1)];
+  if (!q) return "";
+  const sel = b.picked[q.id] || [];
+  const opts = q.options
+    .map((o) => {
+      const on = sel.includes(o);
+      return `<button data-qopt="${i}" data-val="${esc(o)}" style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:9px 12px;margin-bottom:6px;border-radius:9px;cursor:pointer;font-size:13px;border:1px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange-soft)" : "var(--bg)"};color:${on ? "var(--orange-text)" : "var(--text)"};">
+        <span style="flex:none;width:14px;height:14px;border-radius:${q.multi ? "4px" : "999px"};border:1.5px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange)" : "transparent"};"></span>${esc(o)}
+      </button>`;
+    })
+    .join("");
+  const custom = q.allow_custom || q.options.length === 0
+    ? `<input data-qcustom="${i}" value="${esc(b.custom[q.id] || "")}" placeholder="${esc(q.options.length ? t("chat.questionCustom") : t("chat.questionAnswer"))}" style="width:100%;box-sizing:border-box;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:9px;padding:9px 12px;font-size:13px;outline:none;" />`
+    : "";
+  const last = b.at >= total - 1;
+  const answered = sel.length > 0 || (b.custom[q.id] || "").trim().length > 0;
+  return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--orange);border-radius:10px;padding:13px 15px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">
+        <span style="font-weight:600;">${esc(b.title)}</span>
+        <span style="flex:none;font-size:11.5px;color:var(--muted);">${b.at + 1} / ${total}</span>
+      </div>
+      <div style="font-size:13.5px;margin:10px 0 9px;">${esc(q.text)}${q.multi ? `<span style="font-size:11px;color:var(--muted);margin-left:6px;">${esc(t("chat.questionMulti"))}</span>` : ""}</div>
+      ${opts}
+      ${custom}
+      <div style="display:flex;gap:8px;margin-top:11px;">
+        ${b.at > 0 ? `<button data-qprev="${i}" style="padding:7px 14px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;">${esc(t("chat.questionPrev"))}</button>` : ""}
+        <span style="flex:1;"></span>
+        <button data-${last ? "qsubmit" : "qnext"}="${i}" ${answered ? "" : "disabled"} style="padding:7px 16px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:${answered ? "pointer" : "not-allowed"};background:${answered ? "var(--orange)" : "var(--border)"};color:#fff;">${esc(last ? t("chat.questionSubmit") : t("chat.questionNext"))}</button>
+      </div>
+    </div>`;
 }
 
 // ── 左栏：联系人列表 ─────────────────────────────────────────────────────────
@@ -818,6 +896,17 @@ export function mount(el: HTMLElement): void {
   });
   const msgsEl = el.querySelector("#umsgs") as HTMLElement;
   msgsEl.addEventListener("click", onMsgsClick);
+  // 问答卡的自定义填空：随敲随存（不重渲染，避免打断输入）
+  msgsEl.addEventListener("input", (ev) => {
+    const t2 = ev.target as HTMLInputElement;
+    if (t2 && t2.dataset && t2.dataset.qcustom !== undefined) {
+      const b = cs(activeConv).blocks[Number(t2.dataset.qcustom)];
+      if (b && b.kind === "question") {
+        const q = b.questions[b.at];
+        if (q) b.custom[q.id] = t2.value;
+      }
+    }
+  });
   // 跟踪是否贴底：上滑超过阈值即停止自动跟随，回到底部附近恢复跟随。
   msgsEl.addEventListener("scroll", () => {
     stick = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 80;
@@ -831,8 +920,37 @@ export function mount(el: HTMLElement): void {
 }
 
 function onMsgsClick(e: Event): void {
-  const el = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img]") as HTMLElement | null;
+  const el = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit]") as HTMLElement | null;
   if (!el) return;
+  // ── 问答卡 ──
+  const qi = el.dataset.qopt ?? el.dataset.qprev ?? el.dataset.qnext ?? el.dataset.qsubmit;
+  if (qi !== undefined) {
+    const b = cs(activeConv).blocks[Number(qi)];
+    if (!b || b.kind !== "question") return;
+    const q = b.questions[b.at];
+    if (el.dataset.qopt !== undefined && q) {
+      const v = el.dataset.val || "";
+      const cur = b.picked[q.id] || [];
+      // 多选=切换；单选=替换（顺手清掉别的选项）
+      b.picked[q.id] = q.multi ? (cur.includes(v) ? cur.filter((x) => x !== v) : [...cur, v]) : cur.includes(v) ? [] : [v];
+    } else if (el.dataset.qprev !== undefined) {
+      b.at = Math.max(0, b.at - 1); // 可以回上一题改答案
+    } else if (el.dataset.qnext !== undefined) {
+      b.at = Math.min(b.questions.length - 1, b.at + 1);
+    } else if (el.dataset.qsubmit !== undefined) {
+      const answers: Record<string, string[]> = {};
+      for (const qq of b.questions) {
+        const picked = [...(b.picked[qq.id] || [])];
+        const c = (b.custom[qq.id] || "").trim();
+        if (c) picked.push(c); // 自定义回复与选项并存（用户总有你没想到的答案）
+        answers[qq.id] = picked;
+      }
+      chatConn.sendAnswers(b.cardId, answers);
+      b.done = true;
+    }
+    renderMessages();
+    return;
+  }
   if (el.dataset.trace !== undefined) {
     const b = cs(activeConv).blocks[Number(el.dataset.trace)];
     if (b && b.kind === "assistant") { b.traceOpen = !b.traceOpen; renderMessages(); }

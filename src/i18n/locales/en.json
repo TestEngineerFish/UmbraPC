@@ -329,7 +329,14 @@
     "forgetConfirm": "Remove \"{{name}}\" from contacts? (It will reappear next time it comes online; chat history is kept.)",
     "placeholderDevice": "Message {{name}} — Enter to send",
     "deviceOfflineHint": "This device is offline; on-device tasks can't run",
-    "awaitingReview": "Awaiting review"
+    "awaitingReview": "Awaiting review",
+    "questionSubmit": "Submit",
+    "questionNext": "Next",
+    "questionPrev": "Back",
+    "questionMulti": "multiple",
+    "questionCustom": "Other (write your own)",
+    "questionAnswer": "Type your answer",
+    "questionSubmitted": "Submitted — the secretary is on it"
   },
   "clipboard": {
     "searchPh": "Search clipboard…",

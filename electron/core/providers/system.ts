@@ -81,6 +81,21 @@ async function fileSystem(action: string, params: Record<string, any>, cfg: Umbr
     }
     return uploadFile(httpBase(cfg), cfg.token, p);
   }
+  if (a === "write_file") {
+    const p = expand(String(params.path || ""));
+    if (!p) throw new Error("缺少 path");
+    // 只允许写工作区内 —— 秘书写需求文档是正当需求，但不能因此获得「改你任何文件」的权力。
+    const worksRoot = path.resolve(expand(cfg.workspacesDir || "~/UmbraWorks"));
+    const target = path.resolve(p);
+    if (target !== worksRoot && !target.startsWith(worksRoot + path.sep)) {
+      throw new Error(`只允许写入工作区内（${worksRoot}），拒绝：${target}`);
+    }
+    const content = String(params.content ?? "");
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content, "utf-8");
+    return { path: target, bytes: Buffer.byteLength(content, "utf-8") };
+  }
+
   if (a === "list_directory") {
     const base = expand(String(params.path || "~"));
     let entries;
@@ -316,6 +331,7 @@ async function openPath(params: Record<string, any>): Promise<unknown> {
 const FS_SKILLS: Manifest["skills"] = {
   find_file: { description: "在某目录下递归查找匹配文件", params: { path: "起始目录，如 ~/Desktop", pattern: "通配符，如 *.pdf" } },
   read_file: { description: "读取文本文件内容", params: { path: "文件路径", max_bytes: "可选，最多读取字节数" } },
+  write_file: { description: "写入文本文件（覆盖）。用于落需求文档等；只允许写工作区(~/UmbraWorks)内", params: { path: "文件路径", content: "文本内容" } },
   upload_file: { description: "上传指定文件到服务端并返回下载链接", params: { path: "文件路径" } },
   list_directory: { description: "列出目录下的条目", params: { path: "目录路径" } },
 };
