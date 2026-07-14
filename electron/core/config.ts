@@ -137,7 +137,7 @@ function defaults(configDir: string): UmbraConfig {
     codingTimeout: Number(process.env.UMBRA_CODING_TIMEOUT || 600),
     codingAllowExec: (process.env.UMBRA_CODING_ALLOW_EXEC || "confirm").toLowerCase() as AllowExec,
     workspacesDir: process.env.UMBRA_WORKSPACES_DIR || "~/UmbraWorks",
-    agentTurnTimeout: Number(process.env.UMBRA_AGENT_TURN_TIMEOUT || 3000),
+    agentTurnTimeout: Number(process.env.UMBRA_AGENT_TURN_TIMEOUT || 1800),
     agentIdleCloseMin: Number(process.env.UMBRA_AGENT_IDLE_CLOSE_MIN || 30),
     confirmTimeout: Number(process.env.UMBRA_CONFIRM_TIMEOUT || 300),
     providersFile: process.env.UMBRA_PROVIDERS_FILE || path.join(configDir, "providers.json"),

@@ -13,6 +13,7 @@
 //   4. 会话空闲太久就收敛，之后重开会话续做——防止陈旧上下文（失败命令、调试噪音）
 //      被反复 --continue 喂回去，污染模型注意力。
 import { promises as fs } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { run } from "../shared/util";
 import { UmbraConfig } from "../config";
@@ -68,20 +69,43 @@ function buildPrompt(body: string, execMode: boolean, spec: string | null): stri
   return `${body}${specPart}${guard}${VERIFY_HINT}`;
 }
 
+// 关键：headless 调用必须显式给出权限策略，否则 claude 会等一个**永远不会来的**交互应答
+// （新目录的「是否信任此文件夹」+ 每次 Write/Bash 的授权提示），而我们的 stdin 是 ignore ——
+// 表现就是进程既不输出也不退出，任务永远卡在「开工…」。
+//   执行模式  → --dangerously-skip-permissions（用户已授权跑命令/装依赖/联网）
+//   只生成    → --permission-mode acceptEdits + 明确禁用 Bash/联网工具（自动拒绝，不弹窗、不挂起）
 function buildArgs(engine: string, prompt: string, execMode: boolean, resume: boolean): { bin: string; args: string[] } {
   const bin = ENGINE_BIN[engine] || engine;
   const extra = execMode
     ? (process.env[`UMBRA_CODING_${engine.toUpperCase()}_EXEC_ARGS`] || "").split(/\s+/).filter(Boolean)
     : [];
   if (engine === "claude") {
+    const perm = execMode
+      ? ["--dangerously-skip-permissions"]
+      : ["--permission-mode", "acceptEdits", "--disallowedTools", "Bash,WebFetch,WebSearch"];
     // 追问：--continue 续上这个目录里的上一次会话，保留上下文（不从零重来）。
-    return { bin, args: [...(resume ? ["--continue"] : []), "-p", ...extra, prompt] };
+    return { bin, args: [...(resume ? ["--continue"] : []), "-p", ...perm, ...extra, prompt] };
   }
   if (engine === "codex") {
     // codex exec 没有稳定的会话续接参数：靠工作目录里的既有产物 + 提示词里的上下文续做。
-    return { bin, args: ["exec", ...extra, prompt] };
+    const perm = execMode ? ["--dangerously-bypass-approvals-and-sandbox"] : ["--sandbox", "workspace-write"];
+    return { bin, args: ["exec", ...perm, ...extra, prompt] };
   }
   return { bin, args: [...extra, prompt] };
+}
+
+// GUI 启动的 Electron 拿不到登录 shell 的 PATH（只有 /usr/bin:/bin:…），
+// 而 claude/codex 常装在 homebrew / npm-global / bun 下——补齐，免得子进程自己找不到 node。
+function enrichedPath(): string {
+  const home = os.homedir();
+  const extra = [
+    "/opt/homebrew/bin", "/usr/local/bin",
+    path.join(home, ".local/bin"), path.join(home, ".bun/bin"),
+    path.join(home, ".npm-global/bin"), path.join(home, ".volta/bin"),
+    "/usr/bin", "/bin", "/usr/sbin", "/sbin",
+  ];
+  const cur = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  return [...new Set([...cur, ...extra])].join(path.delimiter);
 }
 
 // ── 产物快照（变更清单）─────────────────────────────────────────────────────
@@ -173,15 +197,33 @@ async function runTurn(
   const resume = s.hasEngineSession && s.engine === "claude";
   const { bin, args } = buildArgs(s.engine, prompt, execMode, resume);
 
-  await report(`${s.engine} ${execMode ? "(执行模式)" : "(只生成)"} 开工…`, { progress: 0.15 });
+  // 把**真实命令行**写进日志：卡住时能一眼看出是不是权限/参数问题（prompt 只留头部）。
+  const cmdLine = `${bin} ${args.map((a) => (a === prompt ? `"${prompt.slice(0, 40)}…"` : a)).join(" ")}`;
+  await report(`${s.engine} ${execMode ? "(执行模式)" : "(只生成)"} 开工：${cmdLine}`, {
+    progress: 0.15,
+    cwd: s.workspaceDir,
+  });
   const before = await snapshot(s.workspaceDir);
+
+  // 心跳：agent 可能长时间闷头干活不吐字。定期报「还活着」，把静默变成可见信息
+  // （上次就是因为完全没动静，分不清是在思考还是挂死了）。
+  const startedAt = Date.now();
+  let sawOutput = false;
+  const beat = setInterval(() => {
+    const sec = Math.round((Date.now() - startedAt) / 1000);
+    report(sawOutput ? `${s.engine} 干活中…（已 ${sec}s）` : `${s.engine} 启动中，暂无输出…（已 ${sec}s）`, {
+      progress: 0.5,
+    }).catch(() => {});
+  }, 20_000);
 
   let last = 0;
   const res = await run(bin, args, {
     cwd: s.workspaceDir, // ← 目录就是这么"交给"agent 的：它在这里启动，天然在这里干活
     timeoutMs: cfg.agentTurnTimeout * 1000,
+    env: { PATH: enrichedPath() },
     onLine: (line) => {
       // 如实上报 agent 的真实动静（不是 PC 编出来的步骤）
+      sawOutput = true;
       const now = Date.now();
       if (now - last > 4000) {
         last = now;
@@ -189,6 +231,7 @@ async function runTurn(
       }
     },
   });
+  clearInterval(beat);
 
   const after = await snapshot(s.workspaceDir);
   const changed = diffSnapshots(before, after);
@@ -199,6 +242,14 @@ async function runTurn(
   s.hasEngineSession = true;
   s.lastActiveAt = Date.now();
 
+  // 超时：run() 会 SIGKILL 并返回 code=null —— 必须显式判 timedOut，
+  // 否则「超时」会被当成「成功但没产物」上报（这是之前的判断漏洞）。
+  if (res.timedOut) {
+    throw new Error(
+      `${s.engine} 超时（${cfg.agentTurnTimeout}s）已被终止。` +
+        (output ? `最后输出：${output.slice(-200)}` : "全程无任何输出——通常是它在等一个交互应答（权限/信任提示）。"),
+    );
+  }
   if (res.code !== 0 && res.code !== null && changed.length === 0) {
     throw new Error(`${s.engine} 执行失败（exit=${res.code}）：${summary.slice(-300)}`);
   }

@@ -2,16 +2,18 @@
 import { UmbraConfig } from "../config";
 import { Registry } from "./registry";
 import { registerSystem } from "./system";
-import { registerCoding } from "./coding";
 import { registerAgent } from "./agent";
 import { registerConfigProviders } from "./config-providers";
 import { registerComputer } from "../computer";
 
-// 构建注册表：system → codex/claude_code → computer(默认关) → providers.json（同名覆盖）。
+// 构建注册表：system → agent → computer(默认关) → providers.json（同名覆盖）。
+//
+// 注：旧的 claude_code / codex 的一次性 write_code 已**下线**——它被「代理任务(agent)」完全取代
+//（同一个引擎、同一个目录，但任务有句柄、能追问、能收工）。同时留着两条路只会让秘书选错，
+// 而且一次性那条根本没法验收。coding.ts 仍保留，agent.ts 复用它的引擎探测与路径防护。
 export async function buildRegistry(cfg: UmbraConfig): Promise<Registry> {
   const r = new Registry();
   registerSystem(r, cfg);
-  registerCoding(r, cfg);
   registerAgent(r, cfg); // 代理任务：可追问的长任务（服务端只拿 job_id 说话）
   registerComputer(r, cfg);
   await registerConfigProviders(r, cfg);
