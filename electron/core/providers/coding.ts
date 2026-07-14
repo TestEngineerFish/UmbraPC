@@ -1,7 +1,7 @@
 // coding 能力：本机调用编码助手（Claude Code / Codex）按需求写代码。
 // 对齐 Python coding.py + prov_codex.py + prov_claude_code.py：选引擎、隔离目录、
 // 权限闸门(never/confirm/always)、子进程执行、快照对比变更清单。
-import { promises as fs } from "node:fs";
+import { promises as fs, readdirSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { run, which } from "../shared/util";
@@ -26,6 +26,14 @@ export function enginePath(): string {
     path.join(home, ".npm-global/bin"), path.join(home, ".volta/bin"),
     "/usr/bin", "/bin", "/usr/sbin", "/sbin",
   ];
+  // nvm：node 常只存在于 ~/.nvm/versions/node/<ver>/bin —— 而 claude 的 shebang 要找 node。
+  // GUI 启动的应用没有登录 shell 的 PATH，会出现「claude 找得到、node 找不到」。
+  try {
+    const nvm = path.join(home, ".nvm/versions/node");
+    for (const v of readdirSync(nvm)) extra.push(path.join(nvm, v, "bin"));
+  } catch {
+    /* 没装 nvm */
+  }
   const cur = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
   return [...new Set([...cur, ...extra])].join(path.delimiter);
 }

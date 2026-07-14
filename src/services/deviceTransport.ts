@@ -211,6 +211,9 @@ async function handleTask(msg: any): Promise<void> {
   const params: Record<string, unknown> = msg.params || {};
   log(`收到任务 ${provider}.${skill}`);
   recordTask(taskId, "running", "执行中…", provider, skill);
+  // 立刻回一条 ACK：让服务端时间线上**一定**有「设备已收到」这一条。
+  // 否则「服务端没发到」和「设备收到但卡住」在时间线上长得一模一样，只能靠猜。
+  sendJson({ type: "task_progress", task_id: taskId, message: `设备已收到任务 ${provider}.${skill}`, progress: 0.02 });
   try {
     const result = await window.umbra!.runTask(taskId, provider, skill, params);
     recordTask(taskId, "ok", "完成", provider, skill);
