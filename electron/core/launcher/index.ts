@@ -1,6 +1,7 @@
 // 快捷入口 Launcher（类 Alfred）：全局快捷键唤起的浮层搜索窗。
 // 输入 query → 并发查询各 Provider（app 启动 / 文件夹书签 / 剪贴板历史）→ 结果列表 → 回车执行 action。
 // 窗口/焦点还原范式镜像 ClipboardManager。
+import * as os from "node:os";
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
 import { ConfigStore, expandHome, LauncherFolder, LauncherScript, Phrase, Workflow } from "../config";
@@ -227,28 +228,96 @@ export class LauncherManager {
     return top;
   }
 
-  // Provider①：启动 App（mdfind 搜已安装应用 + 提取图标）。
+  // Provider①：启动 App。
+  //
+  // 之前只用 mdfind 查 kMDItemDisplayName 一个字段 —— 而 Spotlight 给这个字段的
+  // 往往是 bundle 的内部名（企业微信.app 的 DisplayName 是 "WeCom"），
+  // 于是搜「企业微信」一无所获、搜「wecom」反而命中。这很反直觉。
+  //
+  // 现在两条腿走路：mdfind 多字段查（拿 Spotlight 索引到的别名/包名）
+  // + **直接扫应用目录**（文件名是什么就能搜到什么，中文名 100% 命中）。合并去重。
   private async searchApps(q: string): Promise<LauncherResult[]> {
     if (process.platform !== "darwin" || q.length < 1) return [];
-    const res = await run("mdfind", [
-      `kMDItemContentType == 'com.apple.application-bundle' && kMDItemDisplayName == '*${q}*'c`,
-    ], { timeoutMs: 2500 });
-    if (res.code !== 0) return [];
-    const paths = res.output.split("\n").map((s) => s.trim()).filter(Boolean).slice(0, 6);
+    const [byIndex, byScan] = await Promise.all([
+      this.mdfindApps(q).catch(() => [] as string[]),
+      this.scanApps(q).catch(() => [] as string[]),
+    ]);
+    const paths = [...new Set([...byScan, ...byIndex])].slice(0, 6); // 目录扫描的结果更可信，排前面
+
+    const ql = q.toLowerCase();
     const out: LauncherResult[] = [];
     for (const p of paths) {
       const name = path.basename(p).replace(/\.app$/i, "");
       const lower = name.toLowerCase();
-      const ql = q.toLowerCase();
-      const score = 100 + (lower === ql ? 60 : lower.startsWith(ql) ? 40 : 0);
+      // 完全相同 > 前缀 > 包含；文件名里搜不到但 Spotlight 命中的（别名/包名）分最低。
+      const hit = lower === ql ? 60 : lower.startsWith(ql) ? 40 : lower.includes(ql) ? 20 : 0;
       let icon = "";
       try { icon = await getAppIcon(p); } catch { /* 图标失败不阻塞 */ }
       out.push({
-        id: `app:${p}`, title: name, subtitle: p, icon: icon || "📦", source: "app", score,
+        id: `app:${p}`, title: name, subtitle: p, icon: icon || "📦", source: "app", score: 100 + hit,
         action: { kind: "open_app", payload: { path: p } },
       });
     }
     return out;
+  }
+
+  // Spotlight：多字段一起查（显示名 / 文件名 / 别名 / bundle id），别只押一个字段。
+  private async mdfindApps(q: string): Promise<string[]> {
+    const like = (field: string) => `${field} == '*${q}*'cd`; // c=忽略大小写 d=忽略音标
+    const res = await run("mdfind", [
+      `kMDItemContentType == 'com.apple.application-bundle' && (` +
+        [
+          like("kMDItemDisplayName"),
+          like("kMDItemFSName"),
+          like("kMDItemAlternateNames"),
+          like("kMDItemCFBundleIdentifier"),
+        ].join(" || ") +
+        `)`,
+    ], { timeoutMs: 2500 });
+    if (res.code !== 0) return [];
+    return res.output.split("\n").map((s) => s.trim()).filter(Boolean);
+  }
+
+  // 兜底：直接扫应用目录，按**文件名**匹配。
+  // Spotlight 索引抽风 / 字段对不上时，这条路照样能找到「企业微信.app」。
+  private appDirCache: { at: number; paths: string[] } = { at: 0, paths: [] };
+
+  private async listAppDirs(): Promise<string[]> {
+    const now = Date.now();
+    if (now - this.appDirCache.at < 5 * 60_000 && this.appDirCache.paths.length) {
+      return this.appDirCache.paths; // 5 分钟缓存：别每敲一个字就 readdir 一遍
+    }
+    const roots = [
+      "/Applications",
+      "/Applications/Utilities",
+      "/System/Applications",
+      "/System/Applications/Utilities",
+      path.join(os.homedir(), "Applications"),
+    ];
+    const found: string[] = [];
+    for (const root of roots) {
+      try {
+        for (const e of await fs.readdir(root)) {
+          if (e.endsWith(".app")) found.push(path.join(root, e));
+        }
+      } catch {
+        /* 目录不存在 */
+      }
+    }
+    this.appDirCache = { at: now, paths: found };
+    return found;
+  }
+
+  private async scanApps(q: string): Promise<string[]> {
+    const ql = q.toLowerCase();
+    const all = await this.listAppDirs();
+    return all
+      .filter((p) => path.basename(p).replace(/\.app$/i, "").toLowerCase().includes(ql))
+      .sort((a, b) => {
+        const an = path.basename(a).toLowerCase();
+        const bn = path.basename(b).toLowerCase();
+        return Number(bn.startsWith(ql)) - Number(an.startsWith(ql)) || an.length - bn.length;
+      });
   }
 
   // Provider③：剪贴板历史（搜索文本，回车粘贴）。
