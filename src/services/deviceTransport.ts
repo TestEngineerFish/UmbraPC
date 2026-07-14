@@ -76,6 +76,7 @@ export function start(onUpdate: (kind: string) => void): void {
   });
   u.onConfirmRequest((c) => {
     sendJson({ type: "task_confirm_request", task_id: c.taskId, summary: c.summary, detail: c.detail });
+    log(`请求授权 [${short(c.taskId)}]：${c.summary}`);
   });
   connect();
 }
@@ -204,34 +205,56 @@ function startHeartbeat(): void {
   }, 30000);
 }
 
+// 日志用：截短的 task_id / JSON，既能对上号又不刷屏。
+function short(id: string): string {
+  return (id || "").slice(0, 8);
+}
+function brief(v: unknown, n = 160): string {
+  let t = "";
+  try {
+    t = typeof v === "string" ? v : JSON.stringify(v);
+  } catch {
+    t = String(v);
+  }
+  t = (t || "").replace(/\s+/g, " ");
+  return t.length > n ? t.slice(0, n) + "…" : t;
+}
+
 async function handleTask(msg: any): Promise<void> {
   const taskId: string = msg.task_id || "";
   const provider: string = msg.provider || "";
   const skill: string = msg.skill || "";
   const params: Record<string, unknown> = msg.params || {};
-  log(`收到任务 ${provider}.${skill}`);
+  const t0 = Date.now();
+  // 日志要能还原「谁让我干什么、参数是什么、干了多久、结果如何」——出问题时这就是全部线索。
+  log(`收到任务 [${short(taskId)}] ${provider}.${skill} 参数=${brief(params)}`);
   recordTask(taskId, "running", "执行中…", provider, skill);
   // 立刻回一条 ACK：让服务端时间线上**一定**有「设备已收到」这一条。
   // 否则「服务端没发到」和「设备收到但卡住」在时间线上长得一模一样，只能靠猜。
   sendJson({ type: "task_progress", task_id: taskId, message: `设备已收到任务 ${provider}.${skill}`, progress: 0.02 });
   try {
     const result = await window.umbra!.runTask(taskId, provider, skill, params);
+    const sec = ((Date.now() - t0) / 1000).toFixed(1);
     recordTask(taskId, "ok", "完成", provider, skill);
-    sendOrQueue(taskId, { type: "task_result", task_id: taskId, status: "ok", result });
-    log(`任务完成 ${provider}.${skill}`);
+    const sent = sendOrQueue(taskId, { type: "task_result", task_id: taskId, status: "ok", result });
+    log(`任务完成 [${short(taskId)}] ${provider}.${skill} 用时 ${sec}s${sent ? "" : "（结果上报失败，已入队待重发）"}`);
+    log(`　└ 结果：${brief(result, 240)}`);
   } catch (e) {
     const err = e instanceof Error ? e.message : String(e);
+    const sec = ((Date.now() - t0) / 1000).toFixed(1);
     recordTask(taskId, "error", err, provider, skill);
-    sendOrQueue(taskId, { type: "task_result", task_id: taskId, status: "error", error: err });
-    log(`任务失败 ${provider}.${skill}：${err}`);
+    const sent = sendOrQueue(taskId, { type: "task_result", task_id: taskId, status: "error", error: err });
+    log(`任务失败 [${short(taskId)}] ${provider}.${skill} 用时 ${sec}s：${err}${sent ? "" : "（上报失败，已入队）"}`);
   }
 }
 
-function sendOrQueue(taskId: string, payload: unknown): void {
+function sendOrQueue(taskId: string, payload: unknown): boolean {
   if (!sendJson(payload)) {
     pendingResults.set(taskId, payload);
-    log(`结果上报失败（连接已断），已入队 ${taskId}`);
+    log(`结果上报失败（连接已断），已入队 ${short(taskId)}，将在下次心跳重发`);
+    return false;
   }
+  return true;
 }
 function flushPending(): void {
   for (const [id, p] of [...pendingResults]) {
