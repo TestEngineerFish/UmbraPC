@@ -48,7 +48,10 @@ const wsUrl = () => getServerUrl().replace(/^http/, "ws") + "/ws/device";
 
 function log(line: string): void {
   logs.unshift(`${new Date().toLocaleTimeString()}  ${line}`);
-  logs = logs.slice(0, 200);
+  logs = logs.slice(0, 200); // 内存里只留最近 200 条给界面看
+  // 同时落盘（userData/logs/umbra-YYYY-MM-DD.log）：应用一关内存日志就没了，
+  // 而排查问题往往是事后才想起来要看日志。
+  window.umbra?.appendLog(line);
   notify("log");
 }
 function setStatus(s: DeviceState["status"]): void {

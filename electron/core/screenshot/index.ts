@@ -63,10 +63,26 @@ export class ScreenshotManager {
   }
 
   // ── 权限（mac 屏幕录制）──
+  private permGranted = false; // 授权过一次就不用每次触发都再查一遍
+
+  // 预热：启动后就把覆盖窗建好、页面加载完（隐藏着）。
+  // 首次截图否则要现场建窗 + 加载 screenshot.html + 首帧渲染，快门明显迟滞。
+  async warmup(): Promise<void> {
+    try {
+      await this.ensureOverlay();
+    } catch {
+      /* 预热失败不影响功能 */
+    }
+  }
+
   private async ensureScreenPermission(): Promise<boolean> {
     if (process.platform !== "darwin") return true;
+    if (this.permGranted) return true;
     const { systemPreferences, desktopCapturer, dialog, shell } = await import("electron");
-    if (systemPreferences.getMediaAccessStatus("screen") === "granted") return true;
+    if (systemPreferences.getMediaAccessStatus("screen") === "granted") {
+      this.permGranted = true;
+      return true;
+    }
     // 先调一次 desktopCapturer，让应用出现在系统设置的屏幕录制列表里。
     await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } }).catch(() => {});
     const r = await dialog.showMessageBox({

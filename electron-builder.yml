@@ -13,6 +13,7 @@ asarUnpack:
   - "**/*.node"
   - "node_modules/@nut-tree-fork/**"
 mac:
+  icon: build/icon.png
   target:
     - dmg
   category: public.app-category.productivity
@@ -30,6 +31,7 @@ dmg:
 # 公证暂关（本机自用，签名即可让权限稳定）。需要分发给他人时再开 afterSign 公证。
 # afterSign: build/notarize.js
 win:
+  icon: build/icon.png
   target:
     - nsis
   executableName: Umbra

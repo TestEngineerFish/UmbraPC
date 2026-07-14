@@ -77,6 +77,16 @@ export class ClipboardManager {
     return win;
   }
 
+  // 预热：启动后就把面板窗建好并加载完页面（隐藏着）。
+  // 否则第一次按快捷键要现场建窗 + 加载 HTML + 首帧渲染，肉眼可见地卡一下。
+  async warmup(): Promise<void> {
+    try {
+      await this.ensurePanel();
+    } catch {
+      /* 预热失败不影响功能，下次唤起会重建 */
+    }
+  }
+
   async togglePanel(): Promise<void> {
     if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) {
       await this.hidePanel(true);
@@ -159,6 +169,10 @@ export class ClipboardManager {
       if (!it) return false;
       this.watcher.noteWriteBack(it.hash);
       await writeToClipboard(it);
+      // 关键：写回后按**剪贴板里实际是什么**重设基线。
+      // 图片在 mac 上是以文件引用写回的，它的 hash 与原位图 hash 不同 ——
+      // 只 noteWriteBack(原 hash) 的话，下一轮 tick 会把它当成新内容再插一条（重复历史）。
+      await this.watcher.syncBaseline();
       this.store.touch(id);
       this.broadcast("clipboard:history:changed");
       return true;
@@ -169,6 +183,7 @@ export class ClipboardManager {
       if (!it) return false;
       this.watcher.noteWriteBack(it.hash);
       await writeToClipboard(it);
+      await this.watcher.syncBaseline(); // 同上：按实际写入的内容重设基线，避免重复入库
       this.store.touch(id);
       this.broadcast("clipboard:history:changed");
       await this.hidePanel(true); // 隐藏面板并把焦点还给原应用

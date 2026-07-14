@@ -252,14 +252,22 @@ function registerIpc(): void {
     await shell.openPath(file);
     return file;
   });
-  // 日志页「打开日志文件夹」：日志本来只存在内存里（没有文件夹可开，所以点了没反应）。
-  // 现在把当前日志落成一个文件再打开目录 —— 这样这个按钮才真的有用（可以直接发给我看）。
-  ipcMain.handle("umbra:openLogsFolder", async (_e, lines: string[]) => {
-    const dir = path.join(app.getPath("userData"), "logs");
-    await fs.mkdir(dir, { recursive: true });
-    const file = path.join(dir, "umbra-device.log");
-    await fs.writeFile(file, (lines || []).join("\n") + "\n", "utf-8");
-    shell.showItemInFolder(file); // 打开目录并选中该文件
+  // 渲染层（设备传输层）把每条日志也写进文件。
+  ipcMain.handle("umbra:appendLog", (_e, line: string) => {
+    appendLog(String(line || ""));
+    return true;
+  });
+
+  // 日志页「打开日志文件夹」：直接打开今天的日志所在目录并选中文件。
+  ipcMain.handle("umbra:openLogsFolder", async () => {
+    const file = logFileOf();
+    await fs.mkdir(logsDir(), { recursive: true });
+    try {
+      await fs.access(file);
+    } catch {
+      await fs.writeFile(file, "", "utf-8"); // 今天还没有日志：建个空的，免得打开个空目录
+    }
+    shell.showItemInFolder(file);
     return file;
   });
 
@@ -309,6 +317,20 @@ app.whenReady().then(async () => {
   registerIpc();
   createWindow();
   createTray(); // 菜单栏常驻图标：关窗后仍可唤起
+  pruneLogs();
+  appendLog(`Umbra 启动 v${app.getVersion()} (${process.platform})`);
+
+  // macOS Dock 图标：打包后由 .icns 提供；dev 下 Electron 用默认图标，
+  // 这里显式设一下，免得开发时 Dock 上是个陌生的 Electron 图标。
+  if (process.platform === "darwin" && app.dock) {
+    const iconFile = path.join(__dirname, "..", "build", "icon.png");
+    try {
+      const img = nativeImage.createFromPath(iconFile);
+      if (!img.isEmpty()) app.dock.setIcon(img);
+    } catch {
+      /* 找不到图标就用默认的 */
+    }
+  }
 
   // 剪贴板历史 + 截图：均复用主窗口的 preload；快捷键统一注册。
   const winOpts = {
@@ -331,13 +353,58 @@ app.whenReady().then(async () => {
   });
   vault = new VaultManager(store, app.getPath("userData"), winOpts, { copyConceal: (t) => clipboard.writeConcealed(t) }, reregisterShortcuts);
   Promise.all([clipboard.init(), screenshot.init(), launcher.init(), vault.init()])
-    .then(() => reregisterShortcuts()) // 就绪后统一注册各自快捷键
+    .then(() => {
+      reregisterShortcuts(); // 就绪后统一注册各自快捷键
+      // 预热高频窗口：截图 / 剪贴板面板。它们的第一次唤起要现场建窗 + 加载页面 + 首帧，
+      // 那一下的卡顿全在这里。空闲时提前把窗建好藏着，之后按快捷键就是纯 show()。
+      setTimeout(() => {
+        screenshot.warmup();
+        clipboard.warmup();
+      }, 1500);
+    })
     .catch((e) => console.error("剪贴板/截图/快捷入口/保险箱初始化失败", e));
 
   // 点 Dock 图标：唤起主窗口（不能靠 getAllWindows().length===0 判断，
   // 剪贴板/截图的隐藏窗口会让它恒 >0）。
   app.on("activate", () => showMainWindow());
 });
+
+
+// ── 设备日志落盘 ────────────────────────────────────────────────────────────
+// 日志此前只存在渲染层内存里：应用一关就没了，出问题也没法回溯（更没法发给别人看）。
+// 现在按天写一个文件到 userData/logs，保留 7 天。
+function logsDir(): string {
+  return path.join(app.getPath("userData"), "logs");
+}
+function logFileOf(d = new Date()): string {
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  return path.join(logsDir(), `umbra-${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}.log`);
+}
+let logQueue: Promise<void> = Promise.resolve();
+function appendLog(line: string): void {
+  const ts = new Date().toISOString();
+  // 串行追加：并发 appendFile 到同一文件会交错，日志会变得没法读。
+  logQueue = logQueue
+    .then(async () => {
+      await fs.mkdir(logsDir(), { recursive: true });
+      await fs.appendFile(logFileOf(), `[${ts}] ${line}\n`, "utf-8");
+    })
+    .catch(() => undefined);
+}
+// 清掉 7 天前的日志，别无限堆积。
+async function pruneLogs(): Promise<void> {
+  try {
+    const dir = logsDir();
+    const cutoff = Date.now() - 7 * 86400_000;
+    for (const f of await fs.readdir(dir)) {
+      if (!f.startsWith("umbra-") || !f.endsWith(".log")) continue;
+      const st = await fs.stat(path.join(dir, f)).catch(() => null);
+      if (st && st.mtimeMs < cutoff) await fs.rm(path.join(dir, f), { force: true });
+    }
+  } catch {
+    /* 目录还不存在 */
+  }
+}
 
 // 显式退出前置标记，让 close 处理器放行真正销毁。
 app.on("before-quit", () => {
