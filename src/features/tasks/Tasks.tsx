@@ -26,6 +26,7 @@ const STATUS_KEYS: Record<string, [string, Kind]> = {
   done: ["tasks.statusDone", "ok"],
   running: ["tasks.statusRunning", "run"],
   pending: ["tasks.statusPending", "wait"],
+  suspended: ["tasks.statusSuspended", "wait"],
   failed: ["tasks.statusFailed", "fail"],
   cancelled: ["tasks.statusCancelled", "off"],
 };

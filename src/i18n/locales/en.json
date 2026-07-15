@@ -194,6 +194,7 @@
     "statusPending": "Pending",
     "statusFailed": "Failed",
     "statusCancelled": "Cancelled",
+    "statusSuspended": "Suspended",
     "manage": "Manage",
     "selectAll": "Select all",
     "deselectAll": "Deselect all",

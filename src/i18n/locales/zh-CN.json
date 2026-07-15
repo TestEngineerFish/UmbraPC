@@ -194,6 +194,7 @@
     "statusPending": "待执行",
     "statusFailed": "失败",
     "statusCancelled": "已取消",
+    "statusSuspended": "已挂起",
     "manage": "管理",
     "selectAll": "全选",
     "deselectAll": "取消全选",
