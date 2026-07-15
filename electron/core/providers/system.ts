@@ -119,6 +119,19 @@ async function fileSystem(action: string, params: Record<string, any>, cfg: Umbr
     );
     return { entries: rows };
   }
+
+  if (a === "delete_path") {
+    const p = expand(String(params.path || ""));
+    if (!p) throw new Error("缺少 path");
+    // 硬护栏：只允许删除工作区**内部**的目录/文件（且不能是工作区根本身），防 rm -rf 灾难。
+    const worksRoot = path.resolve(expand(cfg.workspacesDir || "~/UmbraWorks"));
+    const target = path.resolve(p);
+    if (target === worksRoot || !target.startsWith(worksRoot + path.sep)) {
+      throw new Error(`只允许删除工作区内（${worksRoot}）的子目录/文件，拒绝：${target}`);
+    }
+    await fs.rm(target, { recursive: true, force: true });
+    return { path: target, deleted: true };
+  }
   throw new Error(`未知 file_system action：${action}`);
 }
 
@@ -334,6 +347,7 @@ const FS_SKILLS: Manifest["skills"] = {
   write_file: { description: "写入文本文件（覆盖）。用于落需求文档等；只允许写工作区(~/UmbraWorks)内", params: { path: "文件路径", content: "文本内容" } },
   upload_file: { description: "上传指定文件到服务端并返回下载链接", params: { path: "文件路径" } },
   list_directory: { description: "列出目录下的条目", params: { path: "目录路径" } },
+  delete_path: { description: "删除工作区内的子目录/文件（移除工作区并清理文件时用；只允许 ~/UmbraWorks 内）", params: { path: "要删除的路径" } },
 };
 const SHOT_SKILLS: Manifest["skills"] = {
   capture: { description: "截取整个屏幕，上传后返回图片链接", params: {} },

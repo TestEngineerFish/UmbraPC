@@ -241,6 +241,66 @@ export async function deleteJobs(ids: string[]): Promise<number> {
   }
 }
 
+// ── 工作区（项目目录）─────────────────────────────────────────────────────────
+export interface Workspace {
+  id: string;
+  name: string;
+  device_id: string;
+  dir: string | null;
+  description: string | null;
+  origin: string; // auto=任务自动建 / manual=手动新增
+  task_count: number;
+  last_goal: string | null;
+  last_active_at: string;
+}
+
+// 工作区列表（可只看某设备的）。
+export async function fetchWorkspaces(deviceId?: string): Promise<Workspace[]> {
+  try {
+    const q = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : "";
+    const r = await fetch(`${getServerUrl()}/workspaces${q}`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch {
+    return [];
+  }
+}
+
+// 手动新增工作区（可自定义路径）。成功返回记录，失败返回 {error}。
+export async function createWorkspace(
+  name: string, deviceId: string, dir?: string, description?: string,
+): Promise<Workspace | { error: string }> {
+  try {
+    const r = await fetch(`${getServerUrl()}/workspaces`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, device_id: deviceId, dir: dir || null, description: description || null }),
+    });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      return { error: (d && d.detail) || `HTTP ${r.status}` };
+    }
+    return await r.json();
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
+// 移除工作区。purge=true 时同时派发设备删除目录内所有文件。
+export async function deleteWorkspace(
+  id: string, purge: boolean,
+): Promise<{ removed: number; purged: boolean; purge_error: string | null } | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/workspaces/${encodeURIComponent(id)}?purge=${purge}`, {
+      method: "DELETE",
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
 // 单个任务详情（子任务 + 事件时间线）。
 export async function fetchJobDetail(id: string): Promise<JobDetail | null> {
   try {
