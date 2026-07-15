@@ -294,6 +294,7 @@ function onMessage(msg: any): void {
       break;
     }
     case "job_update":
+    case "task_update": // 新任务模型（里程碑进度）：复用进度卡，按 done/total 显示
       target = handleJob(msg);
       break;
     case "device_presence": {
@@ -389,17 +390,20 @@ function assistantOf(conv: string): Extract<Block, { kind: "assistant" }> | null
   return b && b.kind === "assistant" ? b : null;
 }
 
-// 返回该 job_update 归属的会话 id（供 onMessage 决定是否刷新/标未读）。
+// 返回该 job_update/task_update 归属的会话 id（供 onMessage 决定是否刷新/标未读）。
 function handleJob(msg: any): string {
-  const id = msg.job_id;
+  const id = msg.job_id || msg.task_id; // 兼容旧 job_update 与新 task_update
   const conv = convOf(msg);
   if (!id) return conv;
   const s = cs(conv);
   const overall = typeof msg.overall === "number" ? msg.overall : msg.status === "done" ? 1 : 0;
   const pct = Math.max(0, Math.min(100, Math.round(overall * 100)));
+  // 新任务：进度按里程碑 done/total，消息尾部标一下。
+  const milestone = typeof msg.steps_total === "number" && msg.steps_total > 0
+    ? `（${msg.steps_done || 0}/${msg.steps_total} 里程碑）` : "";
   let idx = s.jobMap[id];
   if (idx === undefined) {
-    s.blocks.push({ kind: "job", jobId: id, goal: msg.goal || t("chat.task"), pct, status: msg.status || "running", message: msg.message || "" });
+    s.blocks.push({ kind: "job", jobId: id, goal: msg.goal || t("chat.task"), pct, status: msg.status || "running", message: (msg.message || "") + milestone });
     idx = s.blocks.length - 1;
     s.jobMap[id] = idx;
   }
@@ -407,7 +411,7 @@ function handleJob(msg: any): string {
   if (b.kind !== "job") return conv;
   b.pct = pct;
   b.status = msg.status || b.status;
-  b.message = msg.message || b.message;
+  b.message = (msg.message || b.message) + (msg.message ? milestone : "");
   if (msg.agent_state) b.agentState = msg.agent_state;
   if (msg.goal) b.goal = msg.goal;
   b.confirmTaskId = msg.event === "confirm" && msg.needs_confirm ? msg.confirm_task_id : undefined;
