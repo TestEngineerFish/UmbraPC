@@ -190,6 +190,10 @@ function onMessage(raw: string): void {
     case "task_confirm_response":
       window.umbra!.confirmResponse(msg.task_id || "", Boolean(msg.approved));
       break;
+    case "task_cancel":
+      // 服务端 cancel_task：杀掉正在跑这个任务的引擎进程（项目会话保留给同项目的下个任务）。
+      window.umbra!.cancelTask(msg.task_id || "").catch((e) => log(`取消任务异常：${String(e)}`));
+      break;
     case "heartbeat_ack":
       break;
     case "error":

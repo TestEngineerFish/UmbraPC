@@ -1,17 +1,17 @@
 // 代理任务（Agent Task）· 端侧执行体
 //
-// 分层（见 doc/代理任务(Agent Task)-设计草案.md）：
-//   - 服务端持有 Job（句柄、目标、验收标准），只拿 job_id 说话；
-//   - PC 端持有 Session（引擎、工作目录、权限、并发），服务端一概不问；
+// 分层（Phase C：任务·项目解耦，见 doc/服务端重构(Graph+记忆+任务)-设计草案v3.md）：
+//   - 服务端持有 Task（句柄、目标、里程碑），任务**永不重开**；
+//   - PC 端持有**项目会话**（引擎、工作目录、权限、并发），连续性锚在**项目目录**；
 //   - agent（Claude Code / Codex）自己决定实现步骤 —— **PC 不规划，只执行 + 如实上报**。
 //
-// 关键取舍：
-//   1. 工作区是**长期**的（~/UmbraWorks/<名字>），Job 只是对它的一次委托。
-//      「改上次那篇文章」= 新 Job + 老工作区，目录不动，不需要把文件导来导去。
-//   2. 权限闸门**按 job 隔离**：这个任务里点的「总是允许」不会泄漏到别的任务。
-//   3. 同一工作区串行（并行写同一目录必然打架）；不同工作区可并行。
-//   4. 会话空闲太久就收敛，之后重开会话续做——防止陈旧上下文（失败命令、调试噪音）
-//      被反复 --continue 喂回去，污染模型注意力。
+// 关键取舍（相对旧 agent Job 的反转）：
+//   1. 连续性锚在**项目目录**（~/UmbraWorks/<名字>）而不是任务：用户说「改背景色」=
+//      一个**新任务**（agent_run），作用在同一个项目目录上，靠 claude `--continue` 认目录接上上次会话。
+//   2. 权限闸门**按项目隔离**：这个项目里点的「总是允许」只在本项目内有效，不泄漏到别的项目。
+//   3. 同一项目目录串行（并行写同一目录必然打架）；不同项目可并行。
+//   4. 会话空闲太久就收敛，之后新任务会**重开**会话续做（靠目录里的产物 + 提示词），
+//      而不是硬 --continue 一段陈旧上下文，污染模型注意力。
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { killTree, run } from "../shared/util";
@@ -22,20 +22,21 @@ import { availableEngines, enginePath, pickEngine, safeProjectDir } from "./codi
 const ENGINE_BIN: Record<string, string> = { claude: "claude", codex: "codex" };
 
 interface AgentSession {
-  jobId: string;
-  workspace: string;
-  workspaceDir: string;
+  taskId: string; // 当前占用这个项目会话的任务（信息用；连续性锚在项目目录，不锚在任务）
+  workspace: string; // 项目名
+  workspaceDir: string; // 项目目录（连续性锚点）
   engine: string;
   turns: number;
   hasEngineSession: boolean; // 引擎侧是否已有可续的会话（决定用不用 --continue）
-  execAllowed: boolean | null; // 本 job 的执行模式授权：null=还没问过
+  execAllowed: boolean | null; // 本项目的执行模式授权：null=还没问过
   lastActiveAt: number;
   closed: boolean;
-  child?: import("node:child_process").ChildProcess; // 正在跑的引擎进程（收工/退出时要杀掉）
+  child?: import("node:child_process").ChildProcess; // 正在跑的引擎进程（取消/退出时要杀掉）
 }
 
-const sessions = new Map<string, AgentSession>(); // job_id → session
-// 同一工作区串行执行的队列尾（Promise 链）+ 是否有在跑的一轮（用于「排队中」提示）。
+// key = 项目目录（workspaceDir）。连续性锚在项目，一个项目一个会话，跨任务复用。
+const sessions = new Map<string, AgentSession>();
+// 同一项目目录串行执行的队列尾（Promise 链）+ 是否有在跑的一轮（用于「排队中」提示）。
 const workspaceQueue = new Map<string, Promise<unknown>>();
 const workspaceBusy = new Set<string>();
 
@@ -199,8 +200,8 @@ async function runTurn(
     else {
       await report("等待用户授权执行模式…", { progress: 0.05 });
       s.execAllowed = await confirm(
-        `任务「${s.workspace}」需要用 ${s.engine} 的执行模式（可能运行命令 / 装依赖 / 联网）。仅本任务内有效。`,
-        { engine: s.engine, workspace: s.workspace, workspace_dir: s.workspaceDir, job_id: s.jobId },
+        `项目「${s.workspace}」需要用 ${s.engine} 的执行模式（可能运行命令 / 装依赖 / 联网）。仅本项目内有效。`,
+        { engine: s.engine, workspace: s.workspace, workspace_dir: s.workspaceDir, task_id: s.taskId },
       );
     }
   }
@@ -273,9 +274,9 @@ async function runTurn(
     throw new Error(`${s.engine} 执行失败（exit=${res.code}）：${summary.slice(-300)}`);
   }
 
-  await report("这一轮完成 ✅", { progress: 1.0 });
+  await report("完成 ✅", { progress: 1.0 });
   return {
-    job_id: s.jobId,
+    task_id: s.taskId,
     turn: s.turns,
     engine: s.engine,
     exec_mode: execMode,
@@ -284,105 +285,88 @@ async function runTurn(
     changed_files: changed,
     file_count: changed.length,
     summary,
-    suggested_verify: parseVerify(output), // verify 由 agent 提议，PC 执行（Phase 2）
+    suggested_verify: parseVerify(output), // verify 由 agent 提议，PC 执行（验收，C6）
     exit_code: res.code,
-    agent_state: "idle", // 一轮结束 ≠ 任务结束：停在这里等你追问或收工
   };
 }
 
-// 空闲太久就收敛会话：之后再追问会**重开**会话（带着工作区里的产物续做），
+// 空闲太久就收敛会话：之后的新任务会**重开**会话（带着项目目录里的产物续做），
 // 而不是硬 --continue 一段陈旧上下文。
 function reapIdle(cfg: UmbraConfig): void {
   if (!cfg.agentIdleCloseMin) return;
   const ttl = cfg.agentIdleCloseMin * 60_000;
   const now = Date.now();
-  for (const [jobId, s] of sessions) {
+  for (const [dir, s] of sessions) {
     if (!s.closed && now - s.lastActiveAt > ttl) s.hasEngineSession = false;
-    if (s.closed && now - s.lastActiveAt > ttl) sessions.delete(jobId);
+    if (s.closed && now - s.lastActiveAt > ttl) sessions.delete(dir);
   }
 }
 
 // ── 技能 ────────────────────────────────────────────────────────────────────
-async function agentStart(
+// agent_run：跑一个任务（写程序/写文章）。连续性锚在**项目目录**——
+// 同一个项目上的**新任务**会复用该目录的会话并 --continue，接上上次的上下文。
+// 这取代了旧的 agent_start/agent_continue：任务永不重开，「改需求」就是一个新的 agent_run。
+async function agentRun(
   params: Record<string, unknown>,
   cfg: UmbraConfig,
   report: Report,
   confirm: Confirm,
 ): Promise<unknown> {
-  const jobId = String(params.job_id || "").trim();
+  const taskId = String(params.task_id || "").trim();
   const goal = String(params.goal || "").trim();
-  const workspace = String(params.workspace || "").trim() || "未命名";
-  if (!jobId) throw new Error("缺少 job_id");
+  const project = String(params.project || "").trim() || "未命名";
   if (!goal) throw new Error("缺少 goal（这次要干什么）");
 
   const engines = availableEngines(cfg);
-  const engine = pickEngine(params.engine ? String(params.engine) : undefined, engines);
-  const workspaceDir = workspaceDirOf(cfg, workspace);
+  const workspaceDir = workspaceDirOf(cfg, project);
 
-  const s: AgentSession = {
-    jobId,
-    workspace,
-    workspaceDir,
-    engine,
-    turns: 0,
-    hasEngineSession: false,
-    execAllowed: null,
-    lastActiveAt: Date.now(),
-    closed: false,
-  };
-  sessions.set(jobId, s);
-  reapIdle(cfg);
-
-  // 先报一声「已受理」——排队/授权都可能让第一条实质进度迟迟不来，
-  // 服务端时间线上必须先有一条，否则「没收到任务」和「收到但卡住」长得一模一样。
-  await report(`已受理：${engine} @ ${workspaceDir}`, { progress: 0.05 });
-
-  // 同一工作区串行（并行写同一目录必然打架）
-  return enqueue(workspaceDir, cfg.agentTurnTimeout * 1000, report, () =>
-    runTurn(s, goal, params.spec_path ? String(params.spec_path) : undefined, cfg, report, confirm),
-  );
-}
-
-async function agentContinue(
-  params: Record<string, unknown>,
-  cfg: UmbraConfig,
-  report: Report,
-  confirm: Confirm,
-): Promise<unknown> {
-  const jobId = String(params.job_id || "").trim();
-  const message = String(params.message || "").trim();
-  if (!jobId) throw new Error("缺少 job_id");
-  if (!message) throw new Error("缺少 message（要改什么）");
-
-  let s = sessions.get(jobId);
+  // 复用/新建**该项目目录**的会话（连续性锚在项目）。已有会话 → 这次任务会 --continue 接上。
+  let s = sessions.get(workspaceDir);
   if (!s || s.closed) {
-    // 会话没了（进程重启 / 已收敛）→ 用工作区里的产物重开一个，续着做。
-    const workspace = String(params.workspace || (s ? s.workspace : "")).trim();
-    if (!workspace) throw new Error(`任务 ${jobId} 的会话已不存在，且没有工作区信息，无法续做`);
-    const engines = availableEngines(cfg);
     s = {
-      jobId,
-      workspace,
-      workspaceDir: workspaceDirOf(cfg, workspace),
-      engine: pickEngine(undefined, engines),
+      taskId,
+      workspace: project,
+      workspaceDir,
+      engine: pickEngine(params.engine ? String(params.engine) : undefined, engines),
       turns: 0,
-      hasEngineSession: false, // 重开：不 --continue，靠目录里的产物 + 提示词续
+      hasEngineSession: false,
       execAllowed: null,
       lastActiveAt: Date.now(),
       closed: false,
     };
-    sessions.set(jobId, s);
+    sessions.set(workspaceDir, s);
+  } else {
+    s.taskId = taskId; // 换成当前任务（信息用）
   }
-
   const session = s;
-  const body = session.hasEngineSession
-    ? message
-    : `接着这个目录里已有的工作继续（先看一眼现有文件了解上下文）：\n\n${message}`;
+  reapIdle(cfg);
 
-  await report(`已受理追问：${session.engine} @ ${session.workspaceDir}`, { progress: 0.05 });
-  return enqueue(session.workspaceDir, cfg.agentTurnTimeout * 1000, report, () =>
+  // body：项目会话已建（--continue 会接上）→ 直接给目标；否则若目录里已有产物，
+  // 提示先看现有文件了解上下文（重开会话时靠产物 + 提示词续，不丢工作）。
+  const dirHasContent = await hasContent(workspaceDir);
+  const body =
+    session.hasEngineSession || !dirHasContent
+      ? goal
+      : `接着这个项目目录里已有的工作继续（先看一眼现有文件了解上下文）：\n\n${goal}`;
+
+  // 先报一声「已受理」——排队/授权都可能让第一条实质进度迟迟不来，
+  // 服务端时间线上必须先有一条，否则「没收到任务」和「收到但卡住」长得一模一样。
+  await report(`已受理：${session.engine} @ ${workspaceDir}`, { progress: 0.05 });
+
+  // 同一项目目录串行（并行写同一目录必然打架）
+  return enqueue(workspaceDir, cfg.agentTurnTimeout * 1000, report, () =>
     runTurn(session, body, params.spec_path ? String(params.spec_path) : undefined, cfg, report, confirm),
   );
+}
+
+// 目录是否已有产物（决定新会话要不要提示 agent 先看现有文件）。
+async function hasContent(dir: string): Promise<boolean> {
+  try {
+    const entries = await fs.readdir(dir);
+    return entries.some((e) => e !== ".git" && !e.startsWith("."));
+  } catch {
+    return false; // 目录不存在 = 全新项目
+  }
 }
 
 // 验收用：在工作区里跑一条「能自动判定没写坏」的命令（npm run build / pytest …）。
@@ -419,17 +403,21 @@ async function agentVerify(
   };
 }
 
-async function agentStop(params: Record<string, unknown>): Promise<unknown> {
-  const jobId = String(params.job_id || "").trim();
-  const s = sessions.get(jobId);
-  if (s) {
-    s.closed = true;
-    s.hasEngineSession = false;
-    s.execAllowed = null; // 本任务的授权随任务一起作废（不泄漏到别的任务）
-    s.lastActiveAt = Date.now();
-    killChild(s); // 还在跑就杀掉——否则会留下孤儿进程，把这个工作区的队列永久堵死
+// 取消一个任务：服务端的 cancel_task 会给设备发 {type:"task_cancel", task_id}，
+// 设备层收到后调本函数，把正在跑这个任务的项目会话的引擎进程杀掉（否则孤儿进程会堵死队列）。
+// 注意：只杀进程、不删项目会话——项目目录连续性还要留给同项目的下一个任务。
+export function cancelAgentTask(taskId: string): boolean {
+  const tid = (taskId || "").trim();
+  if (!tid) return false;
+  let hit = false;
+  for (const s of sessions.values()) {
+    if (s.taskId === tid && s.child) {
+      killChild(s);
+      s.hasEngineSession = false; // 被中途打断，下次重开会话更稳妥
+      hit = true;
+    }
   }
-  return { job_id: jobId, agent_state: "closed" };
+  return hit;
 }
 
 function killChild(s: AgentSession): void {
@@ -446,21 +434,19 @@ export function killAllAgentChildren(): void {
 
 // ── 注册 ────────────────────────────────────────────────────────────────────
 const SKILLS: Manifest["skills"] = {
-  agent_start: {
-    description: "开一个可追问的长任务（写程序/写文章），在工作区里干活；一轮结束不代表任务结束",
-    params: { job_id: "任务句柄（服务端给）", goal: "这次的目标", workspace: "工作区名（长期目录）", spec_path: "需求文档路径（可选）" },
-  },
-  agent_continue: {
-    description: "把追问/修改意见送进同一个任务（保留上下文，不从零重来）",
-    params: { job_id: "任务句柄", message: "要改什么" },
-  },
-  agent_stop: {
-    description: "收工：结束这个任务的会话（工作区保留，以后可以再委托）",
-    params: { job_id: "任务句柄" },
+  agent_run: {
+    description: "跑一个任务（写程序/写文章）：在项目目录里干活。同一项目的新任务会 --continue 接上上次上下文；任务永不重开",
+    params: {
+      task_id: "任务句柄（服务端给，信息用）",
+      goal: "这次的目标",
+      project: "项目名（=长期目录，同项目复用同一个名字接上上下文）",
+      project_dir: "项目绝对目录（可选，服务端已知时给）",
+      spec_path: "需求文档路径（可选）",
+    },
   },
   verify: {
-    description: "在工作区里跑一条验证命令（npm run build / pytest），返回 exit_code 与输出尾部；只判断有没有写坏",
-    params: { workspace: "工作区名", command: "要跑的命令（由 agent 自己提议）" },
+    description: "在项目目录里跑一条验证命令（npm run build / pytest），返回 exit_code 与输出尾部；只判断有没有写坏",
+    params: { workspace: "项目名", command: "要跑的命令（由 agent 自己提议）" },
   },
 };
 
@@ -482,18 +468,16 @@ export function registerAgent(r: Registry, cfg: UmbraConfig): void {
   };
   r.register(manifest, async (skill, params, report, confirm) => {
     if (!cfg.codingEnabled) throw new Error("coding 能力已禁用");
-    if (skill === "agent_start") return agentStart(params, cfg, report, confirm);
-    if (skill === "agent_continue") return agentContinue(params, cfg, report, confirm);
-    if (skill === "agent_stop") return agentStop(params);
+    if (skill === "agent_run") return agentRun(params, cfg, report, confirm);
     if (skill === "verify") return agentVerify(params, cfg, report);
     throw new Error(`agent 不支持技能：${skill}`);
   });
 }
 
-// 供设置页/调试用：当前活跃的代理会话。
-export function agentSessions(): Array<{ jobId: string; workspace: string; turns: number; closed: boolean }> {
+// 供设置页/调试用：当前活跃的项目会话。
+export function agentSessions(): Array<{ taskId: string; workspace: string; turns: number; closed: boolean }> {
   return [...sessions.values()].map((s) => ({
-    jobId: s.jobId,
+    taskId: s.taskId,
     workspace: s.workspace,
     turns: s.turns,
     closed: s.closed,

@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("umbra", {
   runTask: (taskId: string, provider: string, skill: string, params: Record<string, unknown>) =>
     ipcRenderer.invoke("umbra:runTask", taskId, provider, skill, params),
   confirmResponse: (taskId: string, approved: boolean) => ipcRenderer.invoke("umbra:confirmResponse", taskId, approved),
+  cancelTask: (taskId: string) => ipcRenderer.invoke("umbra:cancelTask", taskId),
 
   // macOS 权限
   getPermissions: () => ipcRenderer.invoke("umbra:getPermissions"),

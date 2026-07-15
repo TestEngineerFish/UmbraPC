@@ -14,7 +14,7 @@ import { ScreenshotManager } from "./core/screenshot";
 import { LauncherManager } from "./core/launcher";
 import { VaultManager } from "./core/vault";
 import { getMainLocale, resolveLocale, setMainLocale } from "./i18n";
-import { killAllAgentChildren } from "./core/providers/agent";
+import { cancelAgentTask, killAllAgentChildren } from "./core/providers/agent";
 
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || "";
 
@@ -227,6 +227,8 @@ function registerIpc(): void {
   ipcMain.handle("umbra:confirmResponse", (_e, taskId: string, approved: boolean) => {
     executor.confirmResponse(taskId, approved);
   });
+  // 服务端 cancel_task → 设备收到 task_cancel → 杀掉正在跑这个任务的引擎进程。
+  ipcMain.handle("umbra:cancelTask", (_e, taskId: string) => cancelAgentTask(taskId));
 
   // macOS 权限：读取真实授权状态。
   ipcMain.handle("umbra:getPermissions", () => {

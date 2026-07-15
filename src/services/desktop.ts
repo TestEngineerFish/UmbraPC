@@ -38,6 +38,7 @@ interface UmbraBridge {
   getProviders(): Promise<ProviderManifest[]>;
   runTask(taskId: string, provider: string, skill: string, params: Record<string, unknown>): Promise<unknown>;
   confirmResponse(taskId: string, approved: boolean): Promise<void>;
+  cancelTask(taskId: string): Promise<boolean>;
   onTaskProgress(cb: (p: { taskId: string; message: string; extra: Record<string, unknown> }) => void): () => void;
   onConfirmRequest(cb: (c: { taskId: string; summary: string; detail: Record<string, unknown> }) => void): () => void;
   getPermissions(): Promise<{ accessibility: boolean; screen: string }>;
