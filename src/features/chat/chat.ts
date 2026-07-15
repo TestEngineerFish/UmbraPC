@@ -74,6 +74,9 @@ let forceScroll = false;
 let loadingOlder = false;
 // 输入草稿：按会话各存一份，切换联系人不串味。
 const drafts: Record<string, string> = {};
+// 三态开关（过渡拐杖）：auto=模型判；chat=强制聊天；execution=强制执行。默认 auto。
+type ChatMode = "auto" | "chat" | "execution";
+let chatMode: ChatMode = "auto";
 // 正在清空历史：清空期间禁发消息，避免新消息被服务端的会话重置一起删掉。
 let clearing = false;
 
@@ -755,7 +758,8 @@ function refreshComposer(): void {
   if (!wrap.querySelector("#draft")) {
     wrap.innerHTML = `
       <div id="uoffline"></div>
-      <div style="display:flex;gap:10px;align-items:flex-end;padding:12px 16px;">
+      <div id="umodebar" style="display:flex;gap:6px;align-items:center;padding:8px 16px 0;"></div>
+      <div style="display:flex;gap:10px;align-items:flex-end;padding:10px 16px 12px;">
         <textarea id="draft" rows="2" style="flex:1;resize:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;padding:9px 12px;font-size:13.5px;line-height:1.5;font-family:inherit;outline:none;max-height:120px;"></textarea>
         <button id="sendbtn" style="flex:none;display:flex;align-items:center;gap:6px;padding:9px 16px;height:40px;background:var(--orange);color:#fff;border:none;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;align-self:center;">${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
       </div>`;
@@ -766,7 +770,15 @@ function refreshComposer(): void {
       if (e.isComposing || e.keyCode === 229) return;
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
     });
+    // 三态开关（自动/聊天/执行）：点选即切，只对本端后续发送生效。
+    wrap.querySelector("#umodebar")!.addEventListener("click", (e) => {
+      const el = (e.target as HTMLElement).closest("[data-mode]") as HTMLElement | null;
+      if (!el) return;
+      chatMode = (el.dataset.mode as ChatMode) || "auto";
+      renderModeBar(wrap);
+    });
   }
+  renderModeBar(wrap);
   const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
   ta.placeholder = ph;
   if (ta.value !== (drafts[activeConv] || "")) ta.value = drafts[activeConv] || "";
@@ -775,6 +787,23 @@ function refreshComposer(): void {
     d && !d.online
       ? `<div style="display:flex;align-items:center;gap:7px;padding:8px 16px 0;font-size:11.5px;color:var(--muted);"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><circle cx="12" cy="12" r="9"></circle></svg><span>${esc(t("chat.deviceOfflineHint"))}</span></div>`
       : "";
+}
+
+// 渲染「自动/聊天/执行」三态切换条（当前项高亮）。仅主会话显示（设备会话语义不同）。
+function renderModeBar(wrap: HTMLElement): void {
+  const bar = wrap.querySelector("#umodebar") as HTMLElement | null;
+  if (!bar) return;
+  if (activeConv !== MAIN) { bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  const items: Array<[ChatMode, string]> = [
+    ["auto", t("chat.modeAuto")], ["chat", t("chat.modeChat")], ["execution", t("chat.modeExec")],
+  ];
+  bar.innerHTML =
+    `<span style="font-size:11px;color:var(--muted);margin-right:2px;">${esc(t("chat.modeLabel"))}</span>` +
+    items.map(([m, label]) => {
+      const on = chatMode === m;
+      return `<button data-mode="${m}" style="padding:3px 10px;border-radius:999px;font-size:11.5px;cursor:pointer;border:1px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange-soft,rgba(255,140,0,.12))" : "transparent"};color:${on ? "var(--orange-text,var(--orange))" : "var(--muted)"};">${esc(label)}</button>`;
+    }).join("");
 }
 
 function send(): void {
@@ -802,7 +831,9 @@ function sendTo(conv: string, text: string): void {
   s.assistantIdx = s.blocks.length - 1;
   s.lastText = t2;
   s.lastAt = now;
-  if (!chatConn.sendMessage(t2, operateAutoApprove(), conv)) {
+  // 三态开关只对主会话生效（设备会话有自己的「目标设备」上下文语义）。
+  const mode = conv === MAIN ? chatMode : "auto";
+  if (!chatConn.sendMessage(t2, operateAutoApprove(), conv, mode)) {
     s.blocks.push({ kind: "error", text: t("chat.notConnected") });
     s.assistantIdx = null;
   }

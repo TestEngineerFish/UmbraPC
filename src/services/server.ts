@@ -427,10 +427,11 @@ class ChatConnection {
 
   // conversation：'assistant' 主会话；'device:<id>' = 在某台设备的聊天窗口里说话
   //（服务端会把「目标设备=这台」作为上下文，端侧任务直接派给它）。
-  sendMessage(content: string, autoApproveOperate = false, conversation = "assistant"): boolean {
+  // mode：三态开关 auto/chat/execution（输入框旁的「自动/聊天/执行」切换）。
+  sendMessage(content: string, autoApproveOperate = false, conversation = "assistant", mode = "auto"): boolean {
     return this.rawSend({
       type: "message", content, client_id: getClientId(),
-      auto_approve_operate: autoApproveOperate, conversation,
+      auto_approve_operate: autoApproveOperate, conversation, mode,
     });
   }
 
