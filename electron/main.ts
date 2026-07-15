@@ -254,6 +254,17 @@ function registerIpc(): void {
     await shell.openPath(file);
     return file;
   });
+  // 工作区「打开位置」：在 Finder/资源管理器里打开该目录（~ 展开为家目录）。
+  // 返回 "" 表示成功；非空为错误信息（目录不存在等）。
+  ipcMain.handle("umbra:openPath", async (_e, p: string) => {
+    let target = String(p || "").trim();
+    if (!target) return "empty";
+    if (target === "~" || target.startsWith("~/")) {
+      target = path.join(app.getPath("home"), target.slice(1));
+    }
+    return await shell.openPath(target);
+  });
+
   // 渲染层（设备传输层）把每条日志也写进文件。
   ipcMain.handle("umbra:appendLog", (_e, line: string) => {
     appendLog(String(line || ""));

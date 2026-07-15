@@ -49,6 +49,12 @@ export function Workspaces() {
     load();
   }
 
+  async function openFolder(dir: string) {
+    if (!window.umbra) { setErr(t("workspaces.openNonDesktop")); return; }
+    const res = await window.umbra.openPath(dir);
+    if (res) setErr(t("workspaces.openFailed", { reason: res }));  // "" = 成功；非空 = 错误
+  }
+
   async function doRemove() {
     if (!removing) return;
     setBusy(true);
@@ -115,12 +121,23 @@ export function Workspaces() {
                     {w.origin === "manual" ? t("workspaces.originManual") : t("workspaces.originAuto")}
                   </span>
                 </div>
-                <button onClick={() => { setRemoving(w); setPurge(false); }} className="text-danger text-[12px] shrink-0">
-                  {t("workspaces.remove")}
-                </button>
+                <div className="flex items-center gap-3 shrink-0">
+                  {w.dir ? (
+                    <button onClick={() => openFolder(w.dir!)} className="text-orange-text text-[12px]">
+                      {t("workspaces.openFolder")}
+                    </button>
+                  ) : null}
+                  <button onClick={() => { setRemoving(w); setPurge(false); }} className="text-danger text-[12px]">
+                    {t("workspaces.remove")}
+                  </button>
+                </div>
               </div>
-              {w.dir ? <div className="mt-1 font-mono text-[11.5px] text-muted break-all">{w.dir}</div>
-                : <div className="mt-1 text-[11.5px] text-muted">{t("workspaces.pathPending")}</div>}
+              {w.dir ? (
+                <button onClick={() => openFolder(w.dir!)} title={t("workspaces.openFolder")}
+                  className="mt-1 font-mono text-[11.5px] text-muted break-all text-left hover:text-orange-text cursor-pointer">
+                  {w.dir}
+                </button>
+              ) : <div className="mt-1 text-[11.5px] text-muted">{t("workspaces.pathPending")}</div>}
               {w.description ? <div className="mt-1.5 text-[12.5px] text-text">{w.description}</div> : null}
               <div className="mt-1.5 text-[11.5px] text-muted">
                 {t("workspaces.taskCount", { count: w.task_count })}

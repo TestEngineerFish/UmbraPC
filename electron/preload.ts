@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld("umbra", {
   // macOS 权限
   getPermissions: () => ipcRenderer.invoke("umbra:getPermissions"),
   openPrivacy: (target: string) => ipcRenderer.invoke("umbra:openPrivacy", target),
+  openPath: (path: string) => ipcRenderer.invoke("umbra:openPath", path),
   // computer-use 紧急停止
   computerStop: () => ipcRenderer.invoke("umbra:computerStop"),
   // 录制快捷键期间暂停/恢复全局快捷键

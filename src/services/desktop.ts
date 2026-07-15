@@ -43,6 +43,7 @@ interface UmbraBridge {
   onConfirmRequest(cb: (c: { taskId: string; summary: string; detail: Record<string, unknown> }) => void): () => void;
   getPermissions(): Promise<{ accessibility: boolean; screen: string }>;
   openPrivacy(target: string): Promise<unknown>;
+  openPath(path: string): Promise<string>;
   computerStop(): Promise<unknown>;
   pauseShortcuts(): Promise<void>;
   resumeShortcuts(): Promise<void>;
