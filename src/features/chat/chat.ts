@@ -20,6 +20,7 @@ import {
   type KnownDevice,
 } from "../../services/server";
 import { getDesktopConfig } from "../../services/desktop";
+import { mdToHtml } from "./markdown";
 import { t } from "../../i18n";
 
 type Block =
@@ -434,8 +435,11 @@ function handleJob(msg: any): string {
 function imageHtml(url: string): string {
   return `<img data-img="${esc(url)}" src="${esc(url)}" alt="${esc(t("chat.imageAlt"))}" style="display:block;margin-top:8px;max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;" onerror="this.remove()">`;
 }
+// 秘书回复按 Markdown 渲染（AI 输出经常是 md 格式，纯文本很难读）；
+// mdToHtml 内部先整体转义再转换，注入的 HTML 只会当普通文字显示。
+// 图片链接仍沿用旧逻辑：扫原文里的图片 URL，气泡尾部追加预览图。
 function assistantBody(text: string): string {
-  let html = esc(text);
+  let html = mdToHtml(text);
   const urls = (text || "").match(/https?:\/\/[^\s)]+/g) || [];
   for (const u of urls) if (isImageUrl(u)) html += imageHtml(u);
   return html;
@@ -478,7 +482,9 @@ function blockHtml(b: Block, i: number): string {
           ${b.traceOpen ? `<div style="background:var(--track);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.85;color:var(--muted);">${b.trace.map((t) => `<div>${esc(t)}</div>`).join("")}</div>` : ""}
         </div>`
       : "";
-    const bubble = `<div style="align-self:flex-start;max-width:80%;background:var(--card);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.6;min-height:20px;white-space:pre-wrap;">${b.thinking ? dots : ""}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
+    // 注意：这里不能用 white-space:pre-wrap —— Markdown 渲染已把换行转成块/段落/<br>，
+    // 再 pre-wrap 会把 md 源码里的换行重复显示成大片空白。
+    const bubble = `<div style="align-self:flex-start;max-width:80%;background:var(--card);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.6;min-height:20px;overflow-wrap:break-word;">${b.thinking ? dots : ""}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
     return trace + bubble + (b.streaming ? "" : timeLine(b.ts, "flex-start"));
   }
 

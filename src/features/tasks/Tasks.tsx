@@ -178,6 +178,9 @@ function TaskRow({
   const failed = job.status === "failed";
   const sub = job.result_summary ? job.result_summary.slice(0, 70) : job.channel ? t("tasks.fromChannel", { channel: job.channel }) : "";
   const running = job.status === "running" || job.status === "pending";
+  // 进度条按真实里程碑进度（steps_done/steps_total，新任务模型的 /jobs 列表自带）；
+  // 旧 Job 行没有这两个字段 → 不显示进度条（之前写死 38% 宽度是假进度，误导）。
+  const pct = job.steps_total ? Math.round(((job.steps_done || 0) / job.steps_total) * 100) : null;
   return (
     <div onClick={onOpen} className={`bg-card border rounded-xl p-[13px_16px] cursor-pointer ${(active && !selectMode) || checked ? "border-orange" : "border-border"}`}>
       <div className="flex items-center gap-[14px]">
@@ -195,9 +198,9 @@ function TaskRow({
           {legacy.fmtListTime(job.updated_at)}
         </span>
       </div>
-      {running ? (
+      {running && pct !== null ? (
         <div className="h-[3px] rounded-full bg-track overflow-hidden mt-[9px]">
-          <div className="h-full w-[38%] bg-orange rounded-full" />
+          <div className="h-full bg-orange rounded-full" style={{ width: `${pct}%` }} />
         </div>
       ) : null}
     </div>

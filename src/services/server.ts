@@ -189,6 +189,11 @@ export interface Job {
   // idle = 干完一轮、**等你确认**（改还是收工）——这才是它真实的状态，不是「执行中」。
   kind?: string;
   agent_state?: string | null;
+  // 新任务模型（tasks 表）在 /jobs 列表里附带的里程碑进度：done/total。
+  // 旧 Job 行没有这两个字段 → 列表行不显示进度条（显示不准不如不显示）。
+  steps_total?: number;
+  steps_done?: number;
+  is_task?: boolean;
 }
 export interface Subtask {
   id: string;
