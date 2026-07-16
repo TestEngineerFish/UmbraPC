@@ -555,8 +555,14 @@ function questionCardHtml(b: Extract<Block, { kind: "question" }>, i: number): s
       </button>`;
     })
     .join("");
+  // 自定义答案与选项**同款同列**：渲染成列表里的最后一行（铅笔图标 + 行内输入框），
+  // 不再是独立杵在下面的输入区块——它和选项是同一层意思（多一种可选答案）。
+  const customOn = (b.custom[q.id] || "").trim().length > 0;
   const custom = q.allow_custom || q.options.length === 0
-    ? `<input data-qcustom="${i}" value="${esc(b.custom[q.id] || "")}" placeholder="${esc(q.options.length ? t("chat.questionCustom") : t("chat.questionAnswer"))}" style="width:100%;box-sizing:border-box;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:9px;padding:9px 12px;font-size:13px;outline:none;" />`
+    ? `<div style="display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;padding:0 12px;margin-bottom:6px;border-radius:9px;border:1px solid ${customOn ? "var(--orange)" : "var(--border)"};background:${customOn ? "var(--orange-soft)" : "var(--bg)"};">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="${customOn ? "var(--orange-text)" : "var(--muted)"}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"></path></svg>
+        <input data-qcustom="${i}" value="${esc(b.custom[q.id] || "")}" placeholder="${esc(q.options.length ? t("chat.questionCustom") : t("chat.questionAnswer"))}" style="flex:1;min-width:0;border:none;background:transparent;color:${customOn ? "var(--orange-text)" : "var(--text)"};padding:9px 0;font-size:13px;outline:none;" />
+      </div>`
     : "";
   const last = b.at >= total - 1;
   const answered = sel.length > 0 || (b.custom[q.id] || "").trim().length > 0;
