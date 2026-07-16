@@ -334,6 +334,8 @@
     "viewResults": "View results",
     "newSession": "New chat",
     "clearHistory": "Clear chat",
+    "copyHistory": "Copy chat",
+    "copiedHistory": "Copied",
     "clearConfirm": "Clear your chat history with the Secretary? This cannot be undone (device conversations are unaffected).",
     "clearConfirmDevice": "Clear the conversation record for \"{{name}}\"? This cannot be undone.",
     "send": "Send",

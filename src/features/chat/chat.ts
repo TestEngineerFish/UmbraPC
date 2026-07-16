@@ -653,8 +653,10 @@ function renderHeader(): void {
     </div>
     <div style="display:flex;align-items:center;gap:8px;flex:none;">
       ${info}
+      <button id="copychat" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:${chatCopied ? "var(--success)" : "var(--text)"};border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>${esc(chatCopied ? t("chat.copiedHistory") : t("chat.copyHistory"))}</button>
       <button id="clearhist" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path></svg>${esc(t("chat.clearHistory"))}</button>
     </div>`;
+  el.querySelector("#copychat")?.addEventListener("click", copyActiveHistory);
   el.querySelector("#clearhist")?.addEventListener("click", clearActiveHistory);
   el.querySelector("#udetailbtn")?.addEventListener("click", () => {
     detailOpen = !detailOpen;
@@ -869,6 +871,49 @@ function switchConv(id: string): void {
   renderDetail();
   renderMessages();
   if (!s.loaded) loadConvHistory(id);
+}
+
+// 「复制聊天」按钮的短暂反馈状态（复制成功后 1.5s 内显示「已复制」）。
+let chatCopied = false;
+
+// 把当前会话序列化成纯文本（消息 + 各类卡片状态），一键复制——方便整段发出去排查问题。
+function conversationToText(convId: string): string {
+  const s = cs(convId);
+  const lines: string[] = [`【会话】${convLabel(convId)}　导出时间 ${new Date().toLocaleString()}`, ""];
+  for (const b of s.blocks) {
+    if (b.kind === "user") lines.push(`[我] ${b.text}`, "");
+    else if (b.kind === "assistant") {
+      if (b.trace.length) lines.push("[工具轨迹]", ...b.trace.map((x) => `  ${x}`));
+      if (b.text) lines.push(`[秘书] ${b.text}`);
+      lines.push("");
+    } else if (b.kind === "device") lines.push(`[设备] ${b.text}`, "");
+    else if (b.kind === "job") {
+      lines.push(`[任务卡] ${b.goal}（${Math.round((b.pct || 0) * 100)}%，${b.status}）${b.message || ""}`, "");
+    } else if (b.kind === "done") {
+      const urls = (b.results || []).map((r) => r.url).filter(Boolean).join(" ");
+      lines.push(`[任务完成] ${b.goal}${urls ? `　产物：${urls}` : ""}`, "");
+    } else if (b.kind === "confirm") {
+      lines.push(`[确认卡] ${b.summary}${b.resolved ? `（${b.resolved === "approved" ? "已批准" : "已拒绝"}）` : "（待确认）"}`, "");
+    } else if (b.kind === "question") {
+      lines.push(`[问答卡] ${b.title}${b.done ? "（已提交）" : "（待回答）"}`, "");
+    }
+  }
+  return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+// 复制当前会话历史到剪贴板，按钮短暂变「已复制」。
+async function copyActiveHistory(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(conversationToText(activeConv));
+    chatCopied = true;
+    renderHeader();
+    setTimeout(() => {
+      chatCopied = false;
+      renderHeader();
+    }, 1500);
+  } catch {
+    /* 剪贴板不可用（权限/环境）就算了，别打断使用 */
+  }
 }
 
 // 清空【当前会话】历史：先本地立即清空（乐观），再后台调服务端删除。

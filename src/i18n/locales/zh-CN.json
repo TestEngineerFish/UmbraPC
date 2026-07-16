@@ -334,6 +334,8 @@
     "viewResults": "查看结果",
     "newSession": "新会话",
     "clearHistory": "清空聊天",
+    "copyHistory": "复制聊天",
+    "copiedHistory": "已复制",
     "clearConfirm": "确认清空与秘书的聊天历史？此操作不可撤销（设备会话不受影响）。",
     "clearConfirmDevice": "确认清空「{{name}}」设备会话的记录？此操作不可撤销。",
     "send": "发送",
