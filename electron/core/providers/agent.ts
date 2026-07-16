@@ -13,6 +13,7 @@
 //   4. 会话空闲太久就收敛，之后新任务会**重开**会话续做（靠目录里的产物 + 提示词），
 //      而不是硬 --continue 一段陈旧上下文，污染模型注意力。
 import { promises as fs } from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { killTree, run } from "../shared/util";
 import { UmbraConfig } from "../config";
@@ -70,6 +71,20 @@ async function enqueue<T>(key: string, waitMs: number, report: Report, fn: () =>
 export function workspaceDirOf(cfg: UmbraConfig, name: string): string {
   // 复用 safeProjectDir 的路径逃逸防护（拒绝 ../、绝对路径等）。
   return safeProjectDir(cfg.workspacesDir, name);
+}
+
+// 解析本轮的项目目录：优先用服务端下发的 project_dir（workspaces 表里记的、上一轮设备回报的
+// 真实目录）——但必须是本机工作区根的**严格子目录**才认（防逃逸、防脏数据把 agent 引到根目录
+// 或任意路径）；未给或不合法时按项目名在本地工作区根下自算（旧行为）。
+// 这样服务端 read_artifact 读的目录与 agent 实际干活的目录保持一致。
+function resolveWorkspaceDir(cfg: UmbraConfig, project: string, given: unknown): string {
+  const raw = String(given || "").trim();
+  if (!raw) return workspaceDirOf(cfg, project);
+  const expandHome = (p: string) => p.replace(/^~(?=$|\/)/, os.homedir());
+  const root = path.resolve(expandHome(cfg.workspacesDir || "~/UmbraWorks"));
+  const target = path.resolve(expandHome(raw));
+  if (target !== root && target.startsWith(root + path.sep)) return target;
+  return workspaceDirOf(cfg, project); // 根外/等于根的路径不认，退回本地计算
 }
 
 // ── 提示词 ──────────────────────────────────────────────────────────────────
@@ -318,7 +333,8 @@ async function agentRun(
   if (!goal) throw new Error("缺少 goal（这次要干什么）");
 
   const engines = availableEngines(cfg);
-  const workspaceDir = workspaceDirOf(cfg, project);
+  // 目录优先用服务端下发的 project_dir（须在工作区根内），保证两边对同一个目录说话。
+  const workspaceDir = resolveWorkspaceDir(cfg, project, params.project_dir);
 
   // 复用/新建**该项目目录**的会话（连续性锚在项目）。已有会话 → 这次任务会 --continue 接上。
   let s = sessions.get(workspaceDir);
@@ -440,7 +456,7 @@ const SKILLS: Manifest["skills"] = {
       task_id: "任务句柄（服务端给，信息用）",
       goal: "这次的目标",
       project: "项目名（=长期目录，同项目复用同一个名字接上上下文）",
-      project_dir: "项目绝对目录（可选，服务端已知时给）",
+      project_dir: "项目绝对目录（可选；须在本机工作区根内才生效，否则按项目名自算）",
       spec_path: "需求文档路径（可选）",
     },
   },
