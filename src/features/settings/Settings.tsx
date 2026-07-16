@@ -2,7 +2,7 @@
 // 业务逻辑复用 server.ts / desktop.ts 与 main.ts 导出的处理器。
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { chatConn, getServerUrl, getDeviceName, getAutoApproveOperate, setAutoApproveOperate } from "../../services/server";
+import { chatConn, getServerUrl, getDeviceName, getAutoApproveOperate, setAutoApproveOperate, fetchProfile, saveProfile, resetProfile } from "../../services/server";
 import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/locale";
@@ -49,6 +49,62 @@ const btnGhost = "px-[13px] py-[6px] border border-border bg-transparent text-te
 function StatusDot({ kind }: { kind: "online" | "connecting" | "offline" }) {
   const color = kind === "online" ? "bg-success" : kind === "connecting" ? "bg-warning" : "bg-danger";
   return <span className={`w-2 h-2 rounded-full ${color}`} />;
+}
+
+// 用户画像卡：查看/编辑/重置服务端的 user_profile.md（秘书对用户的当前认知快照）。
+// 画像由对话自动沉淀，可能积累错误——这里给用户直接改或一键重置的口子。
+function ProfileCard() {
+  const { t } = useTranslation();
+  const [md, setMd] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      setMd(await fetchProfile());
+      setLoaded(true);
+    })();
+  }, []);
+  const doSave = async () => {
+    setBusy(true);
+    const r = await saveProfile(md);
+    if (r !== null) {
+      setMd(r);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 1500);
+    }
+    setBusy(false);
+  };
+  const doReset = async () => {
+    if (!window.confirm(t("settings.profileResetConfirm"))) return;
+    setBusy(true);
+    const r = await resetProfile();
+    if (r !== null) setMd(r);
+    setBusy(false);
+  };
+  return (
+    <Card title={t("settings.profile")} sub={t("settings.profileHint")}>
+      <textarea
+        value={md}
+        onChange={(e) => setMd(e.target.value)}
+        placeholder={loaded ? "" : "…"}
+        spellCheck={false}
+        className="w-full h-[260px] border border-border bg-bg text-text rounded-lg px-[12px] py-[10px] text-[12.5px] leading-[1.7] outline-none resize-y font-mono"
+      />
+      <div className="flex items-center gap-2 justify-end">
+        <button className={btnGhost} disabled={busy} onClick={doReset} style={{ color: "var(--danger)" }}>
+          {t("settings.profileReset")}
+        </button>
+        <button
+          disabled={busy || !loaded}
+          onClick={doSave}
+          className="px-[16px] py-[6px] rounded-lg text-[12.5px] font-semibold bg-orange text-white cursor-pointer"
+        >
+          {saved ? t("settings.profileSaved") : t("settings.profileSave")}
+        </button>
+      </div>
+    </Card>
+  );
 }
 
 export function Settings() {
@@ -165,6 +221,8 @@ export function Settings() {
             />
           </div>
         </Card>
+
+        <ProfileCard />
 
         {isDesk && cuOn ? (
           <Card title={t("settings.computerAuth")} sub={t("settings.computerAuthSub")}>

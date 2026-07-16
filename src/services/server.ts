@@ -219,6 +219,41 @@ export interface JobDetail {
 }
 
 // 任务列表（最近 limit 条，按更新时间倒序）。
+// ── 用户画像（服务端 data/user_profile.md）：设置页查看/编辑/重置 ─────────────
+export async function fetchProfile(): Promise<string> {
+  try {
+    const r = await fetch(`${getServerUrl()}/profile`);
+    if (!r.ok) return "";
+    return (await r.json()).markdown || "";
+  } catch {
+    return "";
+  }
+}
+// 保存编辑后的画像（整篇覆盖）。返回服务端落盘后的内容；失败返回 null。
+export async function saveProfile(markdown: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/profile`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ markdown }),
+    });
+    if (!r.ok) return null;
+    return (await r.json()).markdown ?? "";
+  } catch {
+    return null;
+  }
+}
+// 重置画像为空白模板（画像积累错误认知时一键清掉）。失败返回 null。
+export async function resetProfile(): Promise<string | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/profile`, { method: "DELETE" });
+    if (!r.ok) return null;
+    return (await r.json()).markdown ?? "";
+  } catch {
+    return null;
+  }
+}
+
 export async function fetchJobs(limit = 30): Promise<Job[]> {
   try {
     const r = await fetch(`${getServerUrl()}/jobs?limit=${limit}`);
