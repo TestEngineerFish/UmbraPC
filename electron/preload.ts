@@ -11,8 +11,15 @@ contextBridge.exposeInMainWorld("umbra", {
   // 设备引擎执行侧（渲染层连 /ws/device，执行交给主进程）
   getRegisterInfo: () => ipcRenderer.invoke("umbra:getRegisterInfo"),
   getProviders: () => ipcRenderer.invoke("umbra:getProviders"),
-  runTask: (taskId: string, provider: string, skill: string, params: Record<string, unknown>) =>
-    ipcRenderer.invoke("umbra:runTask", taskId, provider, skill, params),
+  // runTask 的失败以 {__umbraErr} 结构化返回（主进程不 reject，避免 Electron 刷
+  // "Error occurred in handler" 噪声日志）；这里还原成 throw，渲染层语义不变。
+  runTask: async (taskId: string, provider: string, skill: string, params: Record<string, unknown>) => {
+    const r = await ipcRenderer.invoke("umbra:runTask", taskId, provider, skill, params);
+    if (r && typeof r === "object" && (r as { __umbraErr?: string }).__umbraErr) {
+      throw new Error((r as { __umbraErr: string }).__umbraErr);
+    }
+    return r;
+  },
   confirmResponse: (taskId: string, approved: boolean) => ipcRenderer.invoke("umbra:confirmResponse", taskId, approved),
   cancelTask: (taskId: string) => ipcRenderer.invoke("umbra:cancelTask", taskId),
 

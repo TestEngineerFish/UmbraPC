@@ -988,14 +988,26 @@ export function mount(el: HTMLElement): void {
   });
   const msgsEl = el.querySelector("#umsgs") as HTMLElement;
   msgsEl.addEventListener("click", onMsgsClick);
-  // 问答卡的自定义填空：随敲随存（不重渲染，避免打断输入）
+  // 问答卡的自定义填空：随敲随存（不重渲染，避免打断输入焦点）。
   msgsEl.addEventListener("input", (ev) => {
     const t2 = ev.target as HTMLInputElement;
     if (t2 && t2.dataset && t2.dataset.qcustom !== undefined) {
-      const b = cs(activeConv).blocks[Number(t2.dataset.qcustom)];
+      const i = Number(t2.dataset.qcustom);
+      const b = cs(activeConv).blocks[i];
       if (b && b.kind === "question") {
         const q = b.questions[b.at];
-        if (q) b.custom[q.id] = t2.value;
+        if (q) {
+          b.custom[q.id] = t2.value;
+          // 就地刷新「下一题/提交」按钮的可用态——之前只存值不刷按钮，
+          // 不点选项、直接输入自定义答案时按钮一直是灰的，进不了下一题（实测 bug）。
+          const answered = (b.picked[q.id] || []).length > 0 || t2.value.trim().length > 0;
+          const btn = msgsEl.querySelector(`[data-qnext="${i}"],[data-qsubmit="${i}"]`) as HTMLButtonElement | null;
+          if (btn) {
+            btn.disabled = !answered;
+            btn.style.cursor = answered ? "pointer" : "not-allowed";
+            btn.style.background = answered ? "var(--orange)" : "var(--border)";
+          }
+        }
       }
     }
   });

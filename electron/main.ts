@@ -221,9 +221,16 @@ function registerIpc(): void {
   // 设备引擎（渲染层连 /ws/device）所需：注册信息、Provider 列表、执行、确认。
   ipcMain.handle("umbra:getRegisterInfo", () => executor.getRegisterInfo());
   ipcMain.handle("umbra:getProviders", () => executor.getProviders());
-  ipcMain.handle("umbra:runTask", (_e, taskId: string, provider: string, skill: string, params: Record<string, unknown>) =>
-    executor.runTask(taskId, provider, skill, params),
-  );
+  // runTask 的失败是**正常业务回传**（执行轮探路：目录不存在/文件是二进制…都会失败后换路子），
+  // 不能让 handler 直接 reject——Electron 会把每次 reject 打成吓人的
+  // "Error occurred in handler" 控制台错误。包成 {__umbraErr} 返回，preload 侧再还原成 throw。
+  ipcMain.handle("umbra:runTask", async (_e, taskId: string, provider: string, skill: string, params: Record<string, unknown>) => {
+    try {
+      return await executor.runTask(taskId, provider, skill, params);
+    } catch (err) {
+      return { __umbraErr: err instanceof Error ? err.message : String(err) };
+    }
+  });
   ipcMain.handle("umbra:confirmResponse", (_e, taskId: string, approved: boolean) => {
     executor.confirmResponse(taskId, approved);
   });
