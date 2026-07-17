@@ -129,6 +129,13 @@ async function fileSystem(action: string, params: Record<string, any>, cfg: Umbr
     if (target === worksRoot || !target.startsWith(worksRoot + path.sep)) {
       throw new Error(`只允许删除工作区内（${worksRoot}）的子目录/文件，拒绝：${target}`);
     }
+    // ⚠️ force:true 会把「路径不存在」也吞成成功——上层以为删干净了，实际什么都没发生
+    //（服务端存的路径和真实目录对不上时就是这样，实测踩过）。先探存在性，不存在如实报错。
+    try {
+      await fs.stat(target);
+    } catch {
+      throw new Error(`路径不存在：${target}（可能服务端记录的目录与实际不符）`);
+    }
     await fs.rm(target, { recursive: true, force: true });
     return { path: target, deleted: true };
   }
