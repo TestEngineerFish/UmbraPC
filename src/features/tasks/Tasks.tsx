@@ -190,8 +190,9 @@ function TaskRow({
           </span>
         ) : null}
         <div className="flex-1 min-w-0">
-          <div className="font-medium truncate">{job.goal}</div>
-          <div className={`text-[11.5px] mt-0.5 truncate ${failed ? "text-danger" : "text-muted"}`}>{sub || " "}</div>
+          {/* 标题=短名称 name（没有则回退 goal）；有 name 时把详细描述 goal 放进副行 */}
+          <div className="font-medium truncate">{job.name || job.goal}</div>
+          <div className={`text-[11.5px] mt-0.5 truncate ${failed ? "text-danger" : "text-muted"}`}>{sub || (job.name ? job.goal : " ")}</div>
         </div>
         <Badge status={displayStatus(job)} />
         <span title={job.updated_at || ""} className="text-[12px] text-muted whitespace-nowrap shrink-0">
@@ -251,7 +252,8 @@ function DrawerBody({ d, onClose }: { d: JobDetail; onClose: () => void }) {
     <>
       <div className="flex items-start justify-between gap-2.5 p-[15px_20px] border-b border-border">
         <div className="min-w-0">
-          <div className="font-semibold text-[15px]">{d.job.goal}</div>
+          <div className="font-semibold text-[15px]">{d.job.name || d.job.goal}</div>
+          {d.job.name ? <div className="text-[12px] text-muted mt-0.5">{d.job.goal}</div> : null}
           <div className="mt-[5px]">
             <Badge status={displayStatus(d.job)} />
           </div>

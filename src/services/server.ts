@@ -179,6 +179,8 @@ export function setAutoApproveOperate(v: boolean): void {
 
 export interface Job {
   id: string;
+  // 新任务模型：name=短标题（列表主展示），goal=详细描述（副行）。旧数据 name 为空 → 回退显示 goal。
+  name?: string | null;
   goal: string;
   status: string; // pending/running/done/failed/cancelled
   result_summary?: string | null;
