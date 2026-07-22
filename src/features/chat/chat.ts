@@ -3,7 +3,8 @@
 //
 // 微信式三栏（Phase 3）：
 //   左：联系人列表 —— 秘书 + 所有已知设备（在线绿点 / 离线灰点、最后一条消息、未读点）
-//   中：聊天详情   —— 会话消息 + 输入框（设备会话可直接发送，服务端会把「目标设备=这台」注入上下文）
+//   中：聊天详情   —— 会话消息；输入框**只在主会话（与秘书）显示**，设备会话是
+//                    秘书↔设备交互流水（只读，秘书请求靠左、设备回应靠右）
 //   右：设备详情   —— 点标题栏 ⓘ 展开：平台 / 在线状态 / 最后在线 / 设备 ID / 能力目录（程序→技能）
 //
 // 会话 id：'assistant' = 你↔秘书；'device:<id>' = 与某台设备（含它的编排流）。
@@ -471,8 +472,8 @@ function blockHtml(b: Block, i: number): string {
     return `<div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
 
   if (b.kind === "device") {
-    // 设备上报（服务端↔设备编排流里的“设备”一侧）：靠左、描边气泡区分秘书。
-    return `<div style="align-self:flex-start;max-width:78%;background:var(--track);border:1px dashed var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-start")}`;
+    // 设备发出的消息：在设备聊天窗里，本机（PC）是“自己” → **靠右**显示（秘书的请求靠左）。
+    return `<div style="align-self:flex-end;max-width:78%;background:var(--track);border:1px dashed var(--border);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
   }
 
   if (b.kind === "assistant") {
@@ -762,13 +763,19 @@ function renderMessages(preserve = false): void {
   }
 }
 
-// 输入区：所有会话都可发送；设备会话的占位符点名该设备，离线时给一行提示。
+// 输入区：**只有主会话（与秘书）显示**；设备会话是秘书↔设备的交互流水（只读），
+// 输入区先默认隐藏（以后要支持对设备直接喊话再放开）。
 function refreshComposer(): void {
   if (!container) return;
   const wrap = container.querySelector("#ucomposer") as HTMLElement | null;
   if (!wrap) return;
+  if (activeConv !== MAIN) {
+    wrap.style.display = "none";
+    return;
+  }
+  wrap.style.display = "";
   const d = deviceOf(activeConv);
-  const ph = activeConv === MAIN ? t("chat.placeholder") : t("chat.placeholderDevice", { name: convLabel(activeConv) });
+  const ph = t("chat.placeholder");
   if (!wrap.querySelector("#draft")) {
     wrap.innerHTML = `
       <div id="uoffline"></div>
