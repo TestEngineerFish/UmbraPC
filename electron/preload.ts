@@ -193,6 +193,18 @@ contextBridge.exposeInMainWorld("umbraLarge", {
   },
 });
 
+// 文本视图浮层桥（长文/Markdown/流式追加，工作流的 output.textview 与 ask_assistant 用）。
+contextBridge.exposeInMainWorld("umbraText", {
+  ready: () => ipcRenderer.invoke("textview:ready"),
+  rendered: () => ipcRenderer.invoke("textview:rendered"),
+  close: () => ipcRenderer.invoke("textview:close"),
+  onData: (cb: (p: unknown) => void) => {
+    const l = (_e: unknown, p: unknown) => cb(p);
+    ipcRenderer.on("textview:data", l);
+    return () => ipcRenderer.removeListener("textview:data", l);
+  },
+});
+
 // 截图桥（覆盖窗渲染层与设置页共用）。
 contextBridge.exposeInMainWorld("umbraShot", {
   getCapture: () => ipcRenderer.invoke("screenshot:getCapture"),

@@ -10,10 +10,11 @@ import { writeToClipboard, simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
 import { WorkflowEngine, migrateScriptsToWorkflows, migrateFoldersAndYoudao, seedBuiltinTools, NO_BRANCH } from "./workflow";
+import type { TextViewPayload } from "./workflow";
 
 // ── 结果与动作类型 ──
 export interface LauncherAction {
-  kind: "open_app" | "open_path" | "paste_clip" | "paste_text" | "copy" | "run_script" | "workflow";
+  kind: "open_app" | "open_path" | "paste_clip" | "paste_text" | "copy" | "run_script" | "workflow" | "assistant";
   payload: Record<string, unknown>;
 }
 export interface LauncherResult {
@@ -33,7 +34,6 @@ interface ManagerOpts {
   distDir: string;
 }
 
-const MAX_RESULTS = 12;
 
 export class LauncherManager {
   private panel: Electron.BrowserWindow | null = null;
@@ -48,6 +48,10 @@ export class LauncherManager {
   private largeWin: Electron.BrowserWindow | null = null;  // 大字显示浮层窗
   private pendingLarge = "";  // 大字待显示文本（等渲染层 ready 后发送）
   private largeBounds: Electron.Rectangle | null = null;  // 大字窗目标位置（渲染完成后再显示）
+  private textWin: Electron.BrowserWindow | null = null;   // 文本视图浮层窗（长文/Markdown/流式）
+  private pendingText: TextViewPayload | null = null;      // 文本视图待展示内容（等渲染层 ready 后发送）
+  private textBounds: Electron.Rectangle | null = null;    // 文本视图窗目标位置（渲染完成后再显示）
+  private textLoading = false;                             // 文本视图正在等远程回复：此时失焦不自动收起
 
   constructor(private cfg: ConfigStore, private clipStore: ClipStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
     this.usageFile = path.join(userData, "launcher-usage.json");
@@ -55,6 +59,7 @@ export class LauncherManager {
       sendAssistant: (t) => this.chatSender?.(t),
       hide: (rf) => this.hide(rf),
       showLargeType: (t) => { void this.showLargeType(t); },
+      showTextView: (p) => { void this.showTextView(p); },
     });
   }
 
@@ -192,6 +197,15 @@ export class LauncherManager {
       this.engine.queryAlways(q).catch(() => [] as LauncherResult[]),
     ]);
     results.push(...always, ...this.searchPhrases(q), ...apps, ...clips);
+    // ③ 兜底搜索：什么都没搜到时补一条「问秘书」可执行项（只在有输入且开关打开时）。
+    //    注意这是一条可执行项，不是「最近使用」列表 —— 空结果下不做任何历史回填。
+    if (!results.length && q && this.cfg.get().launcherFallbackAssistant !== false) {
+      results.push({
+        id: `assistant:${q}`, title: `问秘书：${q}`, subtitle: "没有匹配结果 · 回车交给秘书处理",
+        icon: "🤖", source: "assistant", score: 50,
+        action: { kind: "assistant", payload: { text: q } },
+      });
+    }
     return this.finalize(q, results);
   }
 
@@ -222,7 +236,9 @@ export class LauncherManager {
   private finalize(q: string, results: LauncherResult[]): LauncherResult[] {
     for (const r of results) r.score += this.boost(q, r.id);
     results.sort((a, b) => b.score - a.score);
-    const top = results.slice(0, MAX_RESULTS);
+    // 展示条数跟随设置（launcherMaxResults），上限 50 条防止列表失控。
+    const max = Math.max(1, Math.min(Number(this.cfg.get().launcherMaxResults) || 12, 50));
+    const top = results.slice(0, max);
     this.cache.clear();
     for (const r of top) this.cache.set(r.id, r);
     return top;
@@ -357,6 +373,9 @@ export class LauncherManager {
       const fb = await this.engine.run(String(a.payload.token), mod);
       return fb === NO_BRANCH ? "" : fb;  // 无该修饰键分支 → 静默（渲染层已按 mods 决定是否走此路）
     }
+    if (a.kind === "assistant") {
+      return this.sendAssistant(String(a.payload.text || ""));   // 兜底搜索：把原始输入交给秘书
+    }
     if (a.kind === "open_app") {
       await run("open", [String(a.payload.path)]);
       await this.hide(false);
@@ -472,6 +491,19 @@ export class LauncherManager {
       this.largeWin.focus();
     });
     ipcMain.handle("largetype:close", () => { if (this.largeWin && !this.largeWin.isDestroyed()) this.largeWin.hide(); });
+    // 文本视图浮层：同样是「渲染层 ready 索取内容 → 画好回调 rendered → 主进程才显示」，避免闪出上次内容。
+    ipcMain.handle("textview:ready", () => this.pendingText);
+    ipcMain.handle("textview:rendered", () => {
+      if (!this.textWin || this.textWin.isDestroyed()) return;
+      if (this.textWin.isVisible()) return;              // 已经在显示（流式续写）→ 不重复摆位/抢焦点
+      if (this.textBounds) this.textWin.setBounds(this.textBounds);
+      this.textWin.showInactive();
+      this.textWin.focus();
+    });
+    ipcMain.handle("textview:close", () => {
+      this.textLoading = false;
+      if (this.textWin && !this.textWin.isDestroyed()) this.textWin.hide();
+    });
     // 文件/App 图标 → dataURL（工作流编辑器 Launch 列表用）。
     ipcMain.handle("launcher:fileIcon", async (_e, p: string) => {
       try {
@@ -527,6 +559,55 @@ export class LauncherManager {
     } else {
       if (this.largeWin.isVisible()) this.largeWin.hide();  // 先藏起旧内容，等渲染完再显
       this.largeWin.webContents.send("largetype:text", this.pendingLarge);
+    }
+  }
+
+  // 文本视图：居中浮层，用来摊开长文/Markdown（大字显示放不下的场景），也是「问秘书」的等待与展示界面。
+  // 与大字显示同样的去残影范式：窗口先藏着，渲染层画好回调 textview:rendered 再显示。
+  async showTextView(p: TextViewPayload): Promise<void> {
+    const payload: TextViewPayload = {
+      text: String(p.text ?? ""),
+      title: p.title || "文本视图",
+      md: p.md !== false,
+      append: !!p.append,
+      loading: !!p.loading,
+    };
+    this.pendingText = payload;
+    this.textLoading = payload.loading === true;
+    const { BrowserWindow, screen } = await import("electron");
+    const wa = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    const w = Math.min(920, Math.round(wa.width * 0.7));
+    const h = Math.min(720, Math.round(wa.height * 0.7));
+    this.textBounds = {
+      x: Math.round(wa.x + (wa.width - w) / 2),
+      y: Math.round(wa.y + (wa.height - h) / 2),
+      width: w, height: h,
+    };
+    if (!this.textWin || this.textWin.isDestroyed()) {
+      const win = new BrowserWindow({
+        x: this.textBounds.x, y: this.textBounds.y, width: w, height: h,
+        frame: false, transparent: true, resizable: false,
+        skipTaskbar: true, show: false, fullscreenable: false, hasShadow: false,
+        backgroundColor: "#00000000",
+        webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
+      });
+      win.setAlwaysOnTop(true, "screen-saver");
+      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      // 等远程回复期间（loading）失焦不收起，否则内容还没回来窗口就没了。
+      win.on("blur", () => {
+        if (this.textLoading) return;
+        if (this.textWin && !this.textWin.isDestroyed()) this.textWin.hide();
+      });
+      win.webContents.on("before-input-event", (_e, input) => {
+        if (input.type === "keyDown" && input.key === "Escape") { this.textLoading = false; win.hide(); }
+      });
+      if (this.opts.devUrl) win.loadURL(`${this.opts.devUrl}/textview.html`).catch(() => {});
+      else win.loadFile(path.join(this.opts.distDir, "textview.html")).catch(() => {});
+      win.webContents.on("did-finish-load", () => win.webContents.send("textview:data", this.pendingText));
+      this.textWin = win;
+    } else {
+      // 窗口已在 → 直接推新内容（追加=流式续写，否则整体替换），由渲染层就地更新，不闪窗。
+      this.textWin.webContents.send("textview:data", payload);
     }
   }
 

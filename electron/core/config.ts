@@ -47,6 +47,8 @@ export interface UmbraConfig {
   launcherScripts: LauncherScript[]; // 自定义脚本（旧；加载时迁移为工作流）
   phrases: Phrase[];                 // 常用语（快捷入口可搜、回车插入；设置里管理排序）
   launcherWorkflows: Workflow[];     // 工作流编排（类 Alfred Workflow）
+  launcherMaxResults: number;        // 结果列表最多显示几条（同时也是 Script Filter 单次取用上限）
+  launcherFallbackAssistant: boolean; // 兜底搜索：搜不到任何结果时，追加一条「问秘书」可执行项
   launcherScriptsMigrated?: boolean; // 迁移标记：launcherScripts 已转成工作流（幂等）
   launcherMigratedV2?: boolean;      // 迁移标记 V2：文件夹书签 + 有道 已转成工作流
   launcherToolsSeeded?: boolean;     // 种子标记：内置工具(编解码/计算/换算)已作为默认工作流写入
@@ -86,19 +88,31 @@ export interface Phrase {
 // 节点间用连线连接，连线可带修饰键（回车/⌘/⌥/⌃/⇧）走不同分支。兼容 Alfred Script Filter JSON。
 export interface WorkflowNode {
   id: string;                        // 节点内唯一 id
-  type: string;                      // "trigger.keyword" | "trigger.hotkey" | "input.scriptfilter"
+  type: string;                      // "trigger.keyword" | "trigger.hotkey" | "trigger.always"
+                                     // | "input.scriptfilter" | "input.translate" | "input.codec"
+                                     // | "input.calc" | "input.units"
+                                     // | "utility.args" | "utility.conditional" | "utility.transform"
+                                     // | "utility.replace" | "utility.delay"
                                      // | "action.script" | "action.copy" | "action.paste"
-                                     // | "action.openurl" | "action.openfile" | "action.assistant"
-                                     // | "action.inspiration" | "output.notify" | "output.largetype"
+                                     // | "action.openurl" | "action.openfile" | "action.launch"
+                                     // | "action.assistant" | "action.inspiration"
+                                     // | "action.device_skill" | "action.ask_assistant" | "action.create_task"
+                                     // | "output.notify" | "output.largetype" | "output.textview"
   x: number;                         // 画布坐标
   y: number;
   config: Record<string, unknown>;   // 节点配置（随 type 不同）
 }
 // 连线：from 节点输出 → to 节点输入；mod 指定触发该分支的修饰键（空=回车）。
+// fromPort 指定从发出节点的哪个「出口」引出（多出口节点用）：
+//   ""      = 默认/唯一出口（旧数据缺省即此，兼容无需迁移）
+//   "r0".."rN" = Conditional 第 N 条规则命中时走的出口
+//   "else"  = Conditional 所有规则都不命中时的兜底出口
+//   "error" = Run Script 失败出口（onError=branch 时启用）
 export interface WorkflowConnection {
   from: string;
   to: string;
   mod?: "" | "cmd" | "alt" | "ctrl" | "shift" | "cmd+alt" | "cmd+shift" | "cmd+ctrl";
+  fromPort?: string;
 }
 export interface Workflow {
   id: string;
@@ -166,6 +180,8 @@ function defaults(configDir: string): UmbraConfig {
     launcherScripts: [],
     phrases: [],
     launcherWorkflows: [],
+    launcherMaxResults: Number(process.env.UMBRA_LAUNCHER_MAX_RESULTS || 12),
+    launcherFallbackAssistant: envBool("UMBRA_LAUNCHER_FALLBACK_ASSISTANT", true),
     launcherScriptsMigrated: false,
     youdaoAppKey: process.env.UMBRA_YOUDAO_APPKEY || "",
     youdaoSecret: process.env.UMBRA_YOUDAO_SECRET || "",
