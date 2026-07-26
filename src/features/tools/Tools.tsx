@@ -91,7 +91,7 @@ export function Tools() {
                         key={i.key}
                         onClick={() => setCur(i.key)}
                         title={t(i.descKey)}
-                        className={`w-full text-left flex items-center gap-[9px] p-[6px_8px] rounded-[8px] text-[12.5px] cursor-pointer transition-colors ${on ? "bg-orange-soft text-orange-text font-semibold" : "text-text hover:bg-hover"}`}
+                        className={`w-full text-left flex items-center gap-[9px] p-[6px_8px] rounded-[8px] text-[12.5px] cursor-pointer transition-colors ${on ? "bg-orange-soft text-orange-text font-semibold" : "bg-transparent text-text hover:bg-hover"}`}
                       >
                         <span className={`w-[22px] h-[22px] rounded-[6px] flex items-center justify-center flex-none ${on ? "bg-orange text-white" : "text-muted"}`}>
                           <Icon size={14} />

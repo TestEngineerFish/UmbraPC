@@ -447,7 +447,7 @@
     "searchPhrasePh": "搜索常用语…"
   },
   "screenshot": {
-    "toolSelect": "选择 / 框选（可多选、拖动、⌥拖动复制）",
+    "toolSelect": "选择（拖动移动截图区域 · ⇧拖框选 · 拖对象移动 · ⌥拖复制）",
     "toolRect": "矩形",
     "toolEllipse": "椭圆",
     "toolArrow": "箭头",

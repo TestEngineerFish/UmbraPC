@@ -431,7 +431,10 @@ export function App() {
     }
 
     // 3) 命中对象 → 选中 / 多选切换 / 拖动（⌥ 拖动=复制）
-    const hit = hitObject(s.objects, p);
+    // 拿「选择」工具时命中即可拖；拿绘制工具时只有已经选中的对象（或按住 ⇧ 做多选切换）才认，
+    // 其余情况把事件让给后面的绘制分支 —— 否则在画过的地方就没法继续画了。
+    const hitAny = hitObject(s.objects, p);
+    const hit = hitAny && (s.tool === "select" || s.selectedIds.includes(hitAny.id) || e.shiftKey) ? hitAny : null;
     if (hit) {
       if (e.shiftKey) {
         setSelectedIds((prev) => (prev.includes(hit.id) ? prev.filter((i) => i !== hit.id) : [...prev, hit.id]));
@@ -443,10 +446,7 @@ export function App() {
         return;
       }
       let ids = s.selectedIds.includes(hit.id) ? s.selectedIds : [hit.id];
-      if (!s.selectedIds.includes(hit.id)) {
-        setSelectedIds(ids);
-        if (s.tool !== "select") setTool(hit.kind);
-      }
+      if (!s.selectedIds.includes(hit.id)) setSelectedIds(ids);
       if (e.altKey) {
         // ⌥ 拖动 = 就地复制一份并拖动副本
         const copies = cloneObjs(s.objects.filter((o) => ids.includes(o.id)), 0, 0);
@@ -479,12 +479,21 @@ export function App() {
       return;
     }
     if (s.tool === "select") {
-      // 指针工具：橡皮筋框选（⇧ 累加）
-      g.current.mode = "marquee";
-      g.current.selStart = p;
+      if (e.shiftKey) {
+        // ⇧拖 = 橡皮筋框选（累加到当前选中集）
+        g.current.mode = "marquee";
+        g.current.selStart = p;
+        g.current.last = p;
+        g.current.marqueeBase = s.selectedIds;
+        attach();
+        return;
+      }
+      // 普通拖 = 移动整个截图区域（和拖区域边框是同一个动作）
+      setSelectedIds([]);
+      g.current.mode = "regionMove";
+      g.current.regionBase = s.selection;
+      g.current.start = p;
       g.current.last = p;
-      g.current.marqueeBase = e.shiftKey ? s.selectedIds : [];
-      if (!e.shiftKey) setSelectedIds([]);
       attach();
       return;
     }
@@ -610,7 +619,10 @@ export function App() {
       setCursor(REGION_CURSOR[rh]);
       return;
     }
-    if (hitObject(s.objects, p)) {
+    // 只有「选择」工具、或悬停的对象已被选中，才提示 move —— 拿着绘制工具经过画过的地方
+    // 仍然显示绘制光标，免得让人以为要拖动。
+    const over = hitObject(s.objects, p);
+    if (over && (s.tool === "select" || s.selectedIds.includes(over.id))) {
       setCursor("move");
       return;
     }
@@ -619,7 +631,8 @@ export function App() {
       return;
     }
     if (!pointInSel(p, s.selection)) setCursor("default");
-    else setCursor(s.tool === "select" ? "default" : s.tool === "text" ? "text" : "crosshair");
+    // 「选择」工具在区域内拖动是移动整个区域，所以光标直接给 move。
+    else setCursor(s.tool === "select" ? "move" : s.tool === "text" ? "text" : "crosshair");
   };
 
   const attached = useRef(false);

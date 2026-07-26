@@ -447,7 +447,7 @@
     "searchPhrasePh": "Search snippets…"
   },
   "screenshot": {
-    "toolSelect": "Select (marquee, multi-select, ⌥drag to duplicate)",
+    "toolSelect": "Select (drag to move the region · ⇧drag to marquee · drag an object to move · ⌥drag to duplicate)",
     "toolRect": "Rectangle",
     "toolEllipse": "Ellipse",
     "toolArrow": "Arrow",
