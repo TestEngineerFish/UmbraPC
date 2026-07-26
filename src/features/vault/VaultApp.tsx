@@ -1,7 +1,18 @@
-// 密码保险箱 界面。视觉按 ClaudeDesign 稿；数据/IPC 走真实后端。
-// 初始化/解锁 → 身份切换 / 可编辑类型(右键菜单) / 列表搜索 / 模块化控件详情(查看/编辑) / 附件 / 密码生成器 / 深浅色切换。
+// 密码保险箱界面。视觉按 ClaudeDesign 稿；数据 / IPC 走真实后端，逻辑与旧版完全一致。
+// 流程：初始化（创建主密码 → 保存 Secret Key）/ 解锁 / 身份库切换 / 分组可改名删除（右键菜单）/
+// 列表搜索与多选 / 模块化控件详情（查看·编辑）/ 附件 / 密码生成器 / 深浅色切换。
 // 两种承载方式：独立窗口（vault-entry）与嵌在主窗口「工具 → 密码保险箱」右侧（embedded）。
-import { CSSProperties, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+// 样式统一走 Tailwind + CSS 变量（vault-entry 已引入 index.css，独立窗口里同样生效）；
+// inline style 只留给真正动态的值：右键菜单坐标、monogram 尺寸、强度条百分比、动画延迟。
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import type { ComponentType, CSSProperties, ReactNode, SVGProps } from "react";
+import { Pill, btnGhost, btnPrimary, selectBox } from "../../components/ui";
+import {
+  IconAlert, IconCheck, IconChevronDown, IconChevronRight, IconCloud, IconCopy, IconDice, IconDots,
+  IconDownload, IconExternal, IconEye, IconEyeOff, IconFile, IconFolder, IconGrid, IconImage, IconKey,
+  IconLock, IconMoon, IconPencil, IconPlus, IconRefresh, IconSearch, IconStar, IconSun, IconTag,
+  IconText, IconTouchId, IconTrash, IconUp, IconDown, IconUser, IconX,
+} from "../../components/icons";
 
 interface VaultInfo { id: string; name: string; owner: string; icon: string; order: number }
 interface VType { id: string; name: string; icon: string; order: number }
@@ -49,7 +60,16 @@ interface VaultAPI {
 }
 const api = (window as unknown as { umbraVault: VaultAPI }).umbraVault;
 
-const CTLS: [string, string, string][] = [["account", "账号", "👤"], ["secret", "密文", "🔑"], ["field", "字段", "🏷️"], ["text", "文本", "📝"], ["images", "图片", "🖼️"], ["files", "文件", "📎"]];
+// 可添加的控件类型。图标一律用线性 outline（原先是彩色 emoji，跨平台字形与基线对不齐）。
+type IconComp = ComponentType<Omit<SVGProps<SVGSVGElement>, "width" | "height"> & { size?: number }>;
+const CTLS: { type: string; name: string; Icon: IconComp }[] = [
+  { type: "account", name: "账号", Icon: IconUser },
+  { type: "secret", name: "密文", Icon: IconKey },
+  { type: "field", name: "字段", Icon: IconTag },
+  { type: "text", name: "文本", Icon: IconText },
+  { type: "images", name: "图片", Icon: IconImage },
+  { type: "files", name: "文件", Icon: IconFile },
+];
 const TAG: Record<string, string> = { account: "账号", secret: "密文", text: "文本", field: "字段", images: "图片", files: "文件" };
 const rid = (p = "") => p + Math.random().toString(36).slice(2, 10);
 function newBlock(type: string): Block {
@@ -58,6 +78,7 @@ function newBlock(type: string): Block {
   return { id: rid("b"), type, label: TAG[type], data };
 }
 
+// 只留关键帧与选区色：悬停/聚焦这些状态类已经全部由 Tailwind 的 hover: / focus: 变体接管。
 const CSS = `
 @keyframes vToastIn{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
 @keyframes vPop{from{opacity:0;transform:translateY(-4px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
@@ -65,21 +86,110 @@ const CSS = `
 @keyframes vDetailIn{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:translateY(0)}}
 @keyframes vBlockIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 .v-root ::selection{background:rgba(232,89,12,.22)}
-.v-root a{color:var(--orange-text);text-decoration:none}
-.v-ho:hover{background:var(--orange-soft);color:var(--orange)}
-.v-row:hover{background:var(--orange-soft)}
-.v-item:hover{background:var(--orange-soft);transform:translateX(2px)}
-.v-card:hover{box-shadow:0 6px 22px rgba(0,0,0,.09);transform:translateY(-1px)}
-.v-btn:hover{filter:brightness(1.06)}
-.v-lock:hover{border-color:var(--orange);color:var(--orange)}
-.v-dash:hover{border-color:var(--orange);color:var(--orange)}
-.v-inp:focus{border-color:var(--orange)}
-.v-danger:hover{background:color-mix(in srgb,var(--danger) 14%,transparent)}
-.v-scale:hover{transform:scale(1.2)}
 `;
 
+// ── 共用类名 ──
+// 大号输入框（创建 / 解锁 / 弹窗），控件圆角统一 8px。
+const vInput = "w-full border border-border bg-card text-text rounded-[8px] px-[12px] py-[9px] text-[13.5px] outline-none focus:border-orange";
+// 卡片内的小号输入框（详情编辑态）。
+const vInputSm = "w-full border border-border bg-bg text-text rounded-[8px] px-[11px] py-[8px] text-[13px] outline-none focus:border-orange";
+// 整宽主按钮（创建 / 解锁 / 进入保险箱）。看起来禁用的一定真禁用，disabled 样式在这里一并声明。
+const vBtnWide = "w-full inline-flex items-center justify-center gap-[6px] whitespace-nowrap px-[15px] py-[10px] bg-orange text-white border-none rounded-[8px] text-[13.5px] font-semibold cursor-pointer hover:bg-orange-deep disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-orange";
+// 等分的次要按钮（Secret Key 页的复制 / 下载）。不能复用 btnGhost：它带 flex-none，和 flex-1 是同一个属性会互相盖。
+const vBtnSplit = "flex-1 inline-flex items-center justify-center gap-[6px] whitespace-nowrap px-[12px] py-[7px] border border-border bg-card text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text";
+// 虚线的「新建」按钮（新建分组 / 添加控件 / 添加附件）。
+const vDash = "w-full inline-flex items-center justify-center gap-[6px] whitespace-nowrap border border-dashed border-border bg-transparent text-muted rounded-[8px] py-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text";
+// 纯文字的小按钮（多选、切换解锁方式这类）。
+const vTextBtn = "flex-none whitespace-nowrap inline-flex items-center gap-[5px] bg-transparent border-none p-0 text-[11.5px] text-muted cursor-pointer hover:text-orange-text disabled:opacity-40 disabled:cursor-not-allowed";
+// 卡片内的图标小按钮（复制、显示密码、调序、删除控件）。
+const vIconBtn = "w-[24px] h-[24px] flex-none inline-flex items-center justify-center bg-transparent border-none rounded-[7px] text-muted cursor-pointer hover:bg-hover hover:text-orange-text disabled:opacity-30 disabled:cursor-not-allowed";
+// 菜单/下拉的浮层外壳。
+const vPanel = "absolute z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow)]";
+// 分组小标题。
+const vGroupHead = "text-[10.5px] font-semibold tracking-[.06em] text-faint px-[10px] pt-[4px] pb-[5px]";
+
+// 密码强度：长度 8 / 12 / 16 各一分，再加「大小写混用」「含数字」「含符号」各一分。≥5 强，≥3 中，其余弱。
+function pwStrength(p: string): { pct: number; label: string; bar: string; text: string } {
+  let s = 0;
+  if (p.length >= 8) s += 1;
+  if (p.length >= 12) s += 1;
+  if (p.length >= 16) s += 1;
+  if (/[a-z]/.test(p) && /[A-Z]/.test(p)) s += 1;
+  if (/\d/.test(p)) s += 1;
+  if (/[^A-Za-z0-9]/.test(p)) s += 1;
+  const pct = Math.round((s / 6) * 100);
+  if (s >= 5) return { pct, label: "强", bar: "bg-success", text: "text-success" };
+  if (s >= 3) return { pct, label: "中", bar: "bg-warning", text: "text-warning" };
+  return { pct: Math.max(pct, 12), label: "弱", bar: "bg-danger", text: "text-danger" };
+}
+
+// 相对时间：一小时内按分钟，一天内按小时，一个月内按天，更早直接给日期。
+function ago(ts: number): string {
+  if (!ts) return "—";
+  const diff = Date.now() - ts;
+  if (diff < 60000) return "刚刚";
+  const m = Math.floor(diff / 60000);
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  const d = Math.floor(h / 24);
+  if (d < 30) return `${d} 天前`;
+  return new Date(ts).toLocaleDateString("zh-CN");
+}
+
+// 字母 monogram 方块：取名称首字符，替代原先的彩色 emoji。
+// plain 走中性灰底（分组、类型这类次要对象），默认走浅橙底（记录、身份库）。
+function Mono({ text, size = 34, radius = 10, font = 13, plain }: { text: string; size?: number; radius?: number; font?: number; plain?: boolean }) {
+  return (
+    <span
+      className={`flex-none inline-flex items-center justify-center font-semibold select-none ${plain ? "bg-chip text-muted" : "bg-orange-soft text-orange-text"}`}
+      style={{ width: size, height: size, borderRadius: radius, fontSize: font }}
+    >
+      {(text || "?").trim().slice(0, 1).toUpperCase()}
+    </span>
+  );
+}
+
+// 居中模态外壳：点遮罩关闭，内容区阻止冒泡。宽度由调用方定（设计稿里 320 / 330 / 360 / 380 / 440 都有）。
+function Modal({ width, onClose, children }: { width: number; onClose: () => void; children: ReactNode }) {
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
+      <div
+        className="bg-card border border-border rounded-[12px] p-[18px] shadow-[var(--shadow)] max-h-[82vh] overflow-y-auto"
+        style={{ width }}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// 危险操作确认弹窗。Electron 里 window.confirm 会阻塞渲染进程，所以一律自绘。
+// 这里的「确认」是全局唯一允许用红色实心按钮的地方，其余危险操作都用红描边 + 悬停填红。
+function ConfirmModal({ title, desc, okLabel, onOk, onClose }: { title: string; desc: string; okLabel: string; onOk: () => void; onClose: () => void }) {
+  return (
+    <Modal width={380} onClose={onClose}>
+      <div className="flex items-start gap-[12px]">
+        <span className="w-[36px] h-[36px] rounded-[9px] flex-none inline-flex items-center justify-center bg-danger-soft text-danger"><IconAlert size={18} /></span>
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold">{title}</div>
+          <div className="text-[12.5px] text-muted leading-[1.6] mt-[4px]">{desc}</div>
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-[8px] mt-[18px]">
+        <button className={btnGhost} onClick={onClose}>取消</button>
+        <button
+          className="flex-none whitespace-nowrap px-[15px] py-[6px] bg-danger text-white border-none rounded-[8px] text-[12.5px] font-semibold cursor-pointer"
+          onClick={onOk}
+        >{okLabel}</button>
+      </div>
+    </Modal>
+  );
+}
+
 // 嵌入模式开关：嵌在主窗口右侧时为 true。深浅色跟随主窗口（不再自己切），
-// 所以各处右上角的「☀️/🌙」按钮在嵌入时直接不渲染。用 context 传，免得从
+// 所以各处右上角的深浅色按钮在嵌入时直接不渲染。用 context 传，免得从
 // VaultApp 一路把 prop 串到 Setup / Unlock / Center / Main。
 const EmbedCtx = createContext(false);
 
@@ -105,7 +215,11 @@ export function VaultApp({ embedded = false }: { embedded?: boolean }) {
   return (
     // 嵌入时不自己声明 data-theme（继承主窗口的），高度也从整屏改成填满父容器。
     <EmbedCtx.Provider value={embedded}>
-      <div className="v-root" data-theme={embedded ? undefined : theme} style={{ height: embedded ? "100%" : "100vh", background: "var(--bg)", color: "var(--text)", fontSize: 14, fontFamily: '-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif' }}>
+      <div
+        className="v-root bg-bg text-text text-[14px]"
+        data-theme={embedded ? undefined : theme}
+        style={{ height: embedded ? "100%" : "100vh" }}
+      >
         <style>{CSS}</style>
         {!ready ? null : !st.exists ? <Setup onDone={refresh} theme={theme} onTheme={toggleTheme} />
           : !st.unlocked ? <Unlock onDone={refresh} st={st} theme={theme} onTheme={toggleTheme} />
@@ -116,95 +230,232 @@ export function VaultApp({ embedded = false }: { embedded?: boolean }) {
 }
 
 // 深浅色切换按钮；嵌入主窗口时主题由主窗口统一控制，这里不渲染。
-function ThemeBtn({ theme, onTheme, style }: { theme: string; onTheme: () => void; style?: CSSProperties }) {
+function ThemeBtn({ theme, onTheme, className = "" }: { theme: string; onTheme: () => void; className?: string }) {
   if (useContext(EmbedCtx)) return null;
-  return <button className="v-ho" onClick={onTheme} title="切换深浅色" style={{ border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 8, width: 28, height: 24, fontSize: 13, cursor: "pointer", color: "var(--text)", ...style }}>{theme === "dark" ? "☀️" : "🌙"}</button>;
-}
-
-// ── 初始化 ──
-function Setup({ onDone, theme, onTheme }: { onDone: () => void; theme: string; onTheme: () => void }) {
-  const [p1, setP1] = useState(""); const [p2, setP2] = useState(""); const [err, setErr] = useState("");
-  const [sk, setSk] = useState(""); const [busy, setBusy] = useState(false);
-  const submit = async () => {
-    if (p1.length < 6) return setErr("主密码至少 6 位");
-    if (p1 !== p2) return setErr("两次输入不一致");
-    setBusy(true);
-    try { const r = await api.setup(p1); setSk(r.secretKey); } catch (e) { setErr(String(e).replace("Error: ", "")); } finally { setBusy(false); }
-  };
-  const inp: CSSProperties = { width: "100%", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 12, padding: "12px 14px", fontSize: 15, color: "var(--text)", outline: "none" };
   return (
-    <Center theme={theme} onTheme={onTheme}>
-      {sk ? (
-        <div style={{ width: 380, textAlign: "center", animation: "vDetailIn .4s ease" }}>
-          <div style={pulseIcon}>🔑</div>
-          <h1 style={h1}>保存你的 Secret Key</h1>
-          <p style={sub}>换新设备登录时需要它 + 主密码。请立即抄下/截图存好，它不会再次显示。</p>
-          <div style={{ marginTop: 18, fontFamily: "ui-monospace,Menlo,monospace", fontSize: 17, letterSpacing: ".06em", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 14px", userSelect: "all" }}>{sk}</div>
-          <div style={{ ...sub, marginTop: 12 }}>只存本机安全区，不上传服务器；与主密码一起才能解密数据。</div>
-          <button className="v-btn" style={{ ...btnPrimary, marginTop: 20 }} onClick={onDone}>我已保存，进入保险箱</button>
-        </div>
-      ) : (
-        <div style={{ width: 360, textAlign: "center", animation: "vDetailIn .4s ease" }}>
-          <div style={pulseIcon}>🔐</div>
-          <h1 style={h1}>创建主密码</h1>
-          <p style={sub}>零知识加密：主密码只有你知道，忘记将无法恢复。</p>
-          <input className="v-inp" type="password" style={{ ...inp, marginTop: 22 }} placeholder="设置主密码（≥6 位）" value={p1} onChange={(e) => { setP1(e.target.value); setErr(""); }} />
-          <input className="v-inp" type="password" style={{ ...inp, marginTop: 10 }} placeholder="再输入一次" value={p2} onChange={(e) => { setP2(e.target.value); setErr(""); }} onKeyDown={(e) => e.key === "Enter" && submit()} />
-          {err ? <div style={errStyle}>{err}</div> : null}
-          <button className="v-btn" disabled={busy} style={{ ...btnPrimary, marginTop: 14, opacity: busy ? .6 : 1 }} onClick={submit}>{busy ? "创建中…" : "创建保险箱"}</button>
-        </div>
-      )}
-    </Center>
+    <button
+      onClick={onTheme}
+      title="切换深浅色"
+      className={`w-[30px] h-[28px] flex-none inline-flex items-center justify-center border border-border bg-bg text-text rounded-[8px] cursor-pointer hover:border-orange hover:text-orange-text ${className}`}
+    >
+      {theme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
+    </button>
   );
 }
 
-// ── 解锁 ──
-function Unlock({ onDone, st, theme, onTheme }: { onDone: () => void; st: VStatus; theme: string; onTheme: () => void }) {
-  const [mp, setMp] = useState(""); const [sk, setSk] = useState(""); const [useSk, setUseSk] = useState(false);
-  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
-  const canBio = st.quickUnlock && st.biometric;
-  const submit = async () => { setBusy(true); try { await api.unlock(mp, useSk ? sk : undefined); await onDone(); } catch (e) { setErr(String(e).replace("Error: ", "")); } finally { setBusy(false); } };
-  const touchId = async () => { setErr(""); try { await api.quickUnlock(); await onDone(); } catch (e) { setErr(String(e).replace("Error: ", "") || "Touch ID 未通过"); } };
-  useEffect(() => { if (canBio) void touchId(); /* 进入即尝试 Touch ID */ }, []); // eslint-disable-line
-  const inp: CSSProperties = { width: "100%", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 12, padding: "12px 14px", fontSize: 15, color: "var(--text)", outline: "none", textAlign: "center", letterSpacing: ".12em", fontFamily: "ui-monospace,Menlo,monospace" };
+// 未解锁的三个态（创建 / Secret Key / 解锁）共用的居中壳：
+// 顶部一层极淡的橙色光晕把视线压到中间那一列，右上角挂深浅色切换。
+function Center({ children, theme, onTheme }: { children: ReactNode; theme: string; onTheme: () => void }) {
   return (
-    <Center theme={theme} onTheme={onTheme}>
-      <div style={{ width: 360, textAlign: "center", animation: "vDetailIn .4s ease" }}>
-        <div style={{ ...pulseIcon, animation: "vLockPulse 2.6s ease-in-out infinite" }}>🔐</div>
-        <h1 style={h1}>保险箱已锁定</h1>
-        <p style={sub}>输入主密码以解锁本地加密数据<br />主密码不保存、不上传，忘记无法找回</p>
-        <input className="v-inp" autoFocus type="password" style={{ ...inp, marginTop: 22 }} placeholder="主密码" value={mp} onChange={(e) => { setMp(e.target.value); setErr(""); }} onKeyDown={(e) => e.key === "Enter" && submit()} />
-        {useSk ? <input className="v-inp" type="text" style={{ ...inp, marginTop: 10, letterSpacing: ".04em" }} placeholder="Secret Key（U1-…）" value={sk} onChange={(e) => setSk(e.target.value)} /> : null}
-        {err ? <div style={errStyle}>{err}</div> : null}
-        <button className="v-btn" disabled={busy} style={{ ...btnPrimary, marginTop: 12, opacity: busy ? .6 : 1 }} onClick={submit}>{busy ? "解锁中…" : "解锁保险箱"}</button>
-        {canBio ? <button className="v-lock" style={{ marginTop: 10, width: "100%", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", borderRadius: 12, padding: 11, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }} onClick={touchId}>☝️ 使用 Touch ID 解锁</button> : null}
-        <button style={{ marginTop: 16, background: "none", border: "none", color: "var(--muted)", fontSize: 11.5, cursor: "pointer" }} onClick={() => setUseSk((v) => !v)}>{useSk ? "← 本机解锁" : "换了新设备？输入 Secret Key"}</button>
-        <div style={{ marginTop: 20, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, fontSize: 11.5, color: "var(--muted)" }}><span style={{ color: "var(--success)" }}>🔒</span> 数据以 AES-256-GCM 本地加密 · 永不上传云端</div>
-      </div>
-    </Center>
-  );
-}
-
-function Center({ theme, onTheme, children }: { theme: string; onTheme: () => void; children: React.ReactNode }) {
-  return (
-    <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", position: "relative", background: "radial-gradient(90% 70% at 50% 8%, color-mix(in srgb, var(--orange-soft) 60%, var(--bg)) 0%, var(--bg) 60%)" }}>
-      <ThemeBtn theme={theme} onTheme={onTheme} style={{ position: "absolute", top: 14, right: 14 }} />
+    <div
+      className="h-full flex items-center justify-center relative"
+      style={{ background: "radial-gradient(90% 70% at 50% 8%, color-mix(in srgb, var(--orange-soft) 60%, var(--bg)) 0%, var(--bg) 60%)" }}
+    >
+      <ThemeBtn theme={theme} onTheme={onTheme} className="absolute top-[14px] right-[14px]" />
       {children}
     </div>
   );
 }
 
-const pulseIcon: CSSProperties = { width: 76, height: 76, borderRadius: 22, background: "var(--orange-soft)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, margin: "0 auto" };
-const h1: CSSProperties = { margin: "22px 0 0", fontSize: 20, fontWeight: 600, letterSpacing: "-.01em" };
-const sub: CSSProperties = { margin: "8px 0 0", fontSize: 12.5, color: "var(--muted)", lineHeight: 1.5 };
-const btnPrimary: CSSProperties = { width: "100%", background: "var(--orange)", color: "#fff", border: "none", borderRadius: 12, padding: 12, fontSize: 14, fontWeight: 600, cursor: "pointer" };
-const errStyle: CSSProperties = { color: "var(--danger)", fontSize: 12.5, marginTop: 10 };
+// 首次初始化：先创建主密码，成功后立刻展示 Secret Key（只显示这一次）。
+// Touch ID 开关放在创建这一步：enableQuickUnlock 需要已解锁态，而 setup 成功后正好就是解锁态，
+// 所以这里先用本地 wantBio 记住意愿，创建成功后再补一次调用。
+function Setup({ onDone, theme, onTheme }: { onDone: () => Promise<void>; theme: string; onTheme: () => void }) {
+  const [p1, setP1] = useState("");
+  const [p2, setP2] = useState("");
+  const [err, setErr] = useState("");
+  const [sk, setSk] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [wantBio, setWantBio] = useState(false);
+  const [bioOk, setBioOk] = useState(false);
+  // 机器不支持生物识别时整行不渲染，避免给一个点了没反应的开关。
+  useEffect(() => { void api.biometricAvailable().then(setBioOk).catch(() => setBioOk(false)); }, []);
 
-// ── 主界面 ──
-type Ctx = { open: boolean; x: number; y: number; itemId?: string };
-type TCtx = { open: boolean; x: number; y: number; typeId?: string };
+  const submit = async () => {
+    if (p1.length < 6) return setErr("主密码至少 6 位");
+    if (p1 !== p2) return setErr("两次输入不一致");
+    setBusy(true);
+    try {
+      const r = await api.setup(p1);
+      if (wantBio) { try { await api.enableQuickUnlock(); } catch { /* 用户取消授权：不影响创建结果，静默跳过 */ } }
+      setSk(r.secretKey);
+    } catch (e) { setErr(String(e).replace("Error: ", "")); } finally { setBusy(false); }
+  };
 
-function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st: VStatus; onStatus: () => Promise<void>; theme: string; onTheme: () => void }) {
+  // 下载成 .txt：Secret Key 不会再显示第二次，给一个离线保存的出口。
+  const dlKey = () => {
+    const url = URL.createObjectURL(new Blob([sk], { type: "text/plain" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "umbra-secret-key.txt";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  if (sk) return (
+    <Center theme={theme} onTheme={onTheme}>
+      <div className="w-[460px] flex flex-col gap-[14px]">
+        <div className="flex flex-col items-center gap-[12px]">
+          <span className="w-[52px] h-[52px] rounded-[15px] flex-none inline-flex items-center justify-center bg-orange-soft text-orange-text"><IconKey size={24} /></span>
+          <div className="text-center">
+            <h1 className="m-0 text-[19px] font-semibold">保存你的 Secret Key</h1>
+            <div className="text-[12.5px] text-muted leading-[1.7] mt-[6px]">换新设备登录时需要它 + 主密码。<br />请立即抄下 / 截图存好，它不会再次显示。</div>
+          </div>
+        </div>
+        <div className="bg-card border border-border rounded-[12px] p-[16px] flex flex-col gap-[12px]">
+          <div className="font-mono text-[14px] leading-[2] tracking-[.08em] text-center break-all bg-bg border border-border rounded-[8px] px-[12px] py-[10px]">{sk}</div>
+          <div className="flex items-center gap-[8px]">
+            <button className={vBtnSplit} onClick={() => void api.copy(sk)}><IconCopy size={13} />复制</button>
+            <button className={vBtnSplit} onClick={dlKey}><IconDownload size={13} />下载 .txt</button>
+          </div>
+          <div className="text-[11.5px] text-faint leading-[1.7] pt-[12px] border-t border-border-soft">只存本机安全区，不上传服务器；与主密码一起才能解密数据。</div>
+        </div>
+        <label className="flex items-center gap-[9px] text-[12.5px] text-text cursor-pointer select-none">
+          <input type="checkbox" className="w-[15px] h-[15px] flex-none accent-orange cursor-pointer" checked={saved} onChange={(e) => setSaved(e.target.checked)} />
+          <span className="flex-none whitespace-nowrap">我已经把 Secret Key 保存到安全的地方</span>
+        </label>
+        {/* 看起来禁用的按钮必须真禁用：未勾选时 disabled，处理函数里再判一次 */}
+        <button className={vBtnWide} disabled={!saved} onClick={() => { if (!saved) return; void onDone(); }}>我已保存，进入保险箱</button>
+      </div>
+    </Center>
+  );
+
+  const s = pwStrength(p1);
+  return (
+    <Center theme={theme} onTheme={onTheme}>
+      <div className="w-[430px] flex flex-col gap-[14px]">
+        <div className="flex flex-col items-center gap-[12px]">
+          <span className="w-[52px] h-[52px] rounded-[15px] flex-none inline-flex items-center justify-center bg-orange-soft text-orange-text"><IconLock size={24} /></span>
+          <div className="text-center">
+            <h1 className="m-0 text-[19px] font-semibold">创建主密码</h1>
+            <div className="text-[12.5px] text-muted leading-[1.7] mt-[6px]">零知识加密：主密码只有你知道，忘记将无法恢复。</div>
+          </div>
+        </div>
+        <div className="bg-card border border-border rounded-[12px] p-[16px] flex flex-col gap-[12px]">
+          <div className="flex flex-col gap-[9px]">
+            <input className={vInput} type="password" value={p1} placeholder="设置主密码（≥6 位）" onChange={(e) => { setP1(e.target.value); setErr(""); }} />
+            {p1 ? (
+              <div className="flex items-center gap-[9px]">
+                <div className="flex-1 min-w-0 h-[4px] rounded-full bg-track overflow-hidden">
+                  <div className={`h-full rounded-full ${s.bar}`} style={{ width: `${s.pct}%` }} />
+                </div>
+                <span className={`flex-none whitespace-nowrap text-[11.5px] font-semibold ${s.text}`}>{s.label}</span>
+              </div>
+            ) : null}
+          </div>
+          <div className="relative">
+            <input
+              className={vInput}
+              type="password"
+              value={p2}
+              placeholder="再输入一次"
+              onChange={(e) => { setP2(e.target.value); setErr(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
+            />
+            {/* 两次一致时右侧给个绿勾，省得用户自己核对 */}
+            {p2 && p1 === p2 ? <span className="absolute right-[11px] top-1/2 -translate-y-1/2 text-success"><IconCheck size={15} /></span> : null}
+          </div>
+          {bioOk ? (
+            <div className="flex items-center gap-[10px] pt-[12px] border-t border-border-soft">
+              <span className="w-[28px] h-[28px] rounded-[8px] flex-none inline-flex items-center justify-center bg-chip text-muted"><IconTouchId size={15} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12.5px]">启用 Touch ID 快速解锁</div>
+                <div className="text-[11.5px] text-faint mt-[1px]">下次解锁可以不输主密码</div>
+              </div>
+              <button
+                onClick={() => setWantBio(!wantBio)}
+                title="启用 Touch ID 快速解锁"
+                className={`w-[36px] h-[20px] flex-none rounded-full border-none cursor-pointer relative ${wantBio ? "bg-orange" : "bg-track"}`}
+              >
+                <span className="absolute top-[2px] w-[16px] h-[16px] rounded-full bg-white" style={{ left: wantBio ? 18 : 2 }} />
+              </button>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex items-start gap-[9px] bg-warning-soft text-warning rounded-[8px] px-[12px] py-[10px] text-[12px] leading-[1.7]">
+          <span className="flex-none mt-[1px]"><IconAlert size={14} /></span>
+          <span>主密码不保存、不上传，忘记后无法找回。</span>
+        </div>
+        {err ? <div className="flex items-center gap-[7px] bg-danger-soft text-danger rounded-[8px] px-[12px] py-[9px] text-[12px]"><span className="flex-none"><IconAlert size={14} /></span>{err}</div> : null}
+        <button className={vBtnWide} disabled={busy || p1.length < 6 || p1 !== p2} onClick={() => void submit()}>{busy ? "创建中…" : "创建保险箱"}</button>
+      </div>
+    </Center>
+  );
+}
+
+// 解锁态。支持三条路：Touch ID（进入即自动尝试一次）、主密码、换新设备时的主密码 + Secret Key。
+function Unlock({ onDone, st, theme, onTheme }: { onDone: () => Promise<void>; st: VStatus; theme: string; onTheme: () => void }) {
+  const [mp, setMp] = useState("");
+  const [sk, setSk] = useState("");
+  const [useSk, setUseSk] = useState(false);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const canBio = st.quickUnlock && st.biometric;
+  const submit = async () => {
+    setBusy(true);
+    try { await api.unlock(mp, useSk ? sk : undefined); await onDone(); }
+    catch (e) { setErr(String(e).replace("Error: ", "")); } finally { setBusy(false); }
+  };
+  const touchId = async () => {
+    setErr("");
+    try { await api.quickUnlock(); await onDone(); }
+    catch (e) { setErr(String(e).replace("Error: ", "") || "Touch ID 未通过"); }
+  };
+  useEffect(() => { if (canBio) void touchId(); /* 进入即尝试 Touch ID */ }, []); // eslint-disable-line
+
+  return (
+    <Center theme={theme} onTheme={onTheme}>
+      <div className="w-[380px] flex flex-col gap-[14px]">
+        <div className="flex flex-col items-center gap-[13px]">
+          <span
+            className="w-[64px] h-[64px] rounded-[18px] flex-none inline-flex items-center justify-center bg-orange text-white"
+            style={{ animation: "vLockPulse 2.6s ease-in-out infinite" }}
+          ><IconLock size={28} /></span>
+          <div className="text-center">
+            <h1 className="m-0 text-[19px] font-semibold">保险箱已锁定</h1>
+            <div className="text-[12.5px] text-muted leading-[1.7] mt-[6px]">输入主密码以解锁本地加密数据<br />主密码不保存、不上传，忘记无法找回</div>
+          </div>
+        </div>
+        <div className="flex flex-col gap-[9px]">
+          <input
+            className={vInput}
+            type="password"
+            value={mp}
+            autoFocus
+            placeholder="主密码"
+            onChange={(e) => { setMp(e.target.value); setErr(""); }}
+            onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
+          />
+          {useSk ? (
+            <input
+              className={vInput}
+              value={sk}
+              placeholder="Secret Key（U1-…）"
+              onChange={(e) => { setSk(e.target.value); setErr(""); }}
+              onKeyDown={(e) => { if (e.key === "Enter") void submit(); }}
+            />
+          ) : null}
+        </div>
+        {err ? <div className="flex items-center gap-[7px] bg-danger-soft text-danger rounded-[8px] px-[12px] py-[9px] text-[12px]"><span className="flex-none"><IconAlert size={14} /></span>{err}</div> : null}
+        <button className={vBtnWide} disabled={busy || !mp} onClick={() => void submit()}>{busy ? "解锁中…" : "解锁保险箱"}</button>
+        {canBio ? (
+          <button
+            className="w-full inline-flex items-center justify-center gap-[7px] whitespace-nowrap px-[15px] py-[9px] border border-border bg-card text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
+            onClick={() => void touchId()}
+          ><IconTouchId size={15} />使用 Touch ID 解锁</button>
+        ) : null}
+        <button className={`${vTextBtn} self-center`} onClick={() => { setUseSk(!useSk); setErr(""); }}>
+          {useSk ? "← 本机解锁" : "换了新设备？输入 Secret Key"}
+        </button>
+        <div className="text-center text-[11px] text-faint">数据以 AES-256-GCM 本地加密 · 永不上传云端</div>
+      </div>
+    </Center>
+  );
+}
+
+// 解锁后的主界面：顶栏 + 三栏（分组 196 / 列表 302 / 详情自适应）。
+function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => Promise<void>; st: VStatus; onStatus: () => Promise<void>; theme: string; onTheme: () => void }) {
   const [vaults, setVaults] = useState<VaultInfo[]>([]);
   const [vid, setVid] = useState("");
   const [types, setTypes] = useState<VType[]>([]);
@@ -217,291 +468,523 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => void; st
   const [idOpen, setIdOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
   const [gearOpen, setGearOpen] = useState(false);
-  const [imp, setImp] = useState<{ open: boolean; mp: string; sk: string; err: string }>({ open: false, mp: "", sk: "", err: "" });
-  const [ctx, setCtx] = useState<Ctx>({ open: false, x: 0, y: 0 });
-  const [tctx, setTctx] = useState<TCtx>({ open: false, x: 0, y: 0 });
+  const [imp, setImp] = useState({ open: false, mp: "", sk: "", err: "" });
+  const [ctx, setCtx] = useState<{ open: boolean; x: number; y: number; itemId?: string }>({ open: false, x: 0, y: 0 });
+  const [tctx, setTctx] = useState<{ open: boolean; x: number; y: number; typeId?: string }>({ open: false, x: 0, y: 0 });
   const [renaming, setRenaming] = useState<string | null>(null);
   const [selecting, setSelecting] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  // 危险操作统一走自绘确认弹窗（Electron 里 window.confirm 会阻塞渲染进程）。
+  const [confirm, setConfirm] = useState<{ title: string; desc: string; okLabel: string; run: () => Promise<void> } | null>(null);
+
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(""), 1400); };
-  const toggleCheck = (id: string) => setChecked((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleCheck = (id: string) => setChecked((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const exitSelect = () => { setSelecting(false); setChecked(new Set()); };
 
   useEffect(() => { void api.listVaults().then((v) => { setVaults(v); setVid(v[0]?.id || ""); }); }, []);
-  const loadVault = useCallback(async (id: string) => { const [t, it] = await Promise.all([api.listTypes(id), api.listItems(id)]); setTypes(t); setItems(it); }, []);
+  const loadVault = useCallback(async (id: string) => {
+    const [t, it] = await Promise.all([api.listTypes(id), api.listItems(id)]);
+    setTypes(t); setItems(it);
+  }, []);
   useEffect(() => { if (vid) void loadVault(vid); setSelecting(false); setChecked(new Set()); }, [vid, loadVault]);
   const refresh = useCallback(async () => { if (vid) await loadVault(vid); }, [vid, loadVault]);
   const closeMenus = () => { setIdOpen(false); setGearOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
-  const doExport = async (plain: boolean) => { setGearOpen(false); const r = plain ? await api.exportPlain() : await api.exportBackup(); if (r.ok) flash(plain ? "已导出明文 JSON" : "已导出加密备份 ✓"); };
+
+  const doExport = async (plain: boolean) => {
+    setGearOpen(false);
+    const r = plain ? await api.exportPlain() : await api.exportBackup();
+    if (r.ok) flash(plain ? "已导出明文 JSON" : "已导出加密备份 ✓");
+  };
   const doSync = async () => {
     setGearOpen(false);
     if (!st.syncConfigured) { flash("请先在 Umbra 设置里配置服务器地址与令牌"); return; }
     flash("同步中…");
-    try { const r = await api.syncNow(); await refresh(); await onStatus(); flash(`已同步 ✓${r.pulled ? " · 已拉取云端更新" : ""}`); }
-    catch (e) { flash(String(e).replace("Error: ", "")); }
+    try {
+      const r = await api.syncNow();
+      await refresh(); await onStatus();
+      flash(`已同步 ✓${r.pulled ? " · 已拉取云端更新" : ""}`);
+    } catch (e) { flash(String(e).replace("Error: ", "")); }
   };
   const afterImport = async (a: { added: number }) => { setCat("all"); await refresh(); flash(`已导入 ${a.added} 条记录到当前身份库`); };
   const doImport = async () => {
     setGearOpen(false);
-    try { const r = await api.importPick(); if (!r.ok) return; if (r.needPassword) setImp({ open: true, mp: "", sk: "", err: "" }); else await afterImport(await api.importApply(vid)); }
-    catch (e) { flash(String(e).replace("Error: ", "")); }
+    try {
+      const r = await api.importPick();
+      if (!r.ok) return;
+      if (r.needPassword) setImp({ open: true, mp: "", sk: "", err: "" });
+      else await afterImport(await api.importApply(vid));
+    } catch (e) { flash(String(e).replace("Error: ", "")); }
   };
-  const applyImport = async () => { try { const a = await api.importApply(vid, imp.mp, imp.sk || undefined); setImp({ open: false, mp: "", sk: "", err: "" }); await afterImport(a); } catch (e) { setImp((s) => ({ ...s, err: String(e).replace("Error: ", "") })); } };
+  const applyImport = async () => {
+    try {
+      const a = await api.importApply(vid, imp.mp, imp.sk || undefined);
+      setImp({ open: false, mp: "", sk: "", err: "" });
+      await afterImport(a);
+    } catch (e) { setImp((s) => ({ ...s, err: String(e).replace("Error: ", "") })); }
+  };
 
   const cur = vaults.find((v) => v.id === vid);
+  // 搜索只覆盖标题、标签、控件标签、账号名、网址与纯文本；密码 / 密文永不进入索引。
   const searchText = (it: Item) => {
     const p = [it.title, ...(it.tags || [])];
-    it.blocks.forEach((b) => { if (b.label) p.push(b.label); if (b.type === "account") p.push(String(b.data.username || ""), String(b.data.url || "")); if (b.type === "text" || b.type === "field") p.push(String(b.data.value || "")); });
+    it.blocks.forEach((b) => {
+      if (b.label) p.push(b.label);
+      if (b.type === "account") p.push(String(b.data.username || ""), String(b.data.url || ""));
+      if (b.type === "text" || b.type === "field") p.push(String(b.data.value || ""));
+    });
     it.attachments.forEach((a) => p.push(a.name));
     return p.join(" ").toLowerCase();
   };
   const visible = items.filter((it) => (cat === "all" || (cat === "fav" ? it.favorite : it.typeId === cat)) && (!q || searchText(it).includes(q.toLowerCase())));
   const allChecked = visible.length > 0 && visible.every((it) => checked.has(it.id));
   const toggleAll = () => setChecked(allChecked ? new Set() : new Set(visible.map((it) => it.id)));
-  const batchDelete = async () => {
+  const batchDelete = () => {
     if (!checked.size) return;
-    if (!window.confirm(`确定删除选中的 ${checked.size} 条记录？此操作不可撤销。`)) return;
-    await api.deleteItems(vid, [...checked]); if (checked.has(selId)) setSelId(""); exitSelect(); await refresh(); flash("已删除所选记录");
+    setConfirm({
+      title: `删除选中的 ${checked.size} 条记录？`,
+      desc: "删除后不可撤销，这些记录会从所有已同步的设备上移除。",
+      okLabel: "删除记录",
+      run: async () => {
+        await api.deleteItems(vid, [...checked]);
+        if (checked.has(selId)) setSelId("");
+        exitSelect(); await refresh(); flash("已删除所选记录");
+      },
+    });
   };
-  const sel = items.find((i) => i.id === selId) || null;
-  const typeName = (id: string) => { const t = types.find((x) => x.id === id); return t?.name || "未分类"; };
-  const typeIcon = (id: string) => { const t = types.find((x) => x.id === id); return t?.icon || "📄"; };
-  const counts: Record<string, number> = {}; items.forEach((it) => { counts[it.typeId] = (counts[it.typeId] || 0) + 1; });
 
+  const sel = items.find((i) => i.id === selId) || null;
+  const typeName = (id: string) => types.find((x) => x.id === id)?.name || "未分类";
+  const counts: Record<string, number> = {};
+  items.forEach((it) => { counts[it.typeId] = (counts[it.typeId] || 0) + 1; });
   const selectItem = (id: string) => { setSelId(id); setAutoEditId(null); closeMenus(); };
-  const addRecord = async () => {
+  const addRecord = async (title = "新记录") => {
     const typeId = types.find((t) => t.id === cat) ? cat : (types[0]?.id || "");
-    const id = await api.addItem(vid, { typeId, title: "新记录", icon: "🔐", blocks: [newBlock("account")] });
+    const id = await api.addItem(vid, { typeId, title, blocks: [newBlock("account")] });
     await refresh(); setSelId(id); setAutoEditId(id);
   };
   const toggleFav = async (it: Item) => { await api.updateItem(vid, { ...it, favorite: !it.favorite }); await refresh(); };
   const doMove = async (iid: string, tid: string) => { await api.moveItem(vid, iid, tid); closeMenus(); await refresh(); flash(`已移动到「${typeName(tid)}」`); };
-  const doDelete = async (iid: string) => { await api.deleteItem(vid, iid); closeMenus(); if (selId === iid) setSelId(""); await refresh(); flash("记录已删除"); };
+  const askDelete = (iid: string) => {
+    closeMenus();
+    setConfirm({
+      title: "删除这条记录？",
+      desc: "删除后不可撤销，该记录会从所有已同步的设备上移除。",
+      okLabel: "删除记录",
+      run: async () => { await api.deleteItem(vid, iid); if (selId === iid) setSelId(""); await refresh(); flash("记录已删除"); },
+    });
+  };
+  const askDeleteType = (tid: string) => {
+    closeMenus();
+    setConfirm({
+      title: `删除分组「${typeName(tid)}」？`,
+      desc: "分组下的记录不会被删除，会保留在原处，可以重新移动到别的分组。",
+      okLabel: "删除分组",
+      run: async () => { await api.deleteType(vid, tid); if (cat === tid) setCat("all"); await refresh(); flash("分组已删除"); },
+    });
+  };
   const anyMenu = idOpen || gearOpen || ctx.open || tctx.open;
-
   const ctxItem = items.find((i) => i.id === ctx.itemId);
   const tctxType = types.find((t) => t.id === tctx.typeId);
+  // 右键菜单跟随鼠标坐标，是这个文件里少数必须用 inline style 的地方。
+  const at = (x: number, y: number): CSSProperties => ({ position: "fixed", left: x, top: y });
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
-      {anyMenu ? <div onMouseDown={closeMenus} onContextMenu={(e) => { e.preventDefault(); closeMenus(); }} style={{ position: "fixed", inset: 0, zIndex: 30 }} /> : null}
-
-      {/* 顶栏 */}
-      <div style={{ height: 52, background: "var(--card)", borderBottom: "1px solid var(--border)", display: "flex", alignItems: "center", gap: 12, padding: "0 14px", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}><div style={{ width: 24, height: 24, borderRadius: 7, background: "var(--orange)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13 }}>🔐</div><span style={{ fontWeight: 600, fontSize: 14.5 }}>保险箱</span></div>
-        <div style={{ width: 1, height: 20, background: "var(--border)" }} />
-        <div style={{ position: "relative" }}>
-          <button className="v-lock" onClick={() => { setIdOpen((v) => !v); setCtx({ open: false, x: 0, y: 0 }); }} style={{ display: "flex", alignItems: "center", gap: 6, border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 10, padding: "5px 10px", fontSize: 13, color: "var(--text)", cursor: "pointer" }}>
-            <span>{cur?.icon}</span><span style={{ fontWeight: 600 }}>{cur?.name}</span><span style={{ color: "var(--muted)", fontSize: 10 }}>▾</span>
+    <div className="h-full flex flex-col relative overflow-hidden">
+      {/* 顶栏 50px：身份、身份库切换、自动锁定提示、添加 / 锁定 / 更多 */}
+      <header className="h-[50px] flex-none flex items-center gap-[10px] px-[16px] border-b border-border bg-card">
+        <span className="w-[26px] h-[26px] rounded-[7px] flex-none inline-flex items-center justify-center bg-orange text-white"><IconLock size={14} /></span>
+        <span className="flex-none whitespace-nowrap text-[14px] font-semibold">保险箱</span>
+        <span className="w-px h-[18px] flex-none bg-border" />
+        <div className="relative flex-none">
+          <button
+            onClick={() => { setGearOpen(false); setIdOpen(!idOpen); }}
+            className="flex-none whitespace-nowrap inline-flex items-center gap-[7px] px-[10px] py-[5px] border border-border bg-bg text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
+          >
+            <Mono text={cur?.name || "U"} size={18} radius={5} font={10} />
+            {cur?.name || "身份库"}
+            <IconChevronDown size={13} />
           </button>
           {idOpen ? (
-            <div style={{ position: "absolute", top: 40, left: 0, width: 210, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "var(--shadow)", padding: 6, zIndex: 40, animation: "vPop .12s ease" }}>
+            <div className={`${vPanel} left-0 top-[100%] mt-[6px] w-[240px]`} style={{ animation: "vPop .14s ease" }}>
+              <div className={vGroupHead}>身份库</div>
               {vaults.map((v) => (
-                <div key={v.id} className={v.id === vid ? "" : "v-row"} onClick={() => { setVid(v.id); setIdOpen(false); setSelId(""); setCat("all"); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, fontSize: 13, cursor: "pointer", background: v.id === vid ? "var(--orange-soft)" : "transparent", color: v.id === vid ? "var(--orange)" : "var(--text)", fontWeight: v.id === vid ? 600 : 400 }}>{v.icon} {v.name}{v.id === vid ? <span style={{ marginLeft: "auto" }}>✓</span> : null}</div>
+                <MenuItem
+                  key={v.id}
+                  icon={<Mono text={v.name} size={18} radius={5} font={10} plain />}
+                  label={v.name}
+                  hint={v.id === vid ? "当前" : undefined}
+                  onClick={() => { setVid(v.id); setSelId(""); setCat("all"); setIdOpen(false); }}
+                />
               ))}
-              <div style={{ height: 1, background: "var(--border)", margin: "6px 4px" }} />
-              <div className="v-row" onClick={async () => { const id = await api.addVault("新身份库", "custom", "👤"); setVaults(await api.listVaults()); setVid(id); setIdOpen(false); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, fontSize: 13, color: "var(--muted)", cursor: "pointer" }}>＋ 新建身份库</div>
-              <div className="v-row" onClick={() => { setIdOpen(false); setManageOpen(true); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, fontSize: 13, color: "var(--muted)", cursor: "pointer" }}>⚙️ 管理身份库…</div>
-              {st.biometric ? <div className="v-row" onClick={async () => { if (st.quickUnlock) await api.disableQuickUnlock(); else await api.enableQuickUnlock(); await onStatus(); setIdOpen(false); flash(st.quickUnlock ? "已关闭 Touch ID" : "已启用 Touch ID 快速解锁"); }} style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 10px", borderRadius: 8, fontSize: 13, cursor: "pointer" }}>☝️ Touch ID 快速解锁 <span style={{ marginLeft: "auto", color: "var(--orange)" }}>{st.quickUnlock ? "✓" : ""}</span></div> : null}
+              <div className="h-px bg-border-soft my-[5px]" />
+              <MenuItem
+                icon={<IconPlus size={14} />}
+                label="新建身份库"
+                onClick={async () => {
+                  const id = await api.addVault("新身份库", "custom", "");
+                  setVaults(await api.listVaults()); setVid(id); setSelId(""); setCat("all"); setIdOpen(false);
+                }}
+              />
+              <MenuItem icon={<IconPencil size={14} />} label="管理身份库…" onClick={() => { setIdOpen(false); setManageOpen(true); }} />
+              {st.biometric ? (
+                <>
+                  <div className="h-px bg-border-soft my-[5px]" />
+                  <MenuItem
+                    icon={<IconTouchId size={14} />}
+                    label={st.quickUnlock ? "关闭 Touch ID 快速解锁" : "启用 Touch ID 快速解锁"}
+                    onClick={async () => {
+                      if (st.quickUnlock) await api.disableQuickUnlock(); else await api.enableQuickUnlock();
+                      await onStatus(); setIdOpen(false);
+                      flash(st.quickUnlock ? "已关闭 Touch ID" : "已启用 Touch ID 快速解锁");
+                    }}
+                  />
+                </>
+              ) : null}
             </div>
           ) : null}
         </div>
-        <div style={{ flex: 1 }} />
-        <button className="v-btn" onClick={addRecord} style={{ display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap", background: "var(--orange)", color: "#fff", border: "none", borderRadius: 10, padding: "7px 13px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}><span style={{ fontSize: 15, lineHeight: 1 }}>＋</span>添加记录</button>
-        <button className="v-lock" onClick={onLock} style={{ whiteSpace: "nowrap", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", borderRadius: 10, padding: "7px 12px", fontSize: 13, cursor: "pointer" }}>🔒 锁定</button>
-        <div style={{ position: "relative" }}>
-          <button className="v-lock" onClick={() => { setGearOpen((v) => !v); setIdOpen(false); }} title="导入 / 导出" style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", borderRadius: 10, height: 30, width: 34, fontSize: 15, cursor: "pointer" }}>⋯</button>
+        <span className="flex-1" />
+        <span className="flex-none whitespace-nowrap text-[11.5px] text-faint">{st.autoLockMin} 分钟无操作自动锁定</span>
+        <button className={btnPrimary} onClick={() => void addRecord()}><IconPlus size={13} className="inline-block align-[-2px] mr-[4px]" />添加记录</button>
+        <button className={btnGhost} onClick={() => void onLock()}>锁定</button>
+        <div className="relative flex-none">
+          <button
+            onClick={() => { setIdOpen(false); setGearOpen(!gearOpen); }}
+            title="更多"
+            className="w-[28px] h-[28px] flex-none inline-flex items-center justify-center border border-border bg-bg text-text rounded-[8px] cursor-pointer hover:border-orange hover:text-orange-text"
+          ><IconDots size={14} /></button>
           {gearOpen ? (
-            <div style={{ position: "absolute", top: 38, right: 0, width: 200, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "var(--shadow)", padding: 6, zIndex: 40, animation: "vPop .12s ease" }}>
-              <MenuItem onClick={doSync}>☁︎ 立即同步{st.syncConfigured ? "" : "（未配置）"}</MenuItem>
-              <div style={{ height: 1, background: "var(--border)", margin: "4px 4px" }} />
-              <MenuItem onClick={() => doExport(false)}>💾 导出加密备份</MenuItem>
-              <MenuItem onClick={() => doExport(true)}>📄 导出明文 JSON</MenuItem>
-              <div style={{ height: 1, background: "var(--border)", margin: "4px 4px" }} />
-              <MenuItem onClick={doImport}>📥 导入备份 / 数据</MenuItem>
-              <MenuItem onClick={async () => { setGearOpen(false); const r = await api.downloadTemplate("csv"); if (r.ok) flash("已下载 CSV 导入模板"); }}>⬇ 下载导入模板 (CSV)</MenuItem>
+            <div className={`${vPanel} right-0 top-[100%] mt-[6px] w-[232px]`} style={{ animation: "vPop .14s ease" }}>
+              <MenuItem icon={<IconCloud size={14} />} label="立即同步" hint={st.syncConfigured ? undefined : "未配置"} onClick={() => void doSync()} />
+              <div className="h-px bg-border-soft my-[5px]" />
+              <MenuItem icon={<IconDownload size={14} />} label="导出加密备份" onClick={() => void doExport(false)} />
+              <MenuItem icon={<IconDownload size={14} />} label="导出明文 JSON" onClick={() => void doExport(true)} />
+              <MenuItem icon={<IconUp size={14} />} label="导入备份 · 数据" onClick={() => void doImport()} />
+              <MenuItem
+                icon={<IconFile size={14} />}
+                label="下载导入模板 (CSV)"
+                onClick={async () => { setGearOpen(false); await api.downloadTemplate("csv"); flash("已下载 CSV 导入模板"); }}
+              />
             </div>
           ) : null}
         </div>
-        <ThemeBtn theme={theme} onTheme={onTheme} style={{ height: 30, width: 32 }} />
-      </div>
+        <ThemeBtn theme={theme} onTheme={onTheme} />
+      </header>
 
-      {/* 三栏 */}
-      <div style={{ flex: 1, display: "flex", minHeight: 0 }}>
-        {/* 左：类型 */}
-        <div style={{ width: 196, background: "var(--card)", borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", flexShrink: 0 }}>
-          <div style={{ flex: 1, overflowY: "auto", padding: "10px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
-            <div style={groupHead}>快速访问</div>
-            <TypeRow icon="🗂️" name="全部" count={items.length} sel={cat === "all"} onClick={() => setCat("all")} />
-            <TypeRow icon="⭐" name="收藏" count={items.filter((i) => i.favorite).length} sel={cat === "fav"} onClick={() => setCat("fav")} />
-            <div style={{ ...groupHead, paddingTop: 12 }}>类型</div>
-            {types.map((t) => renaming === t.id ? (
-              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px" }}>
-                <span style={{ fontSize: 15, width: 18, textAlign: "center" }}>{t.icon}</span>
-                <input autoFocus defaultValue={t.name} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
-                  onBlur={async (e) => { await api.updateType(vid, t.id, { name: e.target.value.trim() || t.name }); setRenaming(null); await refresh(); }}
-                  style={{ flex: 1, minWidth: 0, border: "1px solid var(--orange)", background: "var(--card)", borderRadius: 7, padding: "2px 7px", fontSize: 13, fontWeight: 600, color: "var(--text)", outline: "none" }} />
-              </div>
+      <div className="flex-1 min-h-0 flex">
+        {/* 左栏 196：快速访问 + 分组。分组支持右键改名 / 删除 */}
+        <nav className="w-[196px] flex-none border-r border-border bg-rail flex flex-col min-h-0">
+          <div className="flex-1 overflow-y-auto p-[10px_8px]">
+            <div className={vGroupHead}>快速访问</div>
+            <NavRow label="全部" Icon={IconGrid} count={items.length} active={cat === "all"} onClick={() => setCat("all")} />
+            <NavRow label="收藏" Icon={IconStar} count={items.filter((i) => i.favorite).length} active={cat === "fav"} onClick={() => setCat("fav")} />
+            <div className={`${vGroupHead} mt-[10px]`}>分组</div>
+            {types.map((t) => (renaming === t.id ? (
+              <input
+                key={t.id}
+                className="w-full border border-orange bg-card text-text rounded-[8px] px-[9px] py-[6px] text-[12.5px] outline-none"
+                defaultValue={t.name}
+                autoFocus
+                onBlur={async (e) => { await api.updateType(vid, t.id, { name: e.target.value.trim() || t.name }); setRenaming(null); await refresh(); }}
+                onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
+              />
             ) : (
-              <div key={t.id} className={cat === t.id ? "" : "v-row"} onClick={() => setCat(t.id)} onContextMenu={(e) => { e.preventDefault(); setTctx({ open: true, x: e.clientX, y: e.clientY, typeId: t.id }); setIdOpen(false); }}
-                style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 9, fontSize: 13, cursor: "pointer", userSelect: "none", background: cat === t.id ? "var(--orange-soft)" : "transparent", color: cat === t.id ? "var(--orange)" : "var(--text)", fontWeight: cat === t.id ? 600 : 500 }}>
-                <span style={{ fontSize: 15, width: 18, textAlign: "center" }}>{t.icon}</span>
-                <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.name}</span>
-                <span style={{ fontSize: 11.5, color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>{counts[t.id] || ""}</span>
-              </div>
-            ))}
+              <NavRow
+                key={t.id}
+                label={t.name}
+                mono={t.name}
+                count={counts[t.id] || 0}
+                active={cat === t.id}
+                onClick={() => setCat(t.id)}
+                onContextMenu={(e) => { e.preventDefault(); setTctx({ open: true, x: e.clientX, y: e.clientY, typeId: t.id }); }}
+              />
+            )))}
+            <button
+              className={`${vDash} mt-[8px]`}
+              onClick={async () => { const id = await api.addType(vid, "新分组", ""); await refresh(); setRenaming(id); }}
+            ><IconFolder size={13} />新建分组</button>
           </div>
-          <div style={{ padding: 8, borderTop: "1px solid var(--border)" }}>
-            <button className="v-dash" onClick={async () => { const id = await api.addType(vid, "新类型", "📁"); await refresh(); setRenaming(id); }} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: "1px dashed var(--border)", background: "transparent", color: "var(--muted)", borderRadius: 9, padding: 8, fontSize: 12.5, cursor: "pointer" }}>＋ 新建类型</button>
-          </div>
-        </div>
+        </nav>
 
-        {/* 中：列表 */}
-        <div style={{ width: 290, borderRight: "1px solid var(--border)", display: "flex", flexDirection: "column", flexShrink: 0, background: "var(--bg)" }}>
-          <div style={{ padding: "12px 12px 8px" }}>
-            <div style={{ position: "relative" }}>
-              <span style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", fontSize: 13, color: "var(--muted)" }}>🔍</span>
-              <input className="v-inp" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索名称/账号/网址…" style={{ width: "100%", border: "1px solid var(--border)", background: "var(--card)", borderRadius: 10, padding: "8px 12px 8px 32px", fontSize: 13, color: "var(--text)", outline: "none" }} />
+        {/* 中栏 302：搜索 + 计数 / 多选 + 记录列表 */}
+        <div className="w-[302px] flex-none border-r border-border bg-card flex flex-col min-h-0">
+          <div className="flex-none p-[10px_12px_8px] flex flex-col gap-[8px]">
+            <div className="relative">
+              <span className="absolute left-[10px] top-1/2 -translate-y-1/2 text-faint"><IconSearch size={14} /></span>
+              <input
+                className="w-full border border-border bg-bg text-text rounded-[8px] pl-[31px] pr-[28px] py-[7px] text-[12.5px] outline-none focus:border-orange"
+                value={q}
+                placeholder="搜索名称、账号、网址…"
+                onChange={(e) => setQ(e.target.value)}
+              />
+              {q ? (
+                <button className={`${vIconBtn} absolute right-[3px] top-1/2 -translate-y-1/2`} title="清空搜索" onClick={() => setQ("")}><IconX size={13} /></button>
+              ) : null}
             </div>
-            {selecting ? (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, fontSize: 12.5 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", color: "var(--text)" }}><input type="checkbox" checked={allChecked} onChange={toggleAll} />全选</label>
-                <span style={{ color: "var(--muted)" }}>已选 {checked.size}</span>
-                <div style={{ flex: 1 }} />
-                <button className="v-danger" onClick={batchDelete} disabled={!checked.size} style={{ border: "none", background: "transparent", color: "var(--danger)", cursor: checked.size ? "pointer" : "default", opacity: checked.size ? 1 : .5, fontSize: 12.5, padding: "3px 8px", borderRadius: 7 }}>🗑 删除</button>
-                <button onClick={exitSelect} style={{ border: "1px solid var(--border)", background: "var(--bg)", color: "var(--muted)", borderRadius: 7, padding: "3px 10px", fontSize: 12, cursor: "pointer" }}>取消</button>
-              </div>
-            ) : (
-              <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 6 }}>
-                <button className="v-ho" onClick={() => setSelecting(true)} style={{ border: "none", background: "transparent", color: "var(--muted)", fontSize: 12, cursor: "pointer", padding: "2px 6px", borderRadius: 6 }}>☑︎ 多选</button>
+            <div className="flex items-center gap-[8px]">
+              {selecting ? (
+                <>
+                  <label className="flex-none whitespace-nowrap inline-flex items-center gap-[6px] text-[11.5px] text-muted cursor-pointer select-none">
+                    <input type="checkbox" className="w-[13px] h-[13px] flex-none accent-orange cursor-pointer" checked={allChecked} onChange={toggleAll} />
+                    已选 {checked.size}
+                  </label>
+                  <span className="flex-1" />
+                  <button className={vTextBtn} disabled={!checked.size} onClick={batchDelete}><IconTrash size={12} />删除</button>
+                  <button className={vTextBtn} onClick={exitSelect}>完成</button>
+                </>
+              ) : (
+                <>
+                  <span className="flex-none whitespace-nowrap text-[11.5px] text-faint">共 {visible.length} 条</span>
+                  <span className="flex-1" />
+                  <button className={vTextBtn} disabled={!visible.length} onClick={() => setSelecting(true)}>多选</button>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="flex-1 overflow-y-auto p-[0_8px_10px]">
+            {visible.length ? visible.map((it) => {
+              const on = it.id === selId;
+              const acc = it.blocks.find((b) => b.type === "account");
+              const sub = acc ? String(acc.data.username || "") : typeName(it.typeId);
+              return (
+                <div
+                  key={it.id}
+                  onClick={() => (selecting ? toggleCheck(it.id) : selectItem(it.id))}
+                  onContextMenu={(e) => { e.preventDefault(); setCtx({ open: true, x: e.clientX, y: e.clientY, itemId: it.id }); }}
+                  className={`flex items-center gap-[9px] px-[8px] py-[7px] rounded-[9px] cursor-pointer ${on ? "bg-orange-soft" : "hover:bg-hover"}`}
+                >
+                  {/* 勾选框是行内兄弟节点，不套在整行按钮里，点它不会连带选中这一行 */}
+                  {selecting ? (
+                    <input
+                      type="checkbox"
+                      className="w-[14px] h-[14px] flex-none accent-orange cursor-pointer"
+                      checked={checked.has(it.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={() => toggleCheck(it.id)}
+                    />
+                  ) : null}
+                  <Mono text={it.title} size={30} radius={9} font={12} plain={!on} />
+                  <div className="flex-1 min-w-0">
+                    <div className={`text-[13px] truncate ${on ? "font-semibold text-orange-text" : ""}`}>{it.title}</div>
+                    <div className="text-[11px] text-faint truncate font-mono">{sub || "—"}</div>
+                  </div>
+                  {it.favorite ? <span className="flex-none text-orange"><IconStar size={13} /></span> : null}
+                </div>
+              );
+            }) : (
+              <div className="flex flex-col items-center text-center gap-[10px] px-[18px] pt-[46px]">
+                <span className="w-[40px] h-[40px] rounded-[11px] flex-none inline-flex items-center justify-center bg-chip text-faint"><IconSearch size={19} /></span>
+                {q ? (
+                  <>
+                    <div className="text-[13px]">没有匹配「{q}」的记录</div>
+                    <div className="text-[11.5px] text-faint leading-[1.8]">密码与密文内容不参与搜索<br />可以试试名称、账号或网址</div>
+                    <button className={btnGhost} onClick={() => void addRecord(q)}>新建「{q}」</button>
+                  </>
+                ) : (
+                  <>
+                    <div className="text-[13px]">这个分组还没有记录</div>
+                    <div className="text-[11.5px] text-faint leading-[1.8]">用右上角的「添加记录」新建一条</div>
+                  </>
+                )}
               </div>
             )}
           </div>
-          <div style={{ flex: 1, overflowY: "auto", padding: "2px 10px 12px", display: "flex", flexDirection: "column", gap: 3 }}>
-            {visible.length ? visible.map((it) => {
-              const acc = it.blocks.find((b) => b.type === "account");
-              const isSel = it.id === selId; const isChk = checked.has(it.id);
-              return (
-                <div key={it.id} className="v-item" onClick={() => (selecting ? toggleCheck(it.id) : selectItem(it.id))} onContextMenu={(e) => { if (selecting) return; e.preventDefault(); setCtx({ open: true, x: e.clientX, y: e.clientY, itemId: it.id }); setIdOpen(false); }}
-                  style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 10px", borderRadius: 11, cursor: "pointer", border: "1px solid " + ((selecting ? isChk : isSel) ? "color-mix(in srgb,var(--orange) 22%,transparent)" : "transparent"), background: (selecting ? isChk : isSel) ? "var(--orange-soft)" : "transparent" }}>
-                  {selecting ? <input type="checkbox" checked={isChk} onChange={() => toggleCheck(it.id)} onClick={(e) => e.stopPropagation()} style={{ flexShrink: 0 }} /> : null}
-                  <div style={{ width: 34, height: 34, borderRadius: 10, background: "var(--orange-soft)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, flexShrink: 0 }}>{it.icon || typeIcon(it.typeId)}</div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 13.5, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{it.title}</div>
-                    <div style={{ fontSize: 11.5, color: "var(--muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: 1 }}>{acc ? String(acc.data.username || "") : typeName(it.typeId)}</div>
-                  </div>
-                  {!selecting && it.favorite ? <span style={{ fontSize: 12, color: "var(--orange)" }}>⭐</span> : null}
-                  {!selecting && isSel ? <span style={{ fontSize: 15, color: "var(--orange)", lineHeight: 1 }}>›</span> : null}
-                </div>
-              );
-            }) : <div style={{ textAlign: "center", color: "var(--muted)", fontSize: 13, padding: "60px 20px", lineHeight: 1.7, animation: "vDetailIn .3s ease" }}><div style={{ fontSize: 30, opacity: .4 }}>🗒️</div>没有匹配的记录</div>}
-          </div>
         </div>
 
-        {/* 右：详情 */}
-        <div style={{ flex: 1, overflowY: "auto", minWidth: 0 }}>
-          {sel ? <Detail key={sel.id} vid={vid} item={sel} typeName={typeName} typeIcon={typeIcon} autoEdit={autoEditId === sel.id} onChange={refresh} onFav={() => toggleFav(sel)} onDelete={() => doDelete(sel.id)} flash={flash} />
-            : <div style={{ textAlign: "center", color: "var(--muted)", fontSize: 13, padding: 80 }}>选择或新建一条记录</div>}
+        {/* 右栏：详情 */}
+        <div className="flex-1 min-w-0 overflow-y-auto p-[20px_22px]">
+          {sel ? (
+            <Detail
+              key={sel.id}
+              item={sel}
+              vid={vid}
+              types={types}
+              typeName={typeName}
+              autoEdit={autoEditId === sel.id}
+              flash={flash}
+              onChange={refresh}
+              onFav={() => void toggleFav(sel)}
+              onDelete={() => askDelete(sel.id)}
+            />
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center text-center gap-[10px]">
+              <span className="w-[44px] h-[44px] rounded-[12px] flex-none inline-flex items-center justify-center bg-chip text-faint"><IconLock size={20} /></span>
+              <div className="text-[13px] text-muted">从左侧选一条记录查看详情</div>
+              <div className="text-[11.5px] text-faint">整条记录已 AES-256-GCM 本地加密</div>
+            </div>
+          )}
         </div>
       </div>
 
+      {/* 任一菜单打开时铺一层透明遮罩接管点击，省得每个菜单各写一遍 document 监听 */}
+      {anyMenu ? <div className="fixed inset-0 z-30" onMouseDown={closeMenus} onContextMenu={(e) => { e.preventDefault(); closeMenus(); }} /> : null}
+
       {/* 记录右键菜单 */}
       {ctx.open && ctxItem ? (
-        <div style={{ position: "fixed", left: ctx.x, top: ctx.y, width: 212, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "var(--shadow)", padding: 6, zIndex: 55, animation: "vPop .12s ease", fontSize: 13 }}>
-          <div style={{ padding: "6px 10px 7px", fontWeight: 600, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ctxItem.title}</div>
-          <div style={{ height: 1, background: "var(--border)", margin: "2px 4px 4px" }} />
-          <MenuItem onClick={() => { setSelId(ctx.itemId!); setAutoEditId(ctx.itemId!); closeMenus(); }}>✏️ 编辑记录</MenuItem>
-          <MenuItem onClick={() => { void toggleFav(ctxItem); closeMenus(); }}>⭐ {ctxItem.favorite ? "取消收藏" : "加入收藏"}</MenuItem>
-          <div style={{ height: 1, background: "var(--border)", margin: "4px 4px" }} />
-          <div style={{ padding: "4px 10px 3px", fontSize: 10.5, fontWeight: 600, letterSpacing: ".06em", color: "var(--muted)", textTransform: "uppercase" }}>移动到</div>
-          {types.map((t) => <div key={t.id} className="v-ho" onClick={() => doMove(ctx.itemId!, t.id)} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, cursor: "pointer" }}><span style={{ width: 16, textAlign: "center" }}>{t.icon}</span><span style={{ flex: 1, whiteSpace: "nowrap" }}>{t.name}</span>{ctxItem.typeId === t.id ? <span style={{ color: "var(--orange)" }}>✓</span> : null}</div>)}
-          <div style={{ height: 1, background: "var(--border)", margin: "4px 4px" }} />
-          <div className="v-danger" onClick={() => doDelete(ctx.itemId!)} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, cursor: "pointer", color: "var(--danger)" }}>🗑 删除记录</div>
+        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow)] w-[200px]" style={{ ...at(ctx.x, ctx.y), animation: "vPop .14s ease" }}>
+          <MenuItem icon={<IconPencil size={14} />} label="编辑记录" onClick={() => { setSelId(ctxItem.id); setAutoEditId(ctxItem.id); closeMenus(); }} />
+          <MenuItem icon={<IconStar size={14} />} label={ctxItem.favorite ? "取消收藏" : "加入收藏"} onClick={async () => { closeMenus(); await toggleFav(ctxItem); }} />
+          <div className="h-px bg-border-soft my-[5px]" />
+          <div className={`${vGroupHead} flex items-center gap-[4px]`}>移动到<IconChevronRight size={11} /></div>
+          {types.map((t) => (
+            <MenuItem key={t.id} icon={<Mono text={t.name} size={18} radius={5} font={10} plain />} label={t.name} hint={t.id === ctxItem.typeId ? "当前" : undefined} onClick={() => void doMove(ctxItem.id, t.id)} />
+          ))}
+          <div className="h-px bg-border-soft my-[5px]" />
+          <MenuItem icon={<IconTrash size={14} />} label="删除记录" danger onClick={() => askDelete(ctxItem.id)} />
         </div>
       ) : null}
 
-      {/* 类型右键菜单 */}
+      {/* 分组右键菜单 */}
       {tctx.open && tctxType ? (
-        <div style={{ position: "fixed", left: tctx.x, top: tctx.y, width: 172, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "var(--shadow)", padding: 6, zIndex: 55, animation: "vPop .12s ease", fontSize: 13 }}>
-          <div style={{ padding: "6px 10px 7px", fontWeight: 600, fontSize: 12.5 }}>{tctxType.name}</div>
-          <div style={{ height: 1, background: "var(--border)", margin: "2px 4px 4px" }} />
-          <MenuItem onClick={() => { setRenaming(tctx.typeId!); closeMenus(); }}>✎ 改名</MenuItem>
-          <div className="v-danger" onClick={async () => { await api.deleteType(vid, tctx.typeId!); if (cat === tctx.typeId) setCat("all"); closeMenus(); await refresh(); flash("类型已删除"); }} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, cursor: "pointer", color: "var(--danger)" }}>🗑 删除类型</div>
+        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow)] w-[168px]" style={{ ...at(tctx.x, tctx.y), animation: "vPop .14s ease" }}>
+          <MenuItem icon={<IconPencil size={14} />} label="重命名分组" onClick={() => { setRenaming(tctxType.id); closeMenus(); }} />
+          <MenuItem icon={<IconTrash size={14} />} label="删除分组" danger onClick={() => askDeleteType(tctxType.id)} />
         </div>
       ) : null}
 
       {manageOpen ? (
-        <VaultsManager vaults={vaults} curVid={vid} onClose={() => setManageOpen(false)}
+        <VaultsManager
+          vaults={vaults}
+          vid={vid}
+          onClose={() => setManageOpen(false)}
           reload={async () => setVaults(await api.listVaults())}
-          onDeleted={(deletedId, remaining) => { if (deletedId === vid) { setSelId(""); setCat("all"); setVid(remaining[0]?.id || ""); } }} />
+          onDeleted={(delId, remaining) => { if (delId === vid) { setVid(remaining[0]?.id || ""); setSelId(""); setCat("all"); } }}
+          flash={flash}
+        />
       ) : null}
 
       {imp.open ? (
-        <div style={{ position: "fixed", inset: 0, zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.4)" }} onMouseDown={() => setImp({ open: false, mp: "", sk: "", err: "" })}>
-          <div style={{ width: 360, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 16, padding: 20, boxShadow: "var(--shadow)" }} onMouseDown={(e) => e.stopPropagation()}>
-            <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>导入加密备份</div>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>输入备份对应的主密码解密（若换过 Secret Key 也一并填）。记录会追加到当前身份库，不覆盖现有数据。</div>
-            <input autoFocus type="password" className="v-inp" placeholder="备份的主密码" value={imp.mp} onChange={(e) => setImp((s) => ({ ...s, mp: e.target.value, err: "" }))} onKeyDown={(e) => e.key === "Enter" && applyImport()} style={{ width: "100%", border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 10, padding: "10px 12px", fontSize: 14, color: "var(--text)", outline: "none" }} />
-            <input type="text" className="v-inp" placeholder="Secret Key（可选，U1-…）" value={imp.sk} onChange={(e) => setImp((s) => ({ ...s, sk: e.target.value }))} style={{ width: "100%", marginTop: 8, border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 10, padding: "10px 12px", fontSize: 14, color: "var(--text)", outline: "none", fontFamily: "ui-monospace,Menlo,monospace" }} />
-            {imp.err ? <div style={{ ...errStyle, textAlign: "left" }}>{imp.err}</div> : null}
-            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
-              <button style={{ border: "1px solid var(--border)", background: "var(--card)", color: "var(--text)", borderRadius: 10, padding: "8px 14px", fontSize: 13, cursor: "pointer" }} onClick={() => setImp({ open: false, mp: "", sk: "", err: "" })}>取消</button>
-              <button className="v-btn" style={{ background: "var(--orange)", color: "#fff", border: "none", borderRadius: 10, padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer" }} onClick={applyImport}>导入</button>
-            </div>
+        <Modal width={360} onClose={() => setImp({ open: false, mp: "", sk: "", err: "" })}>
+          <div className="text-[14px] font-semibold">导入加密备份</div>
+          <div className="text-[12px] text-muted leading-[1.7] mt-[6px]">输入备份对应的主密码解密（若换过 Secret Key 也一并填）。记录会追加到当前身份库，不覆盖现有数据。</div>
+          <div className="flex flex-col gap-[9px] mt-[14px]">
+            <input className={vInput} type="password" autoFocus value={imp.mp} placeholder="备份的主密码" onChange={(e) => setImp((s) => ({ ...s, mp: e.target.value, err: "" }))} />
+            <input className={vInput} value={imp.sk} placeholder="Secret Key（可选）" onChange={(e) => setImp((s) => ({ ...s, sk: e.target.value, err: "" }))} />
           </div>
-        </div>
+          {imp.err ? <div className="flex items-center gap-[7px] bg-danger-soft text-danger rounded-[8px] px-[12px] py-[9px] text-[12px] mt-[10px]"><span className="flex-none"><IconAlert size={14} /></span>{imp.err}</div> : null}
+          <div className="flex items-center justify-end gap-[8px] mt-[16px]">
+            <button className={btnGhost} onClick={() => setImp({ open: false, mp: "", sk: "", err: "" })}>取消</button>
+            <button className={btnPrimary} disabled={!imp.mp} onClick={() => void applyImport()}>开始导入</button>
+          </div>
+        </Modal>
       ) : null}
 
-      {toast ? <div style={{ position: "absolute", bottom: 26, left: "50%", transform: "translateX(-50%)", background: "#17130f", color: "#fff", borderRadius: 999, padding: "9px 18px", fontSize: 13, boxShadow: "0 10px 30px rgba(0,0,0,.35)", zIndex: 60, animation: "vToastIn .18s ease", display: "flex", alignItems: "center", gap: 7 }}><span style={{ color: "#34B5A6" }}>✓</span>{toast}</div> : null}
+      {confirm ? (
+        <ConfirmModal
+          title={confirm.title}
+          desc={confirm.desc}
+          okLabel={confirm.okLabel}
+          onOk={() => { const run = confirm.run; setConfirm(null); void run(); }}
+          onClose={() => setConfirm(null)}
+        />
+      ) : null}
+
+      {toast ? (
+        <div
+          className="absolute bottom-[26px] left-1/2 z-[60] px-[18px] py-[9px] rounded-full text-[12.5px] text-white whitespace-nowrap"
+          style={{ transform: "translateX(-50%)", background: "#17130f", animation: "vToastIn .18s ease" }}
+        >{toast}</div>
+      ) : null}
     </div>
   );
 }
 
-const groupHead: CSSProperties = { fontSize: 10.5, fontWeight: 600, letterSpacing: ".08em", color: "var(--muted)", textTransform: "uppercase", padding: "4px 10px 5px" };
-// 身份库管理弹窗：改图标/改名/删除/新建。
-function VaultsManager({ vaults, curVid, onClose, reload, onDeleted }: { vaults: VaultInfo[]; curVid: string; onClose: () => void; reload: () => Promise<void>; onDeleted: (deletedId: string, remaining: VaultInfo[]) => void }) {
-  const [err, setErr] = useState("");
-  const inp: CSSProperties = { border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", borderRadius: 9, padding: "8px 10px", fontSize: 13.5, outline: "none" };
+// 左栏的一行：要么给线性图标（快速访问），要么给首字 monogram（分组）。
+function NavRow({ label, Icon, mono, count, active, onClick, onContextMenu }: {
+  label: string; Icon?: IconComp; mono?: string; count: number; active: boolean;
+  onClick: () => void; onContextMenu?: (e: React.MouseEvent) => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      onContextMenu={onContextMenu}
+      className={`w-full text-left flex items-center gap-[9px] px-[8px] py-[6px] rounded-[8px] text-[12.5px] cursor-pointer ${active ? "bg-orange-soft text-orange-text font-semibold" : "bg-transparent text-text hover:bg-hover"}`}
+    >
+      {Icon ? (
+        <span className={`w-[22px] h-[22px] rounded-[6px] flex-none inline-flex items-center justify-center ${active ? "bg-orange text-white" : "bg-chip text-muted"}`}><Icon size={13} /></span>
+      ) : <Mono text={mono || label} size={22} radius={6} font={11} plain={!active} />}
+      <span className="flex-1 min-w-0 truncate">{label}</span>
+      <span className="flex-none whitespace-nowrap text-[11px] text-faint">{count}</span>
+    </button>
+  );
+}
+
+// 菜单/下拉里的一行。danger 用红字 + 红底悬停，不做红色实心（实心只留给确认弹窗的最终按钮）。
+function MenuItem({ icon, label, hint, danger, onClick }: { icon?: ReactNode; label: string; hint?: string; danger?: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left flex items-center gap-[9px] px-[10px] py-[6px] rounded-[8px] bg-transparent border-none text-[12.5px] cursor-pointer ${danger ? "text-danger hover:bg-danger-soft" : "text-text hover:bg-hover"}`}
+    >
+      {icon ? <span className="flex-none inline-flex items-center">{icon}</span> : null}
+      <span className="flex-1 min-w-0 truncate">{label}</span>
+      {hint ? <span className="flex-none whitespace-nowrap text-[11px] text-faint">{hint}</span> : null}
+    </button>
+  );
+}
+
+// 管理身份库：改名与删除。只能拿到当前身份库的记录数，所以这里不显示条数，不编造。
+function VaultsManager({ vaults, vid, onClose, reload, onDeleted, flash }: {
+  vaults: VaultInfo[]; vid: string; onClose: () => void; reload: () => Promise<void>;
+  onDeleted: (id: string, remaining: VaultInfo[]) => void; flash: (m: string) => void;
+}) {
+  const [ask, setAsk] = useState<VaultInfo | null>(null);
   const del = async (v: VaultInfo) => {
-    if (!window.confirm(`删除身份库「${v.name}」及其全部记录？此操作不可撤销。`)) return;
-    try { await api.deleteVault(v.id); const remaining = vaults.filter((x) => x.id !== v.id); await reload(); onDeleted(v.id, remaining); }
-    catch (e) { setErr(String(e).replace("Error: ", "")); }
+    await api.deleteVault(v.id);
+    const remaining = vaults.filter((x) => x.id !== v.id);
+    await reload();
+    onDeleted(v.id, remaining);
+    flash("身份库已删除");
   };
   return (
-    <div style={{ position: "fixed", inset: 0, zIndex: 70, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.4)" }} onMouseDown={onClose}>
-      <div style={{ width: 420, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 16, padding: 20, boxShadow: "var(--shadow)", maxHeight: "80vh", overflow: "auto" }} onMouseDown={(e) => e.stopPropagation()}>
-        <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>管理身份库</div>
-        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 14 }}>改图标（emoji）/ 名称即时保存；删除会连同该库全部记录一起删除，至少保留一个。</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {vaults.map((v) => (
-            <div key={v.id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <input defaultValue={v.icon} maxLength={2} onBlur={async (e) => { const val = e.target.value.trim(); if (val && val !== v.icon) { await api.updateVault(v.id, { icon: val }); await reload(); } }} style={{ ...inp, width: 44, textAlign: "center", fontSize: 18 }} />
-              <input defaultValue={v.name} onBlur={async (e) => { const val = e.target.value.trim(); if (val && val !== v.name) { await api.updateVault(v.id, { name: val }); await reload(); } }} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} style={{ ...inp, flex: 1 }} />
-              {v.id === curVid ? <span style={{ fontSize: 11, color: "var(--orange)", flexShrink: 0 }}>当前</span> : null}
-              <button className="v-danger" onClick={() => del(v)} disabled={vaults.length <= 1} style={{ border: "none", background: "transparent", color: "var(--danger)", cursor: vaults.length <= 1 ? "default" : "pointer", opacity: vaults.length <= 1 ? .4 : 1, fontSize: 13, padding: "5px 8px", borderRadius: 7 }}>🗑</button>
+    <>
+      <Modal width={440} onClose={onClose}>
+        <div className="text-[14px] font-semibold">管理身份库</div>
+        <div className="text-[12px] text-muted mt-[5px]">改名直接编辑；删除会连同该库下的全部记录一起移除。</div>
+        <div className="flex flex-col mt-[14px]">
+          {vaults.map((v, i) => (
+            <div key={v.id} className={`flex items-center gap-[10px] py-[10px] ${i === vaults.length - 1 ? "" : "border-b border-border-soft"}`}>
+              <Mono text={v.name} size={30} radius={9} font={12} plain={v.id !== vid} />
+              <input
+                className="flex-1 min-w-0 border border-border bg-bg text-text rounded-[8px] px-[10px] py-[6px] text-[12.5px] outline-none focus:border-orange"
+                defaultValue={v.name}
+                onBlur={async (e) => {
+                  const val = e.target.value.trim();
+                  if (val && val !== v.name) { await api.updateVault(v.id, { name: val }); await reload(); }
+                }}
+              />
+              {v.id === vid ? <span className="flex-none whitespace-nowrap text-[11px] text-orange-text">当前</span> : null}
+              <button
+                className="flex-none whitespace-nowrap inline-flex items-center gap-[5px] px-[10px] py-[6px] border border-danger bg-transparent text-danger rounded-[8px] text-[12px] cursor-pointer hover:bg-danger hover:text-white disabled:opacity-35 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-danger"
+                disabled={vaults.length <= 1}
+                title={vaults.length <= 1 ? "至少保留一个身份库" : "删除身份库"}
+                onClick={() => { if (vaults.length <= 1) return; setAsk(v); }}
+              ><IconTrash size={12} />删除</button>
             </div>
           ))}
         </div>
-        {err ? <div style={{ ...errStyle, textAlign: "left" }}>{err}</div> : null}
-        <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "space-between" }}>
-          <button className="v-dash" onClick={async () => { await api.addVault("新身份库", "custom", "👤"); await reload(); }} style={{ border: "1px dashed var(--border)", background: "transparent", color: "var(--muted)", borderRadius: 10, padding: "8px 14px", fontSize: 13, cursor: "pointer" }}>＋ 新建身份库</button>
-          <button className="v-btn" onClick={onClose} style={{ background: "var(--orange)", color: "#fff", border: "none", borderRadius: 10, padding: "8px 18px", fontSize: 13, fontWeight: 600, cursor: "pointer" }}>完成</button>
+        <div className="flex items-center justify-between gap-[8px] mt-[16px]">
+          <button className={btnGhost} onClick={async () => { await api.addVault("新身份库", "custom", ""); await reload(); }}><IconPlus size={13} className="inline-block align-[-2px] mr-[4px]" />新建身份库</button>
+          <button className={btnPrimary} onClick={onClose}>完成</button>
         </div>
-      </div>
-    </div>
+      </Modal>
+      {ask ? (
+        <ConfirmModal
+          title={`删除身份库「${ask.name}」？`}
+          desc="该库下的全部记录会一并删除，且不可撤销。"
+          okLabel="删除身份库"
+          onOk={() => { const v = ask; setAsk(null); void del(v); }}
+          onClose={() => setAsk(null)}
+        />
+      ) : null}
+    </>
   );
 }
 
-function TypeRow({ icon, name, count, sel, onClick }: { icon: string; name: string; count: number; sel: boolean; onClick: () => void }) {
-  return <div className={sel ? "" : "v-row"} onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 10px", borderRadius: 9, fontSize: 13, cursor: "pointer", userSelect: "none", background: sel ? "var(--orange-soft)" : "transparent", color: sel ? "var(--orange)" : "var(--text)", fontWeight: sel ? 600 : 500 }}><span style={{ fontSize: 15, width: 18, textAlign: "center" }}>{icon}</span><span style={{ flex: 1 }}>{name}</span><span style={{ fontSize: 11.5, color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>{count || ""}</span></div>;
-}
-function MenuItem({ onClick, children }: { onClick: () => void; children: React.ReactNode }) {
-  return <div className="v-ho" onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 10px", borderRadius: 8, cursor: "pointer", whiteSpace: "nowrap" }}>{children}</div>;
-}
-
-// ── 详情 ──
-function Detail({ vid, item, typeName, typeIcon, autoEdit, onChange, onFav, onDelete, flash }: {
-  vid: string; item: Item; typeName: (id: string) => string; typeIcon: (id: string) => string; autoEdit: boolean; onChange: () => Promise<void>; onFav: () => void; onDelete: () => void; flash: (m: string) => void;
+// 记录详情。查看 / 编辑两态共用一套结构，编辑态改的是 draft 的副本，保存才落库。
+function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, onDelete }: {
+  item: Item; vid: string; types: VType[]; typeName: (id: string) => string; autoEdit: boolean;
+  flash: (m: string) => void; onChange: () => Promise<void>; onFav: () => void; onDelete: () => void;
 }) {
   const [edit, setEdit] = useState(autoEdit);
   const [draft, setDraft] = useState<Item>(structuredClone(item));
@@ -509,157 +992,374 @@ function Detail({ vid, item, typeName, typeIcon, autoEdit, onChange, onFav, onDe
   useEffect(() => { setDraft(structuredClone(item)); setEdit(autoEdit); }, [item, autoEdit]);
 
   const save = async () => { await api.updateItem(vid, draft); setEdit(false); await onChange(); flash("已保存 ✓"); };
-  const setData = (bid: string, k: string, v: unknown) => setDraft((d) => ({ ...d, blocks: d.blocks.map((b) => (b.id === bid ? { ...b, data: { ...b.data, [k]: v } } : b)) }));
+  const setData = (bid: string, k: string, v: unknown) =>
+    setDraft((d) => ({ ...d, blocks: d.blocks.map((b) => (b.id === bid ? { ...b, data: { ...b.data, [k]: v } } : b)) }));
+  const setLabel = (bid: string, v: string) =>
+    setDraft((d) => ({ ...d, blocks: d.blocks.map((b) => (b.id === bid ? { ...b, label: v } : b)) }));
   const delBlock = (bid: string) => setDraft((d) => ({ ...d, blocks: d.blocks.filter((b) => b.id !== bid) }));
-  const moveBlock = (i: number, dir: -1 | 1) => setDraft((d) => { const b = d.blocks.slice(); const j = i + dir; if (j < 0 || j >= b.length) return d; [b[i], b[j]] = [b[j], b[i]]; return { ...d, blocks: b }; });
+  const moveBlock = (i: number, dir: number) => setDraft((d) => {
+    const b = d.blocks.slice();
+    const j = i + dir;
+    if (j < 0 || j >= b.length) return d;
+    [b[i], b[j]] = [b[j], b[i]];
+    return { ...d, blocks: b };
+  });
   const addBlock = (type: string) => { setDraft((d) => ({ ...d, blocks: [...d.blocks, newBlock(type)] })); setAddOpen(false); };
-
   const model = edit ? draft : item;
+
   return (
-    <div>
-      {/* header */}
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "24px 26px 14px", animation: "vDetailIn .32s ease" }}>
-        {edit ? <input value={draft.icon || ""} maxLength={2} onChange={(e) => setDraft({ ...draft, icon: e.target.value })} style={{ width: 50, height: 50, textAlign: "center", borderRadius: 14, background: "var(--orange-soft)", border: "1px solid var(--border)", fontSize: 24 }} />
-          : <div style={{ width: 50, height: 50, borderRadius: 14, background: "var(--orange-soft)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 25, flexShrink: 0 }}>{item.icon || typeIcon(item.typeId)}</div>}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            {edit ? <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} style={{ flex: 1, fontSize: 19, fontWeight: 600, border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 8, padding: "3px 8px", color: "var(--text)", outline: "none" }} />
-              : <h1 style={{ margin: 0, fontSize: 19, fontWeight: 600, letterSpacing: "-.01em", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title}</h1>}
-            <button className="v-scale" onClick={onFav} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 2, color: "var(--orange)" }}>{item.favorite ? "⭐" : "☆"}</button>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 9, marginTop: 7 }}>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--muted)", background: "var(--bg)", border: "1px solid var(--border)", padding: "3px 9px", borderRadius: 7 }}>{typeIcon(item.typeId)} {typeName(item.typeId)}</span>
-            <span style={{ fontSize: 11, color: "var(--muted)", opacity: .8 }}>右键列表可移动 / 删除</span>
+    <div className="max-w-[600px] flex flex-col gap-[16px]" style={{ animation: "vDetailIn .22s ease" }}>
+      {/* 标题区 */}
+      <div className="flex items-center gap-[12px]">
+        <Mono text={model.title} size={40} radius={11} font={16} />
+        <div className="flex-1 min-w-0 flex flex-col gap-[5px]">
+          {edit ? (
+            <input className={vInput} value={draft.title} placeholder="记录名称" onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} />
+          ) : (
+            <div className="text-[17px] font-semibold truncate">{model.title}</div>
+          )}
+          <div className="flex items-center gap-[8px]">
+            {edit ? (
+              <select className={selectBox} value={draft.typeId} onChange={(e) => setDraft((d) => ({ ...d, typeId: e.target.value }))}>
+                {types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            ) : <Pill>{typeName(model.typeId)}</Pill>}
+            <span className="flex-none whitespace-nowrap text-[11.5px] text-faint">上次更新 {ago(model.updatedAt)}</span>
           </div>
         </div>
-        {edit ? <button className="v-btn" onClick={save} style={{ background: "var(--orange)", color: "#fff", border: "none", borderRadius: 10, padding: "7px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>保存</button>
-          : <button className="v-btn" onClick={() => setEdit(true)} style={{ background: "var(--card)", color: "var(--text)", border: "1px solid var(--border)", borderRadius: 10, padding: "7px 16px", fontSize: 13, fontWeight: 500, cursor: "pointer", flexShrink: 0 }}>编辑</button>}
+        <button className={vIconBtn} title={model.favorite ? "取消收藏" : "加入收藏"} onClick={onFav}>
+          <span className={model.favorite ? "text-orange" : ""}><IconStar size={16} /></span>
+        </button>
+        {edit ? (
+          <button className={btnPrimary} onClick={() => void save()}>保存</button>
+        ) : (
+          <button className={btnGhost} onClick={() => setEdit(true)}><IconPencil size={13} className="inline-block align-[-2px] mr-[4px]" />编辑</button>
+        )}
       </div>
 
-      {/* blocks */}
-      <div style={{ padding: "6px 26px 0" }}>
+      {/* 控件卡片 */}
+      <div className="flex flex-col gap-[12px]">
         {model.blocks.map((b, i) => (
           <div key={b.id} style={{ animation: "vBlockIn .34s ease both", animationDelay: `${i * 55}ms` }}>
-            <BlockCard vid={vid} itemId={item.id} block={b} edit={edit} idx={i} count={model.blocks.length}
-              onData={(k, v) => setData(b.id, k, v)} onDel={() => delBlock(b.id)} onMove={(dir) => moveBlock(i, dir)}
-              onAttAdded={(att) => setData(b.id, "atts", [...((b.data.atts as string[]) || []), att.id])} attMeta={model.attachments} flash={flash} />
+            <BlockCard
+              block={b}
+              idx={i}
+              count={model.blocks.length}
+              edit={edit}
+              vid={vid}
+              itemId={model.id}
+              attMeta={model.attachments}
+              flash={flash}
+              onData={(k, v) => setData(b.id, k, v)}
+              onLabel={(v) => setLabel(b.id, v)}
+              onDel={() => delBlock(b.id)}
+              onMove={(dir) => moveBlock(i, dir)}
+              onAttAdded={(att) => setData(b.id, "atts", [...((b.data.atts as string[]) || []), att.id])}
+            />
           </div>
         ))}
+        {edit ? <button className={vDash} onClick={() => setAddOpen(true)}><IconPlus size={13} />添加控件</button> : null}
+      </div>
 
+      <div className="flex items-center gap-[10px] pt-[4px]">
+        <span className="flex-1 min-w-0 text-[11.5px] text-faint">整条记录已 AES-256-GCM 加密 · 密码 / 密文不进入搜索</span>
         {edit ? (
-          <div style={{ position: "relative", marginBottom: 6 }}>
-            <button className="v-dash" onClick={() => setAddOpen((v) => !v)} style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, border: "1px dashed var(--border)", background: "transparent", color: "var(--muted)", borderRadius: 12, padding: 12, fontSize: 13, cursor: "pointer" }}><span style={{ fontSize: 15 }}>＋</span> 添加控件</button>
-            {addOpen ? (
-              <div style={{ position: "absolute", bottom: 50, left: "50%", transform: "translateX(-50%)", width: 280, background: "var(--card)", border: "1px solid var(--border)", borderRadius: 14, boxShadow: "var(--shadow)", padding: 8, zIndex: 40, animation: "vPop .12s ease", display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4 }}>
-                {CTLS.map((c) => <div key={c[0]} className="v-ho" onClick={() => addBlock(c[0])} style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 10px", borderRadius: 9, fontSize: 13, cursor: "pointer" }}><span style={{ fontSize: 15 }}>{c[2]}</span>{c[1]}</div>)}
-              </div>
-            ) : null}
+          <button
+            className="flex-none whitespace-nowrap inline-flex items-center gap-[5px] px-[11px] py-[6px] border border-danger bg-transparent text-danger rounded-[8px] text-[12px] cursor-pointer hover:bg-danger hover:text-white"
+            onClick={onDelete}
+          ><IconTrash size={12} />删除记录</button>
+        ) : null}
+      </div>
+
+      {addOpen ? (
+        <Modal width={320} onClose={() => setAddOpen(false)}>
+          <div className="text-[14px] font-semibold">添加控件</div>
+          <div className="text-[12px] text-muted mt-[5px]">一条记录可以叠加任意多个控件。</div>
+          <div className="grid grid-cols-2 gap-[8px] mt-[14px]">
+            {CTLS.map((c) => (
+              <button
+                key={c.type}
+                onClick={() => addBlock(c.type)}
+                className="flex items-center gap-[9px] px-[11px] py-[10px] border border-border bg-card text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
+              >
+                <span className="w-[26px] h-[26px] rounded-[7px] flex-none inline-flex items-center justify-center bg-chip text-muted"><c.Icon size={14} /></span>
+                <span className="flex-none whitespace-nowrap">{c.name}</span>
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center justify-end mt-[14px]">
+            <button className={btnGhost} onClick={() => setAddOpen(false)}>取消</button>
+          </div>
+        </Modal>
+      ) : null}
+    </div>
+  );
+}
+
+// 单个控件卡：卡头（类型胶囊 + 名称 + 编辑态的调序 / 删除）+ 卡身（按类型渲染）。
+function BlockCard({ block, idx, count, edit, vid, itemId, attMeta, flash, onData, onLabel, onDel, onMove, onAttAdded }: {
+  block: Block; idx: number; count: number; edit: boolean; vid: string; itemId: string; attMeta: Att[];
+  flash: (m: string) => void; onData: (k: string, v: unknown) => void; onLabel: (v: string) => void;
+  onDel: () => void; onMove: (dir: number) => void; onAttAdded: (att: Att) => void;
+}) {
+  const [reveal, setReveal] = useState(false);
+  const [genFor, setGenFor] = useState<string | null>(null);
+  const copy = (v: string, m: string) => { void api.copy(v); flash(m + " · 20s 后自动清除"); };
+  const d = block.data;
+  const mask = "•".repeat(10);
+  const pwLine = (k: string, label: string) => {
+    const val = String(d[k] || "");
+    const s = pwStrength(val);
+    return (
+      <Row label={label}>
+        {edit ? (
+          <div className="flex items-center gap-[7px]">
+            <input className={vInputSm} type={reveal ? "text" : "password"} value={val} onChange={(e) => onData(k, e.target.value)} />
+            <button className={vIconBtn} title={reveal ? "隐藏" : "显示"} onClick={() => setReveal(!reveal)}>{reveal ? <IconEyeOff size={14} /> : <IconEye size={14} />}</button>
+            <button className={vIconBtn} title="生成强密码" onClick={() => setGenFor(k)}><IconDice size={14} /></button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-[7px]">
+            <span className="flex-1 min-w-0 font-mono text-[13px] truncate">{val ? (reveal ? val : mask) : "—"}</span>
+            {val ? <Pill tone={s.label === "强" ? "success" : s.label === "中" ? "warning" : "danger"}>{s.label}</Pill> : null}
+            <button className={vIconBtn} title={reveal ? "隐藏" : "显示"} onClick={() => setReveal(!reveal)}>{reveal ? <IconEyeOff size={14} /> : <IconEye size={14} />}</button>
+            <button className={vIconBtn} title="复制" disabled={!val} onClick={() => copy(val, "已复制密码")}><IconCopy size={14} /></button>
+          </div>
+        )}
+        {genFor === k ? (
+          <PwGen onClose={() => setGenFor(null)} onPick={(p) => { onData(k, p); setGenFor(null); flash("已生成强密码"); }} />
+        ) : null}
+      </Row>
+    );
+  };
+
+  return (
+    <div className="border border-border rounded-[12px] overflow-hidden bg-card">
+      <div className="flex items-center gap-[8px] px-[14px] py-[9px] bg-bg border-b border-border-soft">
+        <Pill tone="accent">{TAG[block.type] || block.type}</Pill>
+        {edit ? (
+          <input
+            className="flex-1 min-w-0 border border-border bg-card text-text rounded-[8px] px-[9px] py-[4px] text-[12.5px] outline-none focus:border-orange"
+            value={block.label || ""}
+            placeholder="控件名称"
+            onChange={(e) => onLabel(e.target.value)}
+          />
+        ) : <span className="flex-1 min-w-0 truncate text-[12.5px] font-semibold">{block.label}</span>}
+        {edit ? (
+          <>
+            <button className={vIconBtn} title="上移" disabled={idx === 0} onClick={() => onMove(-1)}><IconUp size={13} /></button>
+            <button className={vIconBtn} title="下移" disabled={idx === count - 1} onClick={() => onMove(1)}><IconDown size={13} /></button>
+            <button className={vIconBtn} title="删除控件" onClick={onDel}><IconTrash size={13} /></button>
+          </>
+        ) : null}
+      </div>
+
+      <div className="p-[6px_14px_10px]">
+        {block.type === "account" ? (
+          <>
+            <Row label="用户名">
+              {edit ? <input className={vInputSm} value={String(d.username || "")} onChange={(e) => onData("username", e.target.value)} />
+                : (
+                  <div className="flex items-center gap-[7px]">
+                    <span className="flex-1 min-w-0 font-mono text-[13px] truncate">{String(d.username || "") || "—"}</span>
+                    <button className={vIconBtn} title="复制" disabled={!d.username} onClick={() => copy(String(d.username || ""), "已复制用户名")}><IconCopy size={14} /></button>
+                  </div>
+                )}
+            </Row>
+            {pwLine("password", "密码")}
+            <Row label="网址">
+              {edit ? <input className={vInputSm} value={String(d.url || "")} placeholder="example.com" onChange={(e) => onData("url", e.target.value)} />
+                : (
+                  <div className="flex items-center gap-[7px]">
+                    <span className="flex-1 min-w-0 font-mono text-[13px] truncate">{String(d.url || "") || "—"}</span>
+                    {d.url ? (
+                      <button
+                        className={vIconBtn}
+                        title="在浏览器打开"
+                        onClick={() => { const u = String(d.url || ""); window.open(/^https?:/.test(u) ? u : "https://" + u); }}
+                      ><IconExternal size={14} /></button>
+                    ) : null}
+                  </div>
+                )}
+            </Row>
+            <Row label="两步验证" last>
+              {edit ? (
+                <label className="flex items-center gap-[8px] text-[12.5px] cursor-pointer select-none">
+                  <input type="checkbox" className="w-[14px] h-[14px] flex-none accent-orange cursor-pointer" checked={!!d.otp} onChange={(e) => onData("otp", e.target.checked)} />
+                  <span className="flex-none whitespace-nowrap">含两步验证 (2FA)</span>
+                </label>
+              ) : d.otp ? <Pill tone="success" dot>已启用两步验证 (2FA)</Pill> : <span className="text-[12.5px] text-faint">未启用</span>}
+            </Row>
+          </>
+        ) : null}
+
+        {block.type === "secret" ? pwLine("value", "密文") : null}
+
+        {block.type === "field" ? (
+          <Row label="内容" last>
+            {edit ? <input className={vInputSm} value={String(d.value || "")} onChange={(e) => onData("value", e.target.value)} />
+              : (
+                <div className="flex items-center gap-[7px]">
+                  <span className="flex-1 min-w-0 font-mono text-[13px] truncate">{String(d.value || "") || "—"}</span>
+                  <button className={vIconBtn} title="复制" disabled={!d.value} onClick={() => copy(String(d.value || ""), "已复制内容")}><IconCopy size={14} /></button>
+                </div>
+              )}
+          </Row>
+        ) : null}
+
+        {block.type === "text" ? (
+          <div className="pt-[8px]">
+            {edit ? (
+              <textarea className={vInputSm} style={{ minHeight: 96 }} value={String(d.value || "")} onChange={(e) => onData("value", e.target.value)} />
+            ) : (
+              <div className="text-[13px] leading-[1.8]" style={{ whiteSpace: "pre-line" }}>{String(d.value || "") || <span className="text-faint">（空）</span>}</div>
+            )}
           </div>
         ) : null}
 
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 2px 28px" }}>
-          <div style={{ fontSize: 11.5, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}><span style={{ color: "var(--success)" }}>🔒</span> 整条记录已 AES-256-GCM 加密 · 密码 / 密文不进入搜索</div>
-          {edit ? <button className="v-danger" onClick={onDelete} style={{ border: "none", background: "transparent", color: "var(--danger)", fontSize: 12.5, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, padding: "5px 8px", borderRadius: 8 }}>🗑 删除记录</button> : null}
-        </div>
+        {block.type === "images" || block.type === "files" ? (
+          <div className="pt-[8px]">
+            <Gallery
+              kind={block.type === "images" ? "image" : "file"}
+              atts={(d.atts as string[]) || []}
+              attMeta={attMeta}
+              vid={vid}
+              itemId={itemId}
+              edit={edit}
+              onAttAdded={onAttAdded}
+            />
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
 
-// ── 单个控件卡片 ──
-function BlockCard({ vid, itemId, block, edit, idx, count, onData, onDel, onMove, onAttAdded, attMeta, flash }: {
-  vid: string; itemId: string; block: Block; edit: boolean; idx: number; count: number;
-  onData: (k: string, v: unknown) => void; onDel: () => void; onMove: (dir: -1 | 1) => void; onAttAdded: (att: Att) => void; attMeta: Att[]; flash: (m: string) => void;
-}) {
-  const [reveal, setReveal] = useState(false);
-  const copy = (v: string, m: string) => { void api.copy(v); flash(m + " · 20s 后自动清除"); };
-  const gen = async (k: string) => { const p = await api.generatePassword({ length: 20 }); onData(k, p); flash("已生成强密码"); };
-  const d = block.data;
-  const mask = "•".repeat(10);
-  const lab = (t: string) => <div style={{ fontSize: 11, color: "var(--muted)", marginBottom: 5, letterSpacing: ".03em" }}>{t}</div>;
-  const inpS: CSSProperties = { width: "100%", border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 10, padding: "9px 12px", fontSize: 14, color: "var(--text)", outline: "none", fontFamily: "ui-monospace,Menlo,monospace" };
-  const icoBtn: CSSProperties = { cursor: "pointer", fontSize: 14, padding: 5, borderRadius: 7, color: "var(--muted)" };
+// 卡片内的一行：左侧 110px 中文标签 + 右侧控件，行间发丝线，最后一行不画线。
+function Row({ label, last, children }: { label: string; last?: boolean; children: ReactNode }) {
+  return (
+    <div className={`flex items-center gap-[10px] py-[9px] ${last ? "" : "border-b border-border-soft"}`}>
+      <span className="w-[110px] flex-none whitespace-nowrap text-[12.5px] text-muted">{label}</span>
+      <div className="flex-1 min-w-0 relative">{children}</div>
+    </div>
+  );
+}
+
+// 密码生成器。选项直接映射后端 GenOpts；小写字母始终保留，不给关掉的入口。
+function PwGen({ onClose, onPick }: { onClose: () => void; onPick: (p: string) => void }) {
+  const [len, setLen] = useState(20);
+  const [upper, setUpper] = useState(true);
+  const [digits, setDigits] = useState(true);
+  const [symbols, setSymbols] = useState(true);
+  const [readable, setReadable] = useState(false);
+  const [pw, setPw] = useState("");
+  const roll = useCallback(async () => {
+    setPw(await api.generatePassword({ length: len, lower: true, upper, digits, symbols, readable }));
+  }, [len, upper, digits, symbols, readable]);
+  useEffect(() => { void roll(); }, [roll]);
+
+  const opt = (label: string, on: boolean, set: (v: boolean) => void) => (
+    <label className="flex items-center gap-[7px] text-[12.5px] cursor-pointer select-none">
+      <input type="checkbox" className="w-[14px] h-[14px] flex-none accent-orange cursor-pointer" checked={on} onChange={(e) => set(e.target.checked)} />
+      <span className="flex-none whitespace-nowrap">{label}</span>
+    </label>
+  );
 
   return (
-    <div className="v-card" style={{ border: "1px solid var(--border)", borderRadius: 14, background: "var(--card)", marginBottom: 12, overflow: "hidden", transition: "box-shadow .2s ease, transform .2s ease" }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "9px 14px", background: "var(--bg)", borderBottom: "1px solid var(--border)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: "var(--orange)", background: "var(--orange-soft)", padding: "2px 8px", borderRadius: 6 }}>{TAG[block.type] || block.type}</span>
-          <span style={{ fontSize: 13, color: "var(--muted)" }}>{block.label}</span>
-        </div>
-        {edit ? <div style={{ display: "flex", gap: 2 }}>
-          <span className="v-ho" onClick={() => idx > 0 && onMove(-1)} style={{ ...icoBtn, fontSize: 13, opacity: idx === 0 ? .3 : 1 }}>↑</span>
-          <span className="v-ho" onClick={() => idx < count - 1 && onMove(1)} style={{ ...icoBtn, fontSize: 13, opacity: idx === count - 1 ? .3 : 1 }}>↓</span>
-          <span className="v-danger" onClick={onDel} style={{ ...icoBtn, color: "var(--danger)", fontSize: 12 }}>🗑</span>
-        </div> : null}
+    <Modal width={330} onClose={onClose}>
+      <div className="text-[14px] font-semibold">生成密码</div>
+      <div className="flex items-center gap-[8px] mt-[12px]">
+        <span className="flex-1 min-w-0 font-mono text-[13.5px] break-all bg-bg border border-border rounded-[8px] px-[11px] py-[9px]">{pw}</span>
+        <button className={vIconBtn} title="换一个" onClick={() => void roll()}><IconRefresh size={15} /></button>
       </div>
-      <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 13 }}>
-        {block.type === "account" ? (<>
-          <div>{lab("用户名")}{edit ? <input value={String(d.username || "")} onChange={(e) => onData("username", e.target.value)} style={inpS} />
-            : <Row mono val={String(d.username || "")}><span className="v-ho" style={icoBtn} onClick={() => copy(String(d.username || ""), "用户名已复制")}>📋</span></Row>}</div>
-          <div>{lab("密码")}{edit ? <div style={{ display: "flex", alignItems: "center", gap: 8 }}><input value={String(d.password || "")} onChange={(e) => onData("password", e.target.value)} style={{ ...inpS, flex: 1, letterSpacing: ".06em" }} /><span className="v-ho" title="生成强密码" onClick={() => gen("password")} style={{ cursor: "pointer", fontSize: 15, padding: 8, borderRadius: 9, border: "1px solid var(--border)", color: "var(--orange)", lineHeight: 1 }}>🎲</span></div>
-            : <Row mono val={reveal ? String(d.password || "") : mask}><span className="v-ho" style={icoBtn} onClick={() => setReveal(!reveal)}>{reveal ? "🙈" : "👁"}</span><span className="v-ho" style={icoBtn} onClick={() => copy(String(d.password || ""), "密码已复制")}>📋</span></Row>}</div>
-          <div>{lab("网址")}{edit ? <input value={String(d.url || "")} onChange={(e) => onData("url", e.target.value)} style={{ ...inpS, fontFamily: "inherit" }} />
-            : (d.url ? <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ flex: 1, fontSize: 13.5, color: "var(--orange-text)" }}>{String(d.url)}</span><span className="v-ho" style={icoBtn} onClick={() => { const u = String(d.url); window.open(/^https?:/.test(u) ? u : "https://" + u); }}>↗</span></div> : <span style={{ color: "var(--muted)", fontSize: 13 }}>—</span>)}</div>
-          {edit ? <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "var(--muted)" }}><input type="checkbox" checked={!!d.otp} onChange={(e) => onData("otp", e.target.checked)} />含两步验证 (2FA)</label>
-            : (d.otp ? <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--success)", background: "color-mix(in srgb,var(--success) 12%,transparent)", padding: "4px 9px", borderRadius: 7, alignSelf: "flex-start" }}>🔐 已启用两步验证 (2FA)</div> : null)}
-        </>) : null}
-
-        {block.type === "secret" ? (edit ? <div style={{ display: "flex", alignItems: "center", gap: 8 }}><input value={String(d.value || "")} onChange={(e) => onData("value", e.target.value)} style={{ ...inpS, flex: 1, letterSpacing: ".06em" }} /><span className="v-ho" title="生成" onClick={() => gen("value")} style={{ cursor: "pointer", fontSize: 15, padding: 8, borderRadius: 9, border: "1px solid var(--border)", color: "var(--orange)", lineHeight: 1 }}>🎲</span></div>
-          : <Row mono val={reveal ? String(d.value || "") : mask}><span className="v-ho" style={icoBtn} onClick={() => setReveal(!reveal)}>{reveal ? "🙈" : "👁"}</span><span className="v-ho" style={icoBtn} onClick={() => copy(String(d.value || ""), "已复制")}>📋</span></Row>) : null}
-
-        {block.type === "text" ? (edit ? <textarea value={String(d.value || "")} onChange={(e) => onData("value", e.target.value)} style={{ width: "100%", minHeight: 96, resize: "vertical", border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 10, padding: "10px 12px", fontSize: 13.5, lineHeight: 1.6, color: "var(--text)", outline: "none", fontFamily: "inherit" }} />
-          : <p style={{ margin: 0, fontSize: 13.5, lineHeight: 1.7, whiteSpace: "pre-line" }}>{String(d.value || "")}</p>) : null}
-
-        {block.type === "field" ? (edit ? <input value={String(d.value || "")} onChange={(e) => onData("value", e.target.value)} style={inpS} />
-          : <Row mono val={String(d.value || "")}><span className="v-ho" style={icoBtn} onClick={() => copy(String(d.value || ""), "已复制")}>📋</span></Row>) : null}
-
-        {block.type === "images" || block.type === "files" ? <Gallery vid={vid} itemId={itemId} atts={(d.atts as string[]) || []} edit={edit} kind={block.type === "images" ? "image" : "file"} attMeta={attMeta} onAttAdded={onAttAdded} onRemove={(aid) => onData("atts", ((d.atts as string[]) || []).filter((x) => x !== aid))} /> : null}
+      <div className="flex items-center gap-[10px] mt-[14px]">
+        <span className="flex-none whitespace-nowrap text-[12.5px] text-muted">长度 {len}</span>
+        <input type="range" min={8} max={64} value={len} className="flex-1 min-w-0 accent-orange cursor-pointer" onChange={(e) => setLen(Number(e.target.value))} />
       </div>
-    </div>
+      <div className="grid grid-cols-2 gap-[8px] mt-[12px]">
+        {opt("大写字母", upper, setUpper)}
+        {opt("数字", digits, setDigits)}
+        {opt("符号", symbols, setSymbols)}
+        {opt("避免易混字符", readable, setReadable)}
+      </div>
+      <div className="flex items-center justify-end gap-[8px] mt-[16px]">
+        <button className={btnGhost} onClick={onClose}>取消</button>
+        <button className={btnPrimary} disabled={!pw} onClick={() => onPick(pw)}>用这个</button>
+      </div>
+    </Modal>
   );
 }
 
-function Row({ val, mono, children }: { val: string; mono?: boolean; children: React.ReactNode }) {
-  return <div style={{ display: "flex", alignItems: "center", gap: 8 }}><span style={{ flex: 1, fontSize: 14, fontFamily: mono ? "ui-monospace,Menlo,monospace" : "inherit", letterSpacing: mono ? ".02em" : undefined, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{val}</span>{children}</div>;
-}
-
-// ── 图片/文件画廊 ──
-function Gallery({ vid, itemId, atts, edit, kind, attMeta, onAttAdded, onRemove }: { vid: string; itemId: string; atts: string[]; edit: boolean; kind: "image" | "file"; attMeta: Att[]; onAttAdded: (att: Att) => void; onRemove: (aid: string) => void }) {
+// 图片 / 文件附件。图片走缩略网格，文件走列表行；附件本体解密后是 data URL。
+function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded }: {
+  kind: "image" | "file"; atts: string[]; attMeta: Att[]; vid: string; itemId: string; edit: boolean;
+  onAttAdded: (att: Att) => void;
+}) {
   const [urls, setUrls] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
-  useEffect(() => { if (kind === "image") atts.forEach((aid) => { if (!urls[aid]) void api.readAttachment(vid, aid).then((u) => setUrls((m) => ({ ...m, [aid]: u }))).catch(() => {}); }); }, [atts, kind, vid, urls]);
+  useEffect(() => {
+    if (kind === "image") atts.forEach((aid) => {
+      if (!urls[aid]) void api.readAttachment(vid, aid).then((u) => setUrls((m) => ({ ...m, [aid]: u }))).catch(() => {});
+    });
+  }, [atts, kind, vid, urls]);
   const nameOf = (aid: string) => attMeta.find((a) => a.id === aid)?.name || "文件";
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     for (const f of Array.from(e.target.files || [])) {
-      const buf = await f.arrayBuffer(); let bin = ""; const bytes = new Uint8Array(buf);
+      const buf = await f.arrayBuffer();
+      let bin = "";
+      const bytes = new Uint8Array(buf);
       for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
       const att = await api.addAttachment(vid, itemId, f.name, f.type || "application/octet-stream", btoa(bin));
       onAttAdded(att);
     }
     e.target.value = "";
   };
+
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", flexDirection: kind === "file" ? "column" : "row", gap: kind === "file" ? 8 : 10 }}>
-      {atts.map((aid) => kind === "image" ? (
-        <div key={aid} style={{ width: 120, height: 80, borderRadius: 10, background: urls[aid] ? "#0000" : "linear-gradient(135deg,#c7b8a3,#9a8b73)", position: "relative", boxShadow: "inset 0 0 0 1px rgba(0,0,0,.06)", overflow: "hidden", display: "flex", alignItems: "flex-end", padding: 6 }}>
-          {urls[aid] ? <img src={urls[aid]} onClick={() => window.open(urls[aid])} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", cursor: "pointer" }} alt="" /> : null}
-          <span style={{ position: "relative", fontSize: 10, color: "rgba(255,255,255,.95)", background: "rgba(0,0,0,.35)", padding: "1px 6px", borderRadius: 5, maxWidth: 108, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nameOf(aid)}</span>
-          {edit ? <span onClick={() => onRemove(aid)} style={{ position: "absolute", top: 5, right: 5, width: 20, height: 20, borderRadius: "50%", background: "rgba(0,0,0,.55)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, cursor: "pointer" }}>✕</span> : null}
+    <div className="flex flex-col gap-[9px]">
+      {kind === "image" ? (
+        <div className="flex flex-wrap gap-[9px]">
+          {atts.map((aid) => (
+            <div
+              key={aid}
+              className="w-[120px] h-[80px] rounded-[10px] overflow-hidden flex-none border border-border"
+              style={urls[aid] ? { backgroundImage: `url(${urls[aid]})`, backgroundSize: "cover", backgroundPosition: "center" } : { background: "linear-gradient(135deg,#c7b8a3,#9a8b73)" }}
+              title={nameOf(aid)}
+            />
+          ))}
         </div>
       ) : (
-        <div key={aid} className="v-lock" style={{ display: "flex", alignItems: "center", gap: 10, border: "1px solid var(--border)", borderRadius: 10, padding: "9px 12px", background: "var(--bg)" }}>
-          <span style={{ fontSize: 16 }}>📄</span><span style={{ flex: 1, fontSize: 13, fontFamily: "ui-monospace,Menlo,monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{nameOf(aid)}</span>
-          <span className="v-ho" title="导出" onClick={async () => { const u = await api.readAttachment(vid, aid); window.open(u); }} style={{ cursor: "pointer", fontSize: 13, padding: 4, borderRadius: 6, color: "var(--muted)" }}>⬇</span>
-          {edit ? <span className="v-danger" onClick={() => onRemove(aid)} style={{ cursor: "pointer", fontSize: 12, padding: 4, borderRadius: 6, color: "var(--danger)" }}>✕</span> : null}
+        <div className="flex flex-col">
+          {atts.map((aid, i) => (
+            <div key={aid} className={`flex items-center gap-[9px] py-[8px] ${i === atts.length - 1 ? "" : "border-b border-border-soft"}`}>
+              <span className="w-[26px] h-[26px] rounded-[7px] flex-none inline-flex items-center justify-center bg-chip text-muted"><IconFile size={13} /></span>
+              <span className="flex-1 min-w-0 truncate text-[12.5px]">{nameOf(aid)}</span>
+              <button
+                className={vIconBtn}
+                title="导出"
+                onClick={async () => { const u = await api.readAttachment(vid, aid); window.open(u); }}
+              ><IconDownload size={14} /></button>
+            </div>
+          ))}
         </div>
-      ))}
-      {edit ? <>
-        {kind === "image"
-          ? <div className="v-dash" onClick={() => fileRef.current?.click()} style={{ width: 120, height: 80, borderRadius: 10, border: "1px dashed var(--border)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, color: "var(--muted)", fontSize: 11.5, cursor: "pointer" }}><span style={{ fontSize: 18 }}>＋</span>添加图片</div>
-          : <div className="v-dash" onClick={() => fileRef.current?.click()} style={{ display: "flex", alignItems: "center", gap: 8, border: "1px dashed var(--border)", borderRadius: 10, padding: "9px 12px", color: "var(--muted)", fontSize: 12.5, cursor: "pointer" }}>＋ 添加文件</div>}
-        <input ref={fileRef} type="file" multiple accept={kind === "image" ? "image/*" : "*"} style={{ display: "none" }} onChange={onFile} />
-      </> : (atts.length === 0 ? <span style={{ color: "var(--muted)", fontSize: 12 }}>（空）</span> : null)}
+      )}
+      {!atts.length && !edit ? <div className="text-[12.5px] text-faint">（空）</div> : null}
+      {edit ? (
+        <>
+          <button className={vDash} onClick={() => fileRef.current?.click()}>
+            {kind === "image" ? <IconImage size={13} /> : <IconFile size={13} />}
+            {kind === "image" ? "添加图片" : "添加文件"}
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            multiple
+            accept={kind === "image" ? "image/*" : undefined}
+            className="hidden"
+            onChange={(e) => void onFile(e)}
+          />
+        </>
+      ) : null}
     </div>
   );
 }
