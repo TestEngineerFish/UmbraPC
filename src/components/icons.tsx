@@ -399,3 +399,44 @@ export function IconFolder(p: IconProps) {
     </svg>
   );
 }
+
+// 撤销：向左的回环箭头（工作流编辑器顶栏）。
+export function IconUndo(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h9a7 7 0 0 1 0 14H8" />
+    </svg>
+  );
+}
+
+// 重做：撤销的镜像。
+export function IconRedo(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="m15 14 5-5-5-5" />
+      <path d="M20 9h-9a7 7 0 0 0 0 14h5" />
+    </svg>
+  );
+}
+
+// 调试：瓢虫轮廓（工作流编辑器的执行轨迹抽屉）。
+export function IconBug(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M8 4h8M12 4v3" />
+      <rect x="6" y="7" width="12" height="13" rx="6" />
+      <path d="M6 12H3M21 12h-3M6.5 17 4 19M17.5 17 20 19M6.5 9 4 7M17.5 9 20 7" />
+    </svg>
+  );
+}
+
+// 侧栏面板：矩形右侧一道竖线，表示「右边那一列」（对象库开关）。
+export function IconPanel(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M15 4v16" />
+    </svg>
+  );
+}
