@@ -94,8 +94,8 @@ const CATALOG: { cat: string; items: CatItem[] }[] = [
     { type: "utility.replace", label: "Replace 查找替换", emoji: "🔁" },
     { type: "utility.delay", label: "Delay 延时", emoji: "⏱️" },
     { type: "utility.debug", label: "Debug 调试打点", emoji: "🐞" },
-    { type: "utility.split", label: "Split Arg 拆分参数", emoji: "✂️", soon: true, hint: "按分隔符把一条参数拆成多条，后面的节点逐条跑。要先支持「一进多出」的执行模型。" },
-    { type: "utility.join", label: "Join Args 合并参数", emoji: "🧷", soon: true, hint: "把多条参数并成一条，和 Split 配套。" },
+    { type: "utility.split", label: "Split Arg 拆分参数", emoji: "✂️" },
+    { type: "utility.join", label: "Join Args 合并参数", emoji: "🧷" },
     { type: "utility.junction", label: "Junction 汇流点", emoji: "⤵️", soon: true, hint: "纯理线用的中转点，只影响连线走向不改数据。" },
     { type: "utility.filter", label: "Filter 过滤", emoji: "🚦", soon: true, hint: "条件不满足就整条中断（Conditional 的单出口版）。" },
     { type: "utility.fileconditional", label: "File Conditional 文件条件", emoji: "🗃️", soon: true, hint: "按文件类型/扩展名分流。等 File Filter 一起做。" },
@@ -167,6 +167,8 @@ function defaultConfig(type: string): Record<string, unknown> {
     case "utility.replace": return { target: "", find: "", to: "", regex: false, ci: false };
     case "utility.delay": return { seconds: 1 };
     case "utility.debug": return { text: "{query}", after: "pass", clear: false };
+    case "utility.split": return { with: "comma", custom: "", trim: true, discardEmpty: false, output: "vars", prefix: "split" };
+    case "utility.join": return { with: "newline", custom: "" };
     case "output.writefile": return { path: "", content: "{query}", ifExists: "overwrite", uuid: false, mkdirs: true, allowEmpty: false };
     case "action.ask_assistant": return { prompt: "{query}", title: "", show: true };
     case "action.create_task": return { text: "{query}", prefix: "帮我建个任务：" };
@@ -1066,6 +1068,9 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   );
 }
 
+// Split / Join 的分隔符选项：键与引擎 delimOf() 认的值一一对应，改这里记得两边一起改。
+const DELIM_LABEL: Record<string, string> = { comma: "逗号", space: "空格", tab: "制表符", newline: "换行", custom: "自定义" };
+
 function nodeSummary(n: WFNode): string {
   const c = n.config as Record<string, string>;
   switch (n.type) {
@@ -1088,6 +1093,8 @@ function nodeSummary(n: WFNode): string {
     case "utility.replace": return c.find ? `「${c.find}」→「${c.to || ""}」` : "未设查找内容";
     case "utility.delay": return `等待 ${Number(c.seconds || 0)} 秒`;
     case "utility.debug": return String(c.text || "{query}").replace(/\s+/g, " ").slice(0, 28);
+    case "utility.split": return `按${DELIM_LABEL[c.with || "comma"] || "自定义"}拆 · ${c.output === "args" ? "逐条执行" : `变量 ${String(c.prefix || "split")}1…`}`;
+    case "utility.join": return `用${DELIM_LABEL[c.with || "newline"] || "自定义"}合并`;
     case "output.writefile": return c.path ? `写入 ${String(c.path).split("/").pop()}` : "未设文件名";
     case "action.ask_assistant": return String(c.prompt || "{query}").slice(0, 28);
     case "action.create_task": return String(c.text || "{query}").slice(0, 28);
@@ -1367,6 +1374,47 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
               </select></div>
             <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.clear} onChange={(e) => set("clear", e.target.checked)} />执行到这里时先清空本工作流的调试记录</label>
             <div className="text-[11px] text-muted">文本会出现在顶栏「🐞 调试」抽屉里这个节点下面，和脚本输出同一个位置。变量名里带 key/token/password 这类词的值会自动打码。</div>
+          </>) : null}
+          {node.type === "utility.split" ? (<>
+            <div><span className={lab}>按什么拆</span>
+              <div className="flex gap-2">
+                <select className={inp} value={String(c.with || "comma")} onChange={(e) => set("with", e.target.value)}>
+                  <option value="comma">逗号 ,</option><option value="space">空格</option><option value="tab">制表符 Tab</option><option value="newline">换行</option>
+                  <option value="custom">自定义…</option>
+                </select>
+                {String(c.with || "comma") === "custom" ? (
+                  <input className={`${inp} font-mono flex-1`} value={String(c.custom || "")} onChange={(e) => set("custom", e.target.value)} placeholder="如 ; 或 \n" />
+                ) : null}
+              </div></div>
+            <div className="flex flex-col gap-1.5">
+              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={c.trim !== false} onChange={(e) => set("trim", e.target.checked)} />去掉每一项两端的空白</label>
+              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.discardEmpty} onChange={(e) => set("discardEmpty", e.target.checked)} />丢掉空项</label>
+            </div>
+            <div><span className={lab}>输出方式</span>
+              <select className={inp} value={String(c.output || "vars")} onChange={(e) => set("output", e.target.value)}>
+                <option value="vars">写成变量（参数原样传给下游）</option>
+                <option value="args">作为参数列表（下游逐条执行一遍）</option>
+              </select></div>
+            {String(c.output || "vars") === "args" ? (
+              <div className="text-[11px] text-muted">下游会按拆出的每一项各跑一遍，串行且保持原顺序；末端接一个「Join 合并参数」就能再并回一条。一次最多 200 项，超出部分会被丢弃。</div>
+            ) : (<>
+              <div><span className={lab}>变量前缀</span>
+                <input className={`${inp} font-mono`} value={String(c.prefix || "")} onChange={(e) => set("prefix", e.target.value)} placeholder="split" /></div>
+              <div className="text-[11px] text-muted">拆出的项写成 <span className="font-mono">{`{var:${String(c.prefix || "split")}1}`}</span>、<span className="font-mono">{`{var:${String(c.prefix || "split")}2}`}</span>… 另有 <span className="font-mono">{`{var:${String(c.prefix || "split")}Count}`}</span> 记总项数；参数本身不变。</div>
+            </>)}
+          </>) : null}
+          {node.type === "utility.join" ? (<>
+            <div><span className={lab}>用什么连接</span>
+              <div className="flex gap-2">
+                <select className={inp} value={String(c.with || "newline")} onChange={(e) => set("with", e.target.value)}>
+                  <option value="comma">逗号 ,</option><option value="space">空格</option><option value="tab">制表符 Tab</option><option value="newline">换行</option>
+                  <option value="custom">自定义…</option>
+                </select>
+                {String(c.with || "newline") === "custom" ? (
+                  <input className={`${inp} font-mono flex-1`} value={String(c.custom || "")} onChange={(e) => set("custom", e.target.value)} placeholder="如 ; 或 \n" />
+                ) : null}
+              </div></div>
+            <div className="text-[11px] text-muted">把上游「Split 拆分参数（参数列表）」扇出的多条参数收集起来，等最后一项到齐后连成一条再往下传。上游不是这种扇出时（只有单项），入参原样透传。</div>
           </>) : null}
           {node.type === "output.writefile" ? (<>
             <div><span className={lab}>文件名 / 路径（支持 ~、{"{query}"}、{"{date}"} 等占位符）</span>

@@ -141,6 +141,41 @@ async function uniquePath(p: string): Promise<string> {
   return `${base}-${Date.now()}${ext}`;
 }
 
+// Split / Join 的分隔符：预置 comma / space / tab / newline，custom 用用户自己填的串。
+// custom 里认 \n \t \\ 三种转义（面板上只有一个单行输入框，敲不了真的换行/制表符）。
+function delimOf(kind: string, custom: string): string {
+  switch (String(kind || "comma")) {
+    case "space": return " ";
+    case "tab": return "\t";
+    case "newline": return "\n";
+    case "custom":
+      return String(custom || "").replace(/\\(.)/g, (_m, c: string) => (c === "n" ? "\n" : c === "t" ? "\t" : c === "\\" ? "\\" : `\\${c}`));
+    case "comma":
+    default: return ",";
+  }
+}
+
+// 按分隔符拆分。先把 \r\n / \r 归一成 \n，这样从 Windows / 网页复制来的文本也能正确按行拆；
+// 分隔符为空（选了 Custom 却没填）时不拆，整条当成一项，免得静默变成逐字符拆开。
+function splitBy(text: string, sep: string): string[] {
+  const s = String(text ?? "").replace(/\r\n?/g, "\n");
+  return sep ? s.split(sep) : [s];
+}
+
+// 扇出上下文：Split 以「参数列表」方式输出时，下游会被拆出的每一项各跑一遍，
+// 这个对象贯穿这一批的所有项，让链路末端的 Join 知道「现在是第几项、一共几项、已经收了哪些」。
+// bucket 挂在这一批上而不是引擎实例上，所以嵌套的 Split 与并发触发各收各的，互不串台。
+interface FanCtx {
+  index: number;                  // 当前是第几项（0 起）
+  total: number;                  // 这一批共几项
+  bucket: Map<string, string[]>;  // Join 节点 id → 该节点已收集到的参数
+  parent: FanCtx | null;          // 外层扇出（Split 套 Split 时用；Join 合并完回到外层）
+}
+
+// 一次扇出最多跑多少项：Split 撞上一份大文本时（比如整个文件按行拆），
+// 逐项串行跑几千遍会把链路拖到没反应，超出部分直接截断并在反馈里说明。
+const MAX_FAN = 200;
+
 export class WorkflowEngine {
   private ctx = new Map<string, ItemCtx>();  // token → 上下文（每次 query 重置）
   private seq = 0;
@@ -568,7 +603,8 @@ export class WorkflowEngine {
   // 执行单个节点，随后把「输出 arg」传给所有下游（回车分支）——支持链式(a→b→c)与扇出(a→b, a→c)多节点参数传递。
   // varsIn 在入口处复制一份：本节点写入的变量对自己的下游可见，但不会污染兄弟分支。
   // tr：本次运行的调试轨迹（W8），一路往下传而不是存在实例上，避免并发执行互相串台。
-  private async runNode(wf: Workflow, nodeId: string, arg: string, varsIn: Record<string, string>, visited: Set<string>, tr: TraceRun | null = null): Promise<string> {
+  // fan：当前所处的扇出批次（上游有 Split 且走「参数列表」输出时才非空），同样一路往下传给 Join 用。
+  private async runNode(wf: Workflow, nodeId: string, arg: string, varsIn: Record<string, string>, visited: Set<string>, tr: TraceRun | null = null, fan: FanCtx | null = null): Promise<string> {
     if (visited.has(nodeId)) return "";  // 防环
     visited.add(nodeId);
     const node = this.node(wf, nodeId);
@@ -581,7 +617,7 @@ export class WorkflowEngine {
       this.trace.stepEnd(skipStep, skipAt, { outArg: arg, skipped: true });
       let fb = "";
       for (const c of this.outConns(wf, nodeId, "", "")) {
-        const r = await this.runNode(wf, c.to, arg, vars, visited, tr);
+        const r = await this.runNode(wf, c.to, arg, vars, visited, tr, fan);
         if (r) fb = r;
       }
       return fb;
@@ -591,6 +627,11 @@ export class WorkflowEngine {
     let outArg = arg;   // 默认把 arg 原样传给下游
     let outPort = "";   // 从哪个出口往下继续（多出口节点会改写：conditional 的 r0/else、脚本失败的 error）
     let stop = false;   // 是否就此终止本条链路（不再往下游传）
+    // Split / Join 用：fanItems 非空表示本节点要把下游按项逐条跑一遍；
+    // hold=true 表示 Join 还没收齐、这一项到此为止；fanOut 是传给下游的扇出批次（Join 合并后回到外层）。
+    let fanItems: string[] | null = null;
+    let fanOut: FanCtx | null = fan;
+    let hold = false;
     // 调试轨迹用：脚本类节点的输出与退出码，跑完一并写进这一步。
     let stdout: string | undefined;
     let stderr: string | undefined;
@@ -646,6 +687,54 @@ export class WorkflowEngine {
           catch { feedback = "替换失败：正则表达式不合法"; }
         }
         if (target) vars[target] = done; else outArg = done;
+        break;
+      }
+
+      // ── 工具：Split 拆分参数 —— 把一条参数按分隔符拆成多条 ──
+      // 两种输出方式：
+      //   vars（变量）：拆出的项写成 {prefix}1..{prefix}N 加一个 {prefix}Count，arg 原样透传，链路仍是单条；
+      //   args（参数列表）：下游按拆出的项逐条跑一遍（扇出），串行执行、保持原顺序，末端可用 Join 合回一条。
+      case "utility.split": {
+        const sep = delimOf(String(node.config.with || "comma"), String(node.config.custom || ""));
+        let items = splitBy(arg, sep);
+        if (node.config.trim !== false) items = items.map((s) => s.trim());   // 默认去掉每项两端空白
+        if (node.config.discardEmpty) items = items.filter((s) => s !== "");  // 默认保留空项（和 Alfred 一致）
+        if (items.length > MAX_FAN) {
+          feedback = `拆出 ${items.length} 项，超出上限只取前 ${MAX_FAN} 项`;
+          items = items.slice(0, MAX_FAN);
+        }
+        if (String(node.config.output || "vars") === "args") {
+          fanItems = items;
+          stdout = `拆出 ${items.length} 项，下游逐条执行`;
+        } else {
+          const prefix = String(node.config.prefix || "split").trim() || "split";
+          for (let i = 0; i < items.length; i++) vars[`${prefix}${i + 1}`] = items[i];
+          vars[`${prefix}Count`] = String(items.length);
+          stdout = `拆出 ${items.length} 项 → ${prefix}1..${prefix}${items.length}`;
+        }
+        break;
+      }
+
+      // ── 工具：Join 合并参数 —— 把 Split 扇出的多条参数并回一条 ──
+      // 不在扇出里（上游没接 Split，或 Split 走的是变量输出）时直接透传，和 Alfred「单项则原样通过」一致。
+      // 在扇出里：前 N-1 项只往桶里收、不再往下走，最后一项把桶里的内容用分隔符连成一条交给下游。
+      // 已知取舍：中途某一项被 Conditional 之类拦掉就不会进桶（那一项丢失）；若最后一项压根没走到这里，
+      // 整批都不会输出。这是「按到达顺序收集」换来的简单，链路里有条件分支时要留意。
+      case "utility.join": {
+        if (!fan) { stdout = "不在拆分批次里，原样透传"; break; }
+        const box = fan.bucket.get(node.id) || [];
+        box.push(arg);
+        fan.bucket.set(node.id, box);
+        if (fan.index < fan.total - 1) {
+          hold = true;
+          stdout = `已收集 ${box.length}/${fan.total} 项，等后面的项`;
+          break;
+        }
+        const sep = delimOf(String(node.config.with || "newline"), String(node.config.custom || ""));
+        outArg = box.join(sep);
+        fan.bucket.delete(node.id);
+        fanOut = fan.parent;   // 合并完就不在这一批里了，回到外层扇出（没有外层则回到普通单条链路）
+        stdout = `合并 ${box.length} 项`;
         break;
       }
 
@@ -857,9 +946,23 @@ export class WorkflowEngine {
     }
     this.trace.stepEnd(step, startedAt, { outArg, outPort, feedback, stopped: stop, stdout, stderr, exitCode });
     if (stop) return feedback;   // 链路被节点主动终止（脚本失败、远程调用失败等）
+    if (hold) return feedback;   // Join 还没收齐，这一项到此为止，等这批的最后一项来了再往下走
+    // Split（参数列表输出）：下游按拆出的每一项各跑一遍，串行且保序，方便脚本节点顺序处理。
+    if (fanItems) {
+      const ctx: FanCtx = { index: 0, total: fanItems.length, bucket: new Map(), parent: fan };
+      for (let i = 0; i < fanItems.length; i++) {
+        ctx.index = i;
+        for (const c of this.outConns(wf, nodeId, "", outPort)) {
+          // visited 传副本而不是同一个：对上游仍然防环，但下游节点允许每一项各执行一次。
+          const fb = await this.runNode(wf, c.to, fanItems[i], vars, new Set(visited), tr, ctx);
+          if (fb) feedback = fb;
+        }
+      }
+      return feedback;
+    }
     // 传给 outPort 出口上的所有下游（回车分支）——链式/扇出都把 arg 与变量继续传递。
     for (const c of this.outConns(wf, nodeId, "", outPort)) {
-      const fb = await this.runNode(wf, c.to, outArg, vars, visited, tr);
+      const fb = await this.runNode(wf, c.to, outArg, vars, visited, tr, fanOut);
       if (fb) feedback = fb;
     }
     return feedback;

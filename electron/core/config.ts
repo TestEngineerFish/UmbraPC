@@ -103,6 +103,7 @@ export interface WorkflowNode {
                                      // | "input.calc" | "input.units"
                                      // | "utility.args" | "utility.conditional" | "utility.transform"
                                      // | "utility.replace" | "utility.delay" | "utility.debug"
+                                     // | "utility.split" | "utility.join"
                                      // | "action.script" | "action.copy" | "action.paste"
                                      // | "action.openurl" | "action.openfile" | "action.launch"
                                      // | "action.assistant" | "action.inspiration"
