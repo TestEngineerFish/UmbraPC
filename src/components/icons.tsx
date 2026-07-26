@@ -440,3 +440,262 @@ export function IconPanel(p: IconProps) {
     </svg>
   );
 }
+
+// ── 以下为工作流对象清单用的图标：每个节点类型都要有一个线性图标（画布节点头部、右键菜单、对象库共用一套）。
+
+// 键盘：Keyword 触发 / Dispatch Key Combo。
+export function IconKeyboard(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="2" y="6" width="20" height="12" rx="2" />
+      <path d="M6 10h2M11 10h2M16 10h2M8 14h8" />
+    </svg>
+  );
+}
+
+// ⌘ 符号轮廓：全局热键。
+export function IconCommand(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M9 9h6v6H9z" />
+      <path d="M9 9V7a2 2 0 1 0-2 2zM15 9V7a2 2 0 1 1 2 2zM9 15v2a2 2 0 1 1-2-2zM15 15v2a2 2 0 1 0 2-2z" />
+    </svg>
+  );
+}
+
+// 无穷符号：兜底触发（怎么都跑）。
+export function IconInfinity(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M7 9a3 3 0 0 0 0 6c2 0 3-2 5-3s3-3 5-3a3 3 0 0 1 0 6c-2 0-3-2-5-3S9 9 7 9Z" />
+    </svg>
+  );
+}
+
+// 准心：Universal Action（选中即用）。
+export function IconTarget(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="12" cy="12" r="7" />
+      <circle cx="12" cy="12" r="2.6" />
+      <path d="M12 2v3M12 19v3M2 12h3M19 12h3" />
+    </svg>
+  );
+}
+
+// 剪刀：Snippet 片段 / Split 拆分。
+export function IconScissors(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="6" cy="18" r="2.4" />
+      <circle cx="6" cy="6" r="2.4" />
+      <path d="M8 7.5 20 18M8 16.5 20 6" />
+    </svg>
+  );
+}
+
+// 手机：远程触发（手机点一下跑桌面工作流）。
+export function IconPhone(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="7" y="2.5" width="10" height="19" rx="2.4" />
+      <path d="M11 18.5h2" />
+    </svg>
+  );
+}
+
+// 列表：List Filter / 全选。
+export function IconList(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M8 7h12M8 12h12M8 17h12M4 7h.01M4 12h.01M4 17h.01" />
+    </svg>
+  );
+}
+
+// 尖括号：编解码 / 文本变换 / 脚本类。
+export function IconCode(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="m9 8-4 4 4 4M15 8l4 4-4 4" />
+    </svg>
+  );
+}
+
+// 计算器：计算器输入。
+export function IconCalc(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="5" y="3" width="14" height="18" rx="2" />
+      <path d="M8 7h8M8.5 12h.01M12 12h.01M15.5 12h.01M8.5 16h.01M12 16h.01M15.5 16h.01" />
+    </svg>
+  );
+}
+
+// 三角尺：单位换算。
+export function IconRuler(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 20V6l14 14H4Z" />
+      <path d="M8 16v-2M11 17v-2M14 18v-2" />
+    </svg>
+  );
+}
+
+// 书：词典查询 / 大字显示。
+export function IconBook(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M5 4.5A1.5 1.5 0 0 1 6.5 3H19v18H6.5A1.5 1.5 0 0 1 5 19.5Z" />
+      <path d="M5 17h14" />
+    </svg>
+  );
+}
+
+// 分叉：Conditional 条件分流 / Junction 汇流。
+export function IconBranch(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M7 4v7a4 4 0 0 0 4 4h6" />
+      <path d="m14 12 3 3-3 3" />
+      <path d="M7 15v5" />
+    </svg>
+  );
+}
+
+// 时钟：Delay 延时 / 定时。
+export function IconClock(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M12 7.5V12l3 2" />
+    </svg>
+  );
+}
+
+// 链环：Join 合并 / 打开网址类的连接语义。
+export function IconLink(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M10 13.5a3.5 3.5 0 0 0 5 0l3-3a3.5 3.5 0 0 0-5-5l-1 1" />
+      <path d="M14 10.5a3.5 3.5 0 0 0-5 0l-3 3a3.5 3.5 0 0 0 5 5l1-1" />
+    </svg>
+  );
+}
+
+// 漏斗：Filter 过滤。
+export function IconFilter(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 5h16l-6 7v7l-4-2v-5Z" />
+    </svg>
+  );
+}
+
+// 地球：打开网址 / 网页搜索。
+export function IconGlobe(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="12" cy="12" r="8.5" />
+      <path d="M3.5 12h17M12 3.5c2.4 2.4 2.4 14.6 0 17M12 3.5c-2.4 2.4-2.4 14.6 0 17" />
+    </svg>
+  );
+}
+
+// 终端：Run Script / 终端命令。
+export function IconTerminal(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="m7 10 2.5 2L7 14M12.5 14H17" />
+    </svg>
+  );
+}
+
+// 对话气泡：发给秘书 / 问秘书。
+export function IconChat(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M20 12a7.5 7.5 0 0 1-7.5 7.5H8l-4 2.5.9-4.2A7.5 7.5 0 0 1 12.5 4.5A7.5 7.5 0 0 1 20 12Z" />
+    </svg>
+  );
+}
+
+// 灯泡：记为灵感。
+export function IconBulb(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M9 17h6M10 20.5h4" />
+      <path d="M12 3a6 6 0 0 0-3.5 10.9V17h7v-3.1A6 6 0 0 0 12 3Z" />
+    </svg>
+  );
+}
+
+// 日历：建任务 / 定时。
+export function IconCalendar(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="3.5" y="5" width="17" height="15.5" rx="2" />
+      <path d="M3.5 10h17M8 3v4M16 3v4" />
+    </svg>
+  );
+}
+
+// 齿轮：自动化任务 / 快捷指令。
+export function IconGear(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2.8v2.4M12 18.8v2.4M4.5 7.6l2 1.2M17.5 15.2l2 1.2M4.5 16.4l2-1.2M17.5 8.8l2-1.2" />
+    </svg>
+  );
+}
+
+// 音符：音乐控制。
+export function IconMusic(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="7" cy="17.5" r="2.6" />
+      <circle cx="17" cy="15.5" r="2.6" />
+      <path d="M9.6 17.5V6l9.8-2v11.5" />
+    </svg>
+  );
+}
+
+// 铃铛：系统通知。
+export function IconBell(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+      <path d="M10.3 21a2 2 0 0 0 3.4 0" />
+    </svg>
+  );
+}
+
+// 音量：朗读 / 播放提示音。
+export function IconVolume(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M11 5 6.5 9H3v6h3.5L11 19Z" />
+      <path d="M15 9.5a3.5 3.5 0 0 1 0 5M17.8 7a7 7 0 0 1 0 10" />
+    </svg>
+  );
+}
+
+// 减号：画布缩放胶囊的「缩小」。
+export function IconMinus(p: IconProps) {
+  return (
+    <svg {...base(p)} strokeWidth={2.2}>
+      <path d="M5 12h14" />
+    </svg>
+  );
+}
+
+// 四角内收：画布缩放胶囊的「适应画布」。
+export function IconFit(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4" />
+    </svg>
+  );
+}

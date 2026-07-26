@@ -62,6 +62,8 @@ body {
 @keyframes umbob { 0%,80%,100% { transform: translateY(0); opacity: .35 } 40% { transform: translateY(-4px); opacity: 1 } }
 @keyframes umbslide { 0% { margin-left: -38% } 100% { margin-left: 100% } }
 @keyframes umbspin { to { transform: rotate(360deg) } }
+/* 工作流画布上选中连线的流动虚线：叠在实线之上的一条橙色 dash，靠偏移动画表示「方向」。 */
+@keyframes umdash { to { stroke-dashoffset: -14 } }
 
 button { font-family: inherit; }
 a { color: inherit; }

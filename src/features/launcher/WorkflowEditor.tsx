@@ -2,7 +2,20 @@
 // 画布：节点按下任意处拖动、单击选中(Delete 删)、双击配置、右键菜单；端口拉线连接；
 // 连线徽章：单击选中、双击切换修饰键、右键删除；Cmd+Z 撤销；滚轮/按钮缩放；空白拖拽平移（无限画布）。
 import { useCallback, useEffect, useRef, useState } from "react";
-import { IconBug, IconDots, IconExternal, IconFlow, IconPanel, IconPlus, IconRedo, IconSearch, IconTrash, IconUndo } from "../../components/icons";
+import type { ComponentType, ReactNode } from "react";
+import {
+  IconAlert, IconBell, IconBook, IconBranch, IconBug, IconBulb, IconCalc, IconCalendar, IconChat, IconCheck,
+  IconChevronRight, IconClip, IconClock, IconCloud, IconCode, IconCommand, IconCopy, IconDice, IconDots, IconDownload,
+  IconExternal, IconEye,
+  IconFit, IconMinus,
+  IconEyeOff, IconFile, IconFilter, IconFlow, IconFolder, IconGear, IconGlobe, IconGrid, IconInfinity, IconKeyboard,
+  IconLink, IconList, IconMusic, IconPanel, IconPhone, IconPlus, IconRedo, IconRefresh, IconRocket,
+  IconRuler, IconScissors, IconSearch, IconTag, IconTarget, IconTerminal, IconText, IconTrash, IconUndo, IconUser,
+  IconVolume, IconWindow, IconX,
+} from "../../components/icons";
+
+// 对象清单里每一项的图标：统一是 icons.tsx 里那套线性图标组件（只吃 size，颜色跟父级 color 走）。
+type IconComp = ComponentType<{ size?: number }>;
 
 // disabled：临时停用（E6）。触发器停用=整条链路唤不起来；其它节点停用=旁路，入参原样往下传。
 export interface WFNode { id: string; type: string; x: number; y: number; config: Record<string, unknown>; disabled?: boolean }
@@ -32,7 +45,7 @@ export interface TraceRun {
 
 // 预制件（E3）：把选中的一组节点连同它们之间的连线整块存下来，之后在任何工作流里一键落地。
 // 节点坐标以组内左上角为原点，落地时再整体平移到落点；节点 id 落地时重新生成，所以这里存的是「模板」。
-export interface WFPrefab { id: string; name: string; icon?: string; nodes: WFNode[]; connections: WFConn[]; createdAt: number }
+export interface WFPrefab { id: string; name: string; nodes: WFNode[]; connections: WFConn[]; createdAt: number }
 
 interface LauncherAPI {
   getWorkflows(): Promise<WF[]>; setWorkflows(w: WF[]): Promise<void>;
@@ -49,9 +62,9 @@ interface LauncherAPI {
 }
 const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
 
-const NODE_W = 168;
-const NODE_H = 66;     // 节点最小高度（框选命中判定用，多出口节点会更高但不影响判定）
-const PORT_Y = 26;
+const NODE_W = 252;   // 节点卡片宽度（对齐设计稿）
+const NODE_H = 74;    // 节点最小高度（框选命中判定用，多出口节点会更高但不影响判定）
+const PORT_Y = 21;    // 端口的垂直位置：卡片头部的竖直中线（1px 描边 + 9px 内边距 + 22px 图标的一半）
 const PORT_GAP = 20;   // 多出口节点：相邻两个输出端口的垂直间距
 const MODS = ["", "cmd", "alt", "ctrl", "shift"];
 const MOD_LABEL: Record<string, string> = { "": "↵", cmd: "⌘↵", alt: "⌥↵", ctrl: "⌃↵", shift: "⇧↵" };
@@ -78,94 +91,150 @@ function wfMeta(w: WF): string {
 // 这样面板本身就是一张能力地图（哪些能用、哪些在路上一目了然），
 // 补齐时只要写好 runNode 分支再把 soon 去掉即可，面板结构不用动。
 // hint 是置灰项的悬停说明，写清楚「为什么还没做 / 打算怎么做」。
-interface CatItem { type: string; label: string; emoji: string; soon?: boolean; hint?: string }
-const CATALOG: { cat: string; items: CatItem[] }[] = [
-  { cat: "触发 Triggers", items: [
-    { type: "trigger.keyword", label: "Keyword 关键词", emoji: "⌨️" },
-    { type: "trigger.hotkey", label: "Hotkey 全局热键", emoji: "⌘" },
+interface CatItem { type: string; label: string; icon: IconComp; soon?: boolean; hint?: string }
+const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
+  { cat: "触发 Triggers", icon: IconKeyboard, items: [
+    { type: "trigger.keyword", label: "Keyword 关键词", icon: IconKeyboard },
+    { type: "trigger.hotkey", label: "Hotkey 全局热键", icon: IconCommand },
     // 对应 Alfred 的 Fallback Search：主面板没匹配到结果时兜底，所以不再单列 Fallback 一项。
-    { type: "trigger.always", label: "Fallback 始终触发", emoji: "♾️" },
-    { type: "trigger.universal", label: "Universal Action 选中即用", emoji: "🎯" },
-    { type: "trigger.snippet", label: "Snippet 片段触发", emoji: "✂️", soon: true, hint: "打字触发：输入约定的缩写就跑工作流。需要键盘监听，安全模型还没定，暂未实现。" },
-    { type: "trigger.external", label: "External 外部调用", emoji: "📡", soon: true, hint: "给别的程序留一个可被调用的入口（命令行/URL Scheme）。等对外接口定稿后实现。" },
-    { type: "trigger.remote", label: "Remote 远程触发", emoji: "📱", soon: true, hint: "手机端点一下触发桌面工作流。等可信设备网络那一期一起做。" },
-    { type: "trigger.fileaction", label: "File Action 文件动作", emoji: "🗂️", soon: true, hint: "在文件管理器里选中文件后触发。要接系统的文件服务，暂未实现。" },
-    { type: "trigger.contact", label: "Contact Action 联系人动作", emoji: "👤", soon: true, hint: "从通讯录联系人触发。我们暂时没有通讯录能力。" },
+    { type: "trigger.always", label: "Fallback 始终触发", icon: IconInfinity },
+    { type: "trigger.universal", label: "Universal Action 选中即用", icon: IconTarget },
+    { type: "trigger.snippet", label: "Snippet 片段触发", icon: IconScissors, soon: true, hint: "打字触发：输入约定的缩写就跑工作流。需要键盘监听，安全模型还没定，暂未实现。" },
+    { type: "trigger.external", label: "External 外部调用", icon: IconExternal, soon: true, hint: "给别的程序留一个可被调用的入口（命令行/URL Scheme）。等对外接口定稿后实现。" },
+    { type: "trigger.remote", label: "Remote 远程触发", icon: IconPhone, soon: true, hint: "手机端点一下触发桌面工作流。等可信设备网络那一期一起做。" },
+    { type: "trigger.fileaction", label: "File Action 文件动作", icon: IconFolder, soon: true, hint: "在文件管理器里选中文件后触发。要接系统的文件服务，暂未实现。" },
+    { type: "trigger.contact", label: "Contact Action 联系人动作", icon: IconUser, soon: true, hint: "从通讯录联系人触发。我们暂时没有通讯录能力。" },
   ] },
-  { cat: "输入 Inputs", items: [
-    { type: "input.scriptfilter", label: "Script Filter 脚本过滤器", emoji: "🔎" },
-    { type: "input.listfilter", label: "List Filter 列表过滤器", emoji: "📃" },
-    { type: "input.codec", label: "编解码", emoji: "🔡" },
-    { type: "input.calc", label: "计算器", emoji: "🔢" },
-    { type: "input.units", label: "单位换算", emoji: "📐" },
-    { type: "input.filefilter", label: "File Filter 文件过滤器", emoji: "📁", soon: true, hint: "按范围和类型搜本地文件并列出来。等本地索引能力就绪后实现。" },
-    { type: "input.appsfilter", label: "Running Apps 运行中应用", emoji: "🪟", soon: true, hint: "列出当前运行的应用供切换/退出。要接系统窗口信息，暂未实现。" },
-    { type: "input.dict", label: "Dictionary 词典查询", emoji: "📖", soon: true, hint: "查系统词典。macOS 专属能力，跨平台方案没定。" },
+  { cat: "输入 Inputs", icon: IconFilter, items: [
+    { type: "input.scriptfilter", label: "Script Filter 脚本过滤器", icon: IconSearch },
+    { type: "input.listfilter", label: "List Filter 列表过滤器", icon: IconList },
+    { type: "input.codec", label: "编解码", icon: IconCode },
+    { type: "input.calc", label: "计算器", icon: IconCalc },
+    { type: "input.units", label: "单位换算", icon: IconRuler },
+    { type: "input.filefilter", label: "File Filter 文件过滤器", icon: IconFolder, soon: true, hint: "按范围和类型搜本地文件并列出来。等本地索引能力就绪后实现。" },
+    { type: "input.appsfilter", label: "Running Apps 运行中应用", icon: IconWindow, soon: true, hint: "列出当前运行的应用供切换/退出。要接系统窗口信息，暂未实现。" },
+    { type: "input.dict", label: "Dictionary 词典查询", icon: IconBook, soon: true, hint: "查系统词典。macOS 专属能力，跨平台方案没定。" },
   ] },
-  { cat: "工具 Utilities", items: [
-    { type: "utility.args", label: "Args & Vars 改参数/设变量", emoji: "🏷️" },
-    { type: "utility.conditional", label: "Conditional 条件分流", emoji: "🔀" },
-    { type: "utility.transform", label: "Transform 大小写/编解码", emoji: "🔠" },
-    { type: "utility.replace", label: "Replace 查找替换", emoji: "🔁" },
-    { type: "utility.delay", label: "Delay 延时", emoji: "⏱️" },
-    { type: "utility.debug", label: "Debug 调试打点", emoji: "🐞" },
-    { type: "utility.split", label: "Split Arg 拆分参数", emoji: "✂️" },
-    { type: "utility.join", label: "Join Args 合并参数", emoji: "🧷" },
-    { type: "utility.junction", label: "Junction 汇流点", emoji: "⤵️", soon: true, hint: "纯理线用的中转点，只影响连线走向不改数据。" },
-    { type: "utility.filter", label: "Filter 过滤", emoji: "🚦", soon: true, hint: "条件不满足就整条中断（Conditional 的单出口版）。" },
-    { type: "utility.fileconditional", label: "File Conditional 文件条件", emoji: "🗃️", soon: true, hint: "按文件类型/扩展名分流。等 File Filter 一起做。" },
-    { type: "utility.dialog", label: "Dialog Conditional 对话框", emoji: "❓", soon: true, hint: "弹个框问用户，按点了哪个按钮分流。UI 规范还没定。" },
-    { type: "utility.random", label: "Random 随机值", emoji: "🎲", soon: true, hint: "生成随机数/UUID 塞进参数。" },
-    { type: "utility.jsonconfig", label: "JSON Config 配置", emoji: "🧾", soon: true, hint: "用一段 JSON 一次性设置多个变量。" },
-    { type: "utility.hide", label: "隐藏主面板", emoji: "🙈", soon: true, hint: "执行到这里先把主面板收起来再继续。等窗口控制接口补齐。" },
-    { type: "utility.show", label: "显示主面板", emoji: "👁️", soon: true, hint: "把主面板重新唤起，和「隐藏主面板」配套。" },
+  { cat: "工具 Utilities", icon: IconGear, items: [
+    { type: "utility.args", label: "Args & Vars 改参数/设变量", icon: IconTag },
+    { type: "utility.conditional", label: "Conditional 条件分流", icon: IconBranch },
+    { type: "utility.transform", label: "Transform 大小写/编解码", icon: IconText },
+    { type: "utility.replace", label: "Replace 查找替换", icon: IconRefresh },
+    { type: "utility.delay", label: "Delay 延时", icon: IconClock },
+    { type: "utility.debug", label: "Debug 调试打点", icon: IconBug },
+    { type: "utility.split", label: "Split Arg 拆分参数", icon: IconScissors },
+    { type: "utility.join", label: "Join Args 合并参数", icon: IconLink },
+    { type: "utility.junction", label: "Junction 汇流点", icon: IconBranch, soon: true, hint: "纯理线用的中转点，只影响连线走向不改数据。" },
+    { type: "utility.filter", label: "Filter 过滤", icon: IconFilter, soon: true, hint: "条件不满足就整条中断（Conditional 的单出口版）。" },
+    { type: "utility.fileconditional", label: "File Conditional 文件条件", icon: IconFolder, soon: true, hint: "按文件类型/扩展名分流。等 File Filter 一起做。" },
+    { type: "utility.dialog", label: "Dialog Conditional 对话框", icon: IconAlert, soon: true, hint: "弹个框问用户，按点了哪个按钮分流。UI 规范还没定。" },
+    { type: "utility.random", label: "Random 随机值", icon: IconDice, soon: true, hint: "生成随机数/UUID 塞进参数。" },
+    { type: "utility.jsonconfig", label: "JSON Config 配置", icon: IconFile, soon: true, hint: "用一段 JSON 一次性设置多个变量。" },
+    { type: "utility.hide", label: "隐藏主面板", icon: IconEyeOff, soon: true, hint: "执行到这里先把主面板收起来再继续。等窗口控制接口补齐。" },
+    { type: "utility.show", label: "显示主面板", icon: IconEye, soon: true, hint: "把主面板重新唤起，和「隐藏主面板」配套。" },
   ] },
-  { cat: "动作 Actions", items: [
-    { type: "action.launch", label: "Launch Apps / Files 启动", emoji: "🚀" },
-    { type: "action.openfile", label: "Open File 打开文件/书签", emoji: "📂" },
-    { type: "action.openurl", label: "Open URL 打开网址", emoji: "🔗" },
-    { type: "action.script", label: "Run Script 执行脚本", emoji: "📜" },
-    { type: "action.copy", label: "Copy to Clipboard 复制", emoji: "📋" },
-    { type: "action.paste", label: "粘贴到前台", emoji: "📥" },
-    { type: "action.assistant", label: "发给秘书", emoji: "💬" },
-    { type: "action.inspiration", label: "记为灵感", emoji: "💡" },
-    { type: "action.ask_assistant", label: "问秘书（等回复）", emoji: "🤖" },
-    { type: "action.create_task", label: "建任务", emoji: "🗓️" },
-    { type: "action.device_skill", label: "设备技能派发", emoji: "🛰️" },
-    { type: "action.reveal", label: "Reveal in Finder 在文件管理器中显示", emoji: "🔦", soon: true, hint: "在系统文件管理器里定位到这个文件。跨平台差异小，排在下一批。" },
-    { type: "action.terminal", label: "Terminal Command 终端命令", emoji: "🖥️", soon: true, hint: "把命令送到系统终端里执行（区别于后台跑的 Run Script）。" },
-    { type: "action.browse", label: "Browse in Terminal 在终端中打开目录", emoji: "📼", soon: true, hint: "在终端里 cd 到这个目录。和终端命令一起做。" },
-    { type: "action.websearch", label: "Web Search 默认网页搜索", emoji: "🌐", soon: true, hint: "用默认搜索引擎搜关键词。等搜索引擎设置项落地。" },
-    { type: "action.filebuffer", label: "File Buffer 文件暂存区", emoji: "🗄️", soon: true, hint: "把文件攒进暂存区再一起处理。需要先有文件暂存区这个概念。" },
-    { type: "action.applescript", label: "Run AppleScript", emoji: "🍎", soon: true, hint: "macOS 专属脚本。跨平台上没有对应物，优先级低。" },
+  { cat: "动作 Actions", icon: IconRocket, items: [
+    { type: "action.launch", label: "Launch Apps / Files 启动", icon: IconRocket },
+    { type: "action.openfile", label: "Open File 打开文件/书签", icon: IconFolder },
+    { type: "action.openurl", label: "Open URL 打开网址", icon: IconGlobe },
+    { type: "action.script", label: "Run Script 执行脚本", icon: IconTerminal },
+    { type: "action.copy", label: "Copy to Clipboard 复制", icon: IconCopy },
+    { type: "action.paste", label: "粘贴到前台", icon: IconClip },
+    { type: "action.assistant", label: "发给秘书", icon: IconChat },
+    { type: "action.inspiration", label: "记为灵感", icon: IconBulb },
+    { type: "action.ask_assistant", label: "问秘书（等回复）", icon: IconChat },
+    { type: "action.create_task", label: "建任务", icon: IconCalendar },
+    { type: "action.device_skill", label: "设备技能派发", icon: IconCloud },
+    { type: "action.reveal", label: "Reveal in Finder 在文件管理器中显示", icon: IconSearch, soon: true, hint: "在系统文件管理器里定位到这个文件。跨平台差异小，排在下一批。" },
+    { type: "action.terminal", label: "Terminal Command 终端命令", icon: IconTerminal, soon: true, hint: "把命令送到系统终端里执行（区别于后台跑的 Run Script）。" },
+    { type: "action.browse", label: "Browse in Terminal 在终端中打开目录", icon: IconTerminal, soon: true, hint: "在终端里 cd 到这个目录。和终端命令一起做。" },
+    { type: "action.websearch", label: "Web Search 默认网页搜索", icon: IconGlobe, soon: true, hint: "用默认搜索引擎搜关键词。等搜索引擎设置项落地。" },
+    { type: "action.filebuffer", label: "File Buffer 文件暂存区", icon: IconGrid, soon: true, hint: "把文件攒进暂存区再一起处理。需要先有文件暂存区这个概念。" },
+    { type: "action.applescript", label: "Run AppleScript", icon: IconTerminal, soon: true, hint: "macOS 专属脚本。跨平台上没有对应物，优先级低。" },
   ] },
-  { cat: "自动化 Automations", items: [
-    { type: "automation.task", label: "Automation Task 自动化任务", emoji: "⚙️", soon: true, hint: "调用预置的系统自动化任务包。我们打算用「设备技能」来对应，先占位。" },
-    { type: "automation.shortcut", label: "Run Shortcut 运行快捷指令", emoji: "🔷", soon: true, hint: "调用系统快捷指令。macOS/iOS 专属。" },
-    { type: "automation.system", label: "System Command 系统命令", emoji: "🖲️", soon: true, hint: "锁屏、睡眠、清废纸篓这类系统操作。要逐条对齐各平台实现。" },
-    { type: "automation.music", label: "Music Command 音乐控制", emoji: "🎵", soon: true, hint: "控制音乐播放。我们暂时不碰媒体控制。" },
+  { cat: "自动化 Automations", icon: IconClock, items: [
+    { type: "automation.task", label: "Automation Task 自动化任务", icon: IconGear, soon: true, hint: "调用预置的系统自动化任务包。我们打算用「设备技能」来对应，先占位。" },
+    { type: "automation.shortcut", label: "Run Shortcut 运行快捷指令", icon: IconGear, soon: true, hint: "调用系统快捷指令。macOS/iOS 专属。" },
+    { type: "automation.system", label: "System Command 系统命令", icon: IconWindow, soon: true, hint: "锁屏、睡眠、清废纸篓这类系统操作。要逐条对齐各平台实现。" },
+    { type: "automation.music", label: "Music Command 音乐控制", icon: IconMusic, soon: true, hint: "控制音乐播放。我们暂时不碰媒体控制。" },
   ] },
-  { cat: "输出 Outputs", items: [
-    { type: "output.notify", label: "Post Notification 系统通知", emoji: "🔔" },
-    { type: "output.largetype", label: "Large Type 大字显示", emoji: "🅰️" },
-    { type: "output.textview", label: "Text View 文本视图", emoji: "📄" },
-    { type: "output.writefile", label: "Write Text File 写文本文件", emoji: "💾" },
-    { type: "output.keycombo", label: "Dispatch Key Combo 发送按键", emoji: "⌨️", soon: true, hint: "向前台应用发一组按键。要系统辅助功能权限。" },
-    { type: "output.speak", label: "Speak 朗读", emoji: "🔊", soon: true, hint: "把参数念出来。等接系统 TTS。" },
-    { type: "output.sound", label: "Play Sound 播放提示音", emoji: "🎧", soon: true, hint: "播一段提示音。" },
-    { type: "output.exttrigger", label: "Call External Trigger 调用外部触发", emoji: "🔁", soon: true, hint: "从这条工作流跳去触发另一条工作流。等 External 触发做完配套。" },
+  { cat: "输出 Outputs", icon: IconBell, items: [
+    { type: "output.notify", label: "Post Notification 系统通知", icon: IconBell },
+    { type: "output.largetype", label: "Large Type 大字显示", icon: IconBook },
+    { type: "output.textview", label: "Text View 文本视图", icon: IconFile },
+    { type: "output.writefile", label: "Write Text File 写文本文件", icon: IconDownload },
+    { type: "output.keycombo", label: "Dispatch Key Combo 发送按键", icon: IconKeyboard, soon: true, hint: "向前台应用发一组按键。要系统辅助功能权限。" },
+    { type: "output.speak", label: "Speak 朗读", icon: IconVolume, soon: true, hint: "把参数念出来。等接系统 TTS。" },
+    { type: "output.sound", label: "Play Sound 播放提示音", icon: IconMusic, soon: true, hint: "播一段提示音。" },
+    { type: "output.exttrigger", label: "Call External Trigger 调用外部触发", icon: IconRefresh, soon: true, hint: "从这条工作流跳去触发另一条工作流。等 External 触发做完配套。" },
   ] },
 ];
-const TYPE_META: Record<string, { label: string; emoji: string; kind: string }> = {};
-for (const g of CATALOG) for (const it of g.items) TYPE_META[it.type] = { label: it.label, emoji: it.emoji, kind: it.type.split(".")[0] };
-const KIND_ACCENT: Record<string, string> = { trigger: "#8E44AD", input: "#2980B9", utility: "#B7791F", action: "#27AE60", output: "#E8590C", automation: "#16A085" };
+const TYPE_META: Record<string, { label: string; icon: IconComp; kind: string }> = {};
+for (const g of CATALOG) for (const it of g.items) TYPE_META[it.type] = { label: it.label, icon: it.icon, kind: it.type.split(".")[0] };
+// 画布配色：设计规范里画布是全局唯一硬编码深色的地方（深浅色主题切换时它不变），
+// 所以这些值不走 CSS 变量，集中放这一处，改配色只动这个对象。
+const CV = {
+  bg: "#151310",              // 画布底
+  node: "#232019",            // 节点卡片底
+  nodeOff: "#1F1C18",         // 停用节点的卡片底（比正常再暗一档）
+  nodeBorder: "#383229",      // 节点描边
+  nodeOffBorder: "#3D372E",   // 停用节点的虚线描边
+  nodeLine: "#332E26",        // 节点头部与内容之间的分隔线
+  wire: "#4E463C",            // 连线
+  port: "#5B5347",            // 端口（默认/兜底出口）
+  chip: "rgba(35,32,25,.92)", // 浮层（缩放胶囊、底部信息条、连线徽章）的底色
+  text: "#EDEAE3",
+  muted: "#9A938A",
+  faint: "#6E675E",
+  dim: "#C9C3B8",             // 浮层里的正文（比 text 稍收敛）
+  orange: "#E8590C",
+  orangeText: "#F0A878",
+  danger: "#E0675C",
+};
+// 画布浮层（缩放胶囊 / 选区信息 / 快捷键条）的公共外观，三处一致。
+const CV_FLOAT = { background: CV.chip, border: `1px solid ${CV.nodeBorder}`, borderRadius: 9 };
+// 缩放胶囊里单个按钮的类名（颜色在使用处走内联样式，因为画布配色不走 CSS 变量）。
+const ZB = "w-8 h-[26px] flex-none flex items-center justify-center bg-transparent hover:bg-[rgba(255,255,255,.07)]";
+// 画布快捷键：底部条只露前四条，其余进「全部快捷键」弹窗；两处同一份数据，不会各说一套。
+const CANVAS_KEYS: { key: string; label: string }[] = [
+  { key: "/", label: "搜对象" },
+  { key: "⌘Z", label: "撤销" },
+  { key: "⌘D", label: "停用" },
+  { key: "⇧拖", label: "框选" },
+  { key: "⇧⌘Z", label: "重做" },
+  { key: "⌘A", label: "全选节点" },
+  { key: "⌘点击", label: "加选 / 减选" },
+  { key: "Delete", label: "删除选中的节点或连线" },
+  { key: "双击节点", label: "配置这个节点" },
+  { key: "双击空白", label: "在落点处搜对象" },
+  { key: "⇧1", label: "适应画布" },
+  { key: "⇧0", label: "复位视图（100%）" },
+  { key: "⌘/⌃+滚轮", label: "缩放" },
+  { key: "拖空白", label: "平移画布" },
+  { key: "拖端口", label: "连线到另一个节点" },
+  { key: "右键", label: "添加对象 / 对齐 / 存预制件" },
+];
+
+// 节点按大类着色：画布是全局唯一硬编码深色的地方，所以这套颜色也直接写死，不走 CSS 变量。
+// bg 是头部图标方块的底色，fg 是图标本身的颜色，label 是头部右侧那颗小徽章的文字。
+// 六个大类各给一个色相，都在 #232019 底上验过对比度。
+const KIND_STYLE: Record<string, { label: string; bg: string; fg: string }> = {
+  trigger:    { label: "触发",   bg: "rgba(232,89,12,.18)",  fg: "#F0A878" },
+  input:      { label: "输入",   bg: "rgba(56,132,199,.22)", fg: "#7FB3DF" },
+  utility:    { label: "工具",   bg: "rgba(139,92,246,.20)", fg: "#B39DF3" },
+  action:     { label: "动作",   bg: "rgba(15,118,110,.22)", fg: "#34B5A6" },
+  automation: { label: "自动化", bg: "rgba(79,184,201,.20)", fg: "#4FB8C9" },
+  output:     { label: "输出",   bg: "rgba(180,83,9,.24)",   fg: "#D98A29" },
+};
 // 拍平的对象清单（E1 搜索面板用）：分类信息一并带上，搜索时把分类名也算进匹配范围。
 // 只收已实现的 —— 搜索面板和右键菜单是「直接添加」的入口，置灰项混进去只会白点一下。
-const ALL_ITEMS: { type: string; label: string; emoji: string; cat: string }[] =
-  CATALOG.flatMap((g) => g.items.filter((it) => !it.soon).map((it) => ({ type: it.type, label: it.label, emoji: it.emoji, cat: g.cat })));
+const ALL_ITEMS: { type: string; label: string; icon: IconComp; cat: string }[] =
+  CATALOG.flatMap((g) => g.items.filter((it) => !it.soon).map((it) => ({ type: it.type, label: it.label, icon: it.icon, cat: g.cat })));
 // 右键菜单用的「分类 → 已实现对象」清单（空分类直接不出现）。
-const ADD_GROUPS: { cat: string; items: CatItem[] }[] =
-  CATALOG.map((g) => ({ cat: g.cat, items: g.items.filter((it) => !it.soon) })).filter((g) => g.items.length > 0);
+// total 一并带上：右键菜单的分类行按设计稿显示「已实现/总数」，让菜单本身也是一张能力地图。
+const ADD_GROUPS: { cat: string; icon: IconComp; items: CatItem[]; total: number }[] =
+  CATALOG.map((g) => ({ cat: g.cat, icon: g.icon, items: g.items.filter((it) => !it.soon), total: g.items.length }))
+    .filter((g) => g.items.length > 0);
 
 function defaultConfig(type: string): Record<string, unknown> {
   switch (type) {
@@ -219,29 +288,48 @@ const uid = () => `n${Date.now().toString(36)}${Math.random().toString(36).slice
 const clone = <T,>(w: T): T => JSON.parse(JSON.stringify(w));
 
 // ── 右键菜单（多级子菜单）──
-interface MenuItem { label?: string; emoji?: string; onClick?: () => void; sub?: MenuItem[]; danger?: boolean; sep?: boolean }
-function MenuList({ items, onClose }: { items: MenuItem[]; onClose: () => void }) {
+// count：分类行右侧的「已实现/总数」；keyHint：动作行右侧的快捷键；title：面板顶部的分区小标题。
+interface MenuItem { label?: string; icon?: ReactNode; count?: string; keyHint?: string; onClick?: () => void; sub?: MenuItem[]; danger?: boolean; sep?: boolean }
+// dark=true 用画布那套硬编码深色（菜单开在深色画布上，跟着主题变会和画布打架）；
+// 否则走主题变量，给顶栏「⋯」这种开在浅色区域的菜单用。
+function MenuList({ items, onClose, dark, title }: { items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string }) {
   const [open, setOpen] = useState<number | null>(null);
+  const panel = dark
+    ? "bg-[rgba(31,28,24,.98)] border border-[#3A342B] rounded-[10px] p-1 shadow-[0_10px_30px_rgba(0,0,0,.45)] min-w-[208px]"
+    : "bg-card border border-border rounded-[10px] p-1 shadow-2xl min-w-[208px]";
+  const row = "w-full flex items-center gap-[9px] px-[9px] py-[5px] rounded-md text-[12px] text-left bg-transparent";
+  const rowTone = dark ? "text-[#D8D3CA] hover:bg-[rgba(232,89,12,.16)] hover:text-[#F0A878]" : "text-text hover:bg-orange-soft hover:text-orange-text";
+  const iconTone = dark ? "text-[#8A837A]" : "text-muted";
+  const dimTone = dark ? "text-[#6E675E]" : "text-faint";
   return (
-    <div className="bg-card border border-border rounded-lg shadow-2xl py-1 min-w-[190px]">
-      {items.map((it, i) => it.sep ? <div key={i} className="h-px bg-border my-1" /> : (
+    <div className={panel}>
+      {title ? <div className={`px-[9px] pt-[5px] pb-[3px] text-[10px] tracking-[.06em] ${dimTone}`}>{title}</div> : null}
+      {items.map((it, i) => it.sep ? <div key={i} className={`h-px my-1 mx-1.5 ${dark ? "bg-[#332E26]" : "bg-border-soft"}`} /> : (
         <div key={i} className="relative" onMouseEnter={() => setOpen(it.sub ? i : null)}>
-          <button className={`w-full text-left px-3 py-1.5 text-[12.5px] flex items-center gap-2 hover:bg-orange/10 ${it.danger ? "text-danger" : ""}`}
+          <button className={`${row} ${it.danger ? "text-danger hover:bg-danger-soft" : rowTone}`}
             onClick={() => { if (it.sub) return; it.onClick?.(); onClose(); }}>
-            <span className="w-4 text-center">{it.emoji || ""}</span>
-            <span className="flex-1">{it.label}</span>
-            {it.sub ? <span className="text-muted">›</span> : null}
+            <span className={`w-4 flex-none flex justify-center ${it.danger ? "" : iconTone}`}>{it.icon}</span>
+            <span className="flex-1 whitespace-nowrap">{it.label}</span>
+            {it.count ? <span className={`flex-none text-[10px] tabular-nums ${dimTone}`}>{it.count}</span> : null}
+            {it.keyHint ? <span className={`flex-none font-mono text-[10px] ${dimTone}`}>{it.keyHint}</span> : null}
+            {it.sub ? <span className={`flex-none ${dimTone}`}><IconChevronRight size={10} /></span> : null}
           </button>
-          {it.sub && open === i ? <div className="absolute left-full top-0 -mt-1 ml-0.5"><MenuList items={it.sub} onClose={onClose} /></div> : null}
+          {it.sub && open === i ? <div className="absolute left-full top-0 -mt-1 ml-0.5"><MenuList items={it.sub} onClose={onClose} dark={dark} /></div> : null}
         </div>
       ))}
     </div>
   );
 }
-function ContextMenu({ x, y, items, onClose }: { x: number; y: number; items: MenuItem[]; onClose: () => void }) {
+// 定位沿用保险箱那次的做法：点在下半屏就改用 bottom 向上生长，免得菜单被窗口底边切掉；
+// 水平方向按视口宽度夹一下，右键点在最右边时菜单也不会溢出去。
+function ContextMenu({ x, y, items, onClose, dark, title }: { x: number; y: number; items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string }) {
+  const upward = y > window.innerHeight / 2;
+  const left = Math.max(8, Math.min(x, window.innerWidth - 232));
   return (
     <div className="fixed inset-0 z-[70]" onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
-      <div className="absolute" style={{ left: x, top: y }} onMouseDown={(e) => e.stopPropagation()}><MenuList items={items} onClose={onClose} /></div>
+      <div className="absolute max-h-[calc(100vh-16px)] overflow-y-auto"
+        style={upward ? { left, bottom: window.innerHeight - y } : { left, top: y }}
+        onMouseDown={(e) => e.stopPropagation()}><MenuList items={items} onClose={onClose} dark={dark} title={title} /></div>
     </div>
   );
 }
@@ -276,7 +364,7 @@ function Palette({ canConnect, onPick, onClose }: { canConnect: boolean; onPick:
             <button key={it.type} data-i={i} onMouseEnter={() => setIdx(i)}
               onClick={(e) => { onPick(it.type, e.altKey && canConnect); onClose(); }}
               className={`w-full flex items-center gap-2.5 px-4 py-2 text-left text-[12.5px] ${i === sel ? "bg-orange text-white" : ""}`}>
-              <span className="w-[20px] text-center">{it.emoji}</span>
+              <span className="w-[20px] flex-none flex justify-center"><it.icon size={14} /></span>
               <span className="flex-1 truncate">{it.label}</span>
               <span className={`text-[10.5px] ${i === sel ? "text-white/70" : "text-muted"}`}>{it.cat}</span>
             </button>
@@ -330,7 +418,7 @@ function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose 
               <div key={p.id} className="group flex items-center gap-1 mb-1.5">
                 <button disabled={!canAdd} title={`落地到画布中央（${p.nodes.length} 个节点）`} onClick={() => onPrefab(p)}
                   className="flex-1 min-w-0 flex items-center gap-2 px-2.5 py-[7px] border border-border rounded-lg text-[12px] text-left disabled:opacity-40 hover:border-orange">
-                  <span className="w-[18px] text-center shrink-0">{p.icon || "🧩"}</span>
+                  <span className="w-[18px] flex-none flex justify-center"><IconGrid size={14} /></span>
                   <span className="truncate">{p.name}</span>
                 </button>
                 <button className="text-danger text-[11px] opacity-0 group-hover:opacity-100 shrink-0" onClick={() => onDelPrefab(p)}>删</button>
@@ -351,7 +439,7 @@ function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose 
                 onClick={(e) => onAdd(it.type, e.altKey)}
                 className={`w-full flex items-center gap-2 px-2.5 py-[7px] mb-1.5 border rounded-lg text-[12px] text-left ${
                   it.soon ? "border-dashed border-border text-muted opacity-55 cursor-not-allowed" : "border-border disabled:opacity-40 hover:border-orange"}`}>
-                <span className={`w-[18px] text-center shrink-0 ${it.soon ? "grayscale" : ""}`}>{it.emoji}</span>
+                <span className="w-[18px] flex-none flex justify-center"><it.icon size={14} /></span>
                 <span className="flex-1 truncate">{it.label}</span>
                 {it.soon ? <span className="text-[9px] px-1 rounded border border-border shrink-0">待实现</span> : null}
               </button>
@@ -450,7 +538,8 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   const [editNode, setEditNode] = useState<string | null>(null);
   const [showVars, setShowVars] = useState(false);
   const [showCfg, setShowCfg] = useState(false);   // W10 配置面板
-  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  // dark：菜单开在深色画布上时用画布那套硬编码配色；title：面板顶部的分区小标题。
+  const [menu, setMenu] = useState<{ x: number; y: number; items: MenuItem[]; dark?: boolean; title?: string } | null>(null);
   const [selNode, setSelNode] = useState<string | null>(null);
   // E4 多选：selNode 仍是「主选中」（配置/停用等单节点操作看它），selSet 是整个选区。
   // 两者不互斥 —— 框选出一组时 selSet 有值，单击一个节点时两者都指向它。
@@ -478,6 +567,8 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   const [note, setNote] = useState("");
   // 左侧工作流列的搜索词（名称 + 描述里搜）。只影响列表显示，不动选中项。
   const [wfQ, setWfQ] = useState("");
+  // 「全部快捷键」弹窗（底部快捷键条右侧那个入口）。
+  const [showKeys, setShowKeys] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const wfsRef = useRef(wfs); wfsRef.current = wfs;
@@ -657,7 +748,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     if (!picked.length) return;
     const ox = Math.min(...picked.map((n) => n.x)), oy = Math.min(...picked.map((n) => n.y));
     savePrefabs([...prefabsRef.current, {
-      id: uid(), name, icon: TYPE_META[picked[0].type]?.emoji || "🧩",
+      id: uid(), name,
       nodes: clone(picked).map((n) => ({ ...n, x: n.x - ox, y: n.y - oy })),
       connections: clone(w.connections.filter((c) => set.has(c.from) && set.has(c.to))),
       createdAt: Date.now(),
@@ -818,6 +909,20 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     const ns = Math.min(2.5, Math.max(0.3, scaleRef.current * f));
     setPan({ x: cx - wx * ns, y: cy - wy * ns }); setScale(ns);
   };
+  // 适应画布（⇧1）：把所有节点的外接矩形连同一圈留白缩到刚好看得见，节点少时不放大过头（上限 1×）。
+  // 一个节点都没有就直接复位，免得对着空画布算出一个奇怪的缩放。
+  const fitView = useCallback(() => {
+    const wf = wfsRef.current.find((w) => w.id === curIdRef.current);
+    const ns = wf?.nodes || [];
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!ns.length || !rect) { setScale(1); setPan({ x: 0, y: 0 }); return; }
+    const PAD = 48;
+    const x0 = Math.min(...ns.map((n) => n.x)), x1 = Math.max(...ns.map((n) => n.x + NODE_W));
+    const y0 = Math.min(...ns.map((n) => n.y)), y1 = Math.max(...ns.map((n) => n.y + NODE_H));
+    const s = Math.min(1, Math.max(0.3, Math.min((rect.width - PAD * 2) / (x1 - x0), (rect.height - PAD * 2) / (y1 - y0))));
+    setScale(s);
+    setPan({ x: (rect.width - (x1 - x0) * s) / 2 - x0 * s, y: (rect.height - (y1 - y0) * s) / 2 - y0 * s });
+  }, []);
 
   // 连线徽章操作
   const cycleMod = (i: number) => updateCur((w) => { const conns = w.connections.slice(); const c = conns[i].mod || ""; conns[i] = { ...conns[i], mod: MODS[(MODS.indexOf(c) + 1) % MODS.length] as WFConn["mod"] }; return { ...w, connections: conns }; });
@@ -841,7 +946,14 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
         e.preventDefault(); setSelSet(wf.nodes.map((n) => n.id)); setSelConn(null);
         return;
       }
-      if (e.key === "Escape" && selSet.length) { e.preventDefault(); setSelSet([]); return; }
+      if (e.key === "Escape") {
+        // Esc 逐层退出：先关快捷键弹窗，再清选区。
+        if (showKeys) { e.preventDefault(); setShowKeys(false); return; }
+        if (selSet.length) { e.preventDefault(); setSelSet([]); return; }
+      }
+      // ⇧1 适应画布 / ⇧0 复位视图（和缩放胶囊、右键菜单里的是同两个动作）。
+      if (e.shiftKey && !e.metaKey && !e.ctrlKey && (e.key === "!" || e.key === "1")) { e.preventDefault(); fitView(); return; }
+      if (e.shiftKey && !e.metaKey && !e.ctrlKey && (e.key === ")" || e.key === "0")) { e.preventDefault(); setScale(1); setPan({ x: 0, y: 0 }); return; }
       if ((e.key === "/" || e.key === "\\") && !e.metaKey && !e.ctrlKey) {
         if (!curIdRef.current) return;
         e.preventDefault(); setPalette(canvasCenter());
@@ -856,51 +968,63 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selNode, selConn, selSet, undo, redo]);
+  }, [selNode, selConn, selSet, undo, redo, fitView, showKeys]);
 
   const node = (id: string) => cur?.nodes.find((n) => n.id === id);
   // 端口坐标：入口固定在头部；出口按端口序号逐个下移，多出口节点因此有一列端口。
   const anchor = (n: WFNode, side: "in" | "out", port?: string) =>
     ({ x: n.x + (side === "out" ? NODE_W : 0), y: n.y + PORT_Y + (side === "out" ? portIndex(n, port) * PORT_GAP : 0) });
 
-  const addSubmenu = (px: number, py: number): MenuItem[] => ADD_GROUPS.map((g) => ({ label: g.cat, sub: g.items.map((it) => ({ label: it.label, emoji: it.emoji, onClick: () => addNode(it.type, px, py) })) }));
+  // 分类行右侧的「已实现/总数」，和对象库里的计数一个含义。
+  const addSubmenu = (px: number, py: number): MenuItem[] => ADD_GROUPS.map((g) => ({
+    label: g.cat, icon: <g.icon size={14} />, count: `${g.items.length}/${g.total}`,
+    sub: g.items.map((it) => ({ label: it.label, icon: <it.icon size={14} />, onClick: () => addNode(it.type, px, py) })),
+  }));
+  // 画布通用动作：不依赖点在哪儿、也不依赖选了什么，所以单独一段。
+  const canvasActions = (): MenuItem[] => [
+    { sep: true },
+    { label: "全选节点", icon: <IconList size={14} />, keyHint: "⌘A", onClick: () => { const wf = wfsRef.current.find((w) => w.id === curIdRef.current); if (wf) { setSelSet(wf.nodes.map((n) => n.id)); setSelConn(null); } } },
+    { label: "适应画布", icon: <IconGrid size={14} />, keyHint: "⇧1", onClick: fitView },
+    { label: "复位视图", icon: <IconRefresh size={14} />, keyHint: "⇧0", onClick: () => { setScale(1); setPan({ x: 0, y: 0 }); } },
+  ];
   // 预制件相关的菜单项（E3）：落地到指定世界坐标 + 删除。没有预制件时整段不出现。
   const prefabMenu = (px: number, py: number): MenuItem[] => (prefabs.length ? [
     { sep: true },
-    { label: "落地预制件", emoji: "🧩", sub: prefabs.map((p) => ({ label: `${p.name}（${p.nodes.length} 节点）`, emoji: p.icon || "🧩", onClick: () => placePrefab(p, px, py) })) },
-    { label: "删除预制件", emoji: "🗑", sub: prefabs.map((p) => ({ label: p.name, emoji: p.icon || "🧩", danger: true, onClick: () => { savePrefabs(prefabsRef.current.filter((x) => x.id !== p.id)); setNote(`已删除预制件「${p.name}」`); } })) },
+    { label: "落地预制件", icon: <IconGrid size={14} />, sub: prefabs.map((p) => ({ label: `${p.name}（${p.nodes.length} 节点）`, icon: <IconGrid size={14} />, onClick: () => placePrefab(p, px, py) })) },
+    { label: "删除预制件", icon: <IconTrash size={14} />, sub: prefabs.map((p) => ({ label: p.name, icon: <IconGrid size={14} />, danger: true, onClick: () => { savePrefabs(prefabsRef.current.filter((x) => x.id !== p.id)); setNote(`已删除预制件「${p.name}」`); } })) },
   ] : []);
   // 选区相关的菜单项（E4/E3）：两个以上节点才有意义。
   const selMenu = (): MenuItem[] => (selSetRef.current.length >= 2 ? [
     { sep: true },
-    { label: `对齐这 ${selSetRef.current.length} 个节点`, emoji: "📐", sub: [
-      { label: "左对齐", emoji: "⬅️", onClick: () => alignSel("left") },
-      { label: "右对齐", emoji: "➡️", onClick: () => alignSel("right") },
-      { label: "顶对齐", emoji: "⬆️", onClick: () => alignSel("top") },
-      { label: "底对齐", emoji: "⬇️", onClick: () => alignSel("bottom") },
+    { label: `对齐这 ${selSetRef.current.length} 个节点`, icon: <IconGrid size={14} />, sub: [
+      { label: "左对齐", onClick: () => alignSel("left") },
+      { label: "右对齐", onClick: () => alignSel("right") },
+      { label: "顶对齐", onClick: () => alignSel("top") },
+      { label: "底对齐", onClick: () => alignSel("bottom") },
       { sep: true },
-      { label: "水平等距", emoji: "↔️", onClick: () => alignSel("hspace") },
-      { label: "垂直等距", emoji: "↕️", onClick: () => alignSel("vspace") },
+      { label: "水平等距", onClick: () => alignSel("hspace") },
+      { label: "垂直等距", onClick: () => alignSel("vspace") },
     ] },
-    { label: `把选中的 ${selSetRef.current.length} 个存为预制件…`, emoji: "🧩", onClick: () => setNaming({ ids: selSetRef.current.slice(), name: `节点组 ${selSetRef.current.length} 个` }) },
-    { label: `删除选中的 ${selSetRef.current.length} 个节点`, emoji: "🗑", danger: true, onClick: () => delNodes(selSetRef.current.slice()) },
+    { label: `把选中的 ${selSetRef.current.length} 个存为预制件…`, icon: <IconGrid size={14} />, onClick: () => setNaming({ ids: selSetRef.current.slice(), name: `节点组 ${selSetRef.current.length} 个` }) },
+    { label: `删除选中的 ${selSetRef.current.length} 个节点`, icon: <IconTrash size={14} />, danger: true, onClick: () => delNodes(selSetRef.current.slice()) },
   ] : []);
   const openCanvasMenu = (e: React.MouseEvent) => {
     if (!cur) return;
     e.preventDefault(); const w = toWorld(e.clientX, e.clientY);
-    setMenu({ x: e.clientX, y: e.clientY, items: [...addSubmenu(w.x, w.y), ...prefabMenu(w.x, w.y), ...selMenu()] });
+    setMenu({ x: e.clientX, y: e.clientY, dark: true, title: "添加对象",
+      items: [...addSubmenu(w.x, w.y), ...prefabMenu(w.x, w.y), ...selMenu(), ...canvasActions()] });
   };
   const openNodeMenu = (e: React.MouseEvent, n: WFNode) => {
     e.preventDefault(); e.stopPropagation(); setSelNode(n.id); setSelConn(null);
     // 右键的是选区外的节点 → 视为重新选它，菜单也只对它生效。
     if (!selSetRef.current.includes(n.id)) { setSelSet([]); selSetRef.current = []; }
-    setMenu({ x: e.clientX, y: e.clientY, items: [
-      { label: "配置节点…", emoji: "⚙️", onClick: () => setEditNode(n.id) },
-      { label: "在其后插入", emoji: "➕", sub: ADD_GROUPS.map((g) => ({ label: g.cat, sub: g.items.map((it) => ({ label: it.label, emoji: it.emoji, onClick: () => insertAfter(n, it.type) })) })) },
-      { label: n.disabled ? "启用节点 ⌘D" : "停用节点 ⌘D", emoji: n.disabled ? "▶️" : "⏸", onClick: () => toggleDisabled(n.id) },
-      { label: "存为预制件…", emoji: "🧩", onClick: () => setNaming({ ids: [n.id], name: TYPE_META[n.type]?.label || "节点" }) },
+    setMenu({ x: e.clientX, y: e.clientY, dark: true, items: [
+      { label: "配置节点…", icon: <IconGear size={14} />, onClick: () => setEditNode(n.id) },
+      { label: "在其后插入", icon: <IconPlus size={14} />, sub: ADD_GROUPS.map((g) => ({ label: g.cat, icon: <g.icon size={14} />, sub: g.items.map((it) => ({ label: it.label, icon: <it.icon size={14} />, onClick: () => insertAfter(n, it.type) })) })) },
+      { label: n.disabled ? "启用节点 ⌘D" : "停用节点 ⌘D", icon: n.disabled ? <IconEye size={14} /> : <IconEyeOff size={14} />, onClick: () => toggleDisabled(n.id) },
+      { label: "存为预制件…", icon: <IconGrid size={14} />, onClick: () => setNaming({ ids: [n.id], name: TYPE_META[n.type]?.label || "节点" }) },
       { sep: true },
-      { label: "删除节点", emoji: "🗑", danger: true, onClick: () => delNode(n.id) },
+      { label: "删除节点", icon: <IconTrash size={14} />, danger: true, onClick: () => delNode(n.id) },
       ...selMenu(),
     ] });
   };
@@ -911,18 +1035,18 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     const r = e.currentTarget.getBoundingClientRect();
     const items: MenuItem[] = [];
     if (cur) {
-      items.push({ label: "变量表…", emoji: "🏷️", onClick: () => setShowVars(true) });
+      items.push({ label: "变量表…", icon: <IconTag size={14} />, onClick: () => setShowVars(true) });
       // 每条工作流一个独立目录：脚本节点默认就在这里跑，随行的 runtime/、index.js 之类放进去即可写相对路径。
-      items.push({ label: "打开工作流目录", emoji: "📁", onClick: () => { void (async () => { const rr = await api.openWorkflowDir(cur.id); if (!rr?.ok) setNote(`打开目录失败：${rr?.error || "未知错误"}`); })(); } });
+      items.push({ label: "打开工作流目录", icon: <IconFolder size={14} />, onClick: () => { void (async () => { const rr = await api.openWorkflowDir(cur.id); if (!rr?.ok) setNote(`打开目录失败：${rr?.error || "未知错误"}`); })(); } });
       items.push({ sep: true });
     }
     // 导入导出（W9）：走浏览器的文件选择/下载，不额外开主进程通道。
-    items.push({ label: "导入 JSON…", emoji: "📥", onClick: () => fileRef.current?.click() });
-    if (cur) items.push({ label: "导出当前工作流", emoji: "📤", onClick: () => exportWfs([cur], `${cur.name || "workflow"}.json`) });
-    items.push({ label: "导出全部工作流", emoji: "📦", onClick: () => exportWfs(wfs, "umbra-workflows.json") });
+    items.push({ label: "导入 JSON…", icon: <IconDownload size={14} />, onClick: () => fileRef.current?.click() });
+    if (cur) items.push({ label: "导出当前工作流", icon: <IconExternal size={14} />, onClick: () => exportWfs([cur], `${cur.name || "workflow"}.json`) });
+    items.push({ label: "导出全部工作流", icon: <IconGrid size={14} />, onClick: () => exportWfs(wfs, "umbra-workflows.json") });
     items.push({ sep: true });
-    if (cur) items.push({ label: cur.enabled === false ? "启用这条工作流" : "停用这条工作流", emoji: cur.enabled === false ? "✅" : "⏸️", onClick: () => updateCur((w) => ({ ...w, enabled: w.enabled === false })) });
-    items.push({ label: "复位视图", emoji: "⤢", onClick: () => { setScale(1); setPan({ x: 0, y: 0 }); } });
+    if (cur) items.push({ label: cur.enabled === false ? "启用这条工作流" : "停用这条工作流", icon: cur.enabled === false ? <IconCheck size={14} /> : <IconEyeOff size={14} />, onClick: () => updateCur((w) => ({ ...w, enabled: w.enabled === false })) });
+    items.push({ label: "复位视图", icon: <IconRefresh size={14} />, onClick: () => { setScale(1); setPan({ x: 0, y: 0 }); } });
     setMenu({ x: Math.max(8, r.right - 200), y: r.bottom + 6, items });
   };
 
@@ -1013,9 +1137,9 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           </div>
         </div>
 
-        {/* 中：画布 */}
-        <div ref={canvasRef} className="relative flex-1 overflow-hidden"
-          style={{ background: "#22201D", backgroundImage: "radial-gradient(rgba(255,255,255,.06) 1px,transparent 1px)", backgroundSize: `${22 * scale}px ${22 * scale}px`, backgroundPosition: `${pan.x}px ${pan.y}px`, cursor: "grab" }}
+        {/* 中：画布。整块深色是硬编码的，不随主题变 —— 设计规范里画布是唯一这么做的地方。 */}
+        <div ref={canvasRef} className="relative flex-1 min-w-0 overflow-hidden"
+          style={{ background: CV.bg, backgroundImage: "radial-gradient(rgba(255,255,255,.075) 1px,transparent 1px)", backgroundSize: `${18 * scale}px ${18 * scale}px`, backgroundPosition: `${pan.x}px ${pan.y}px`, cursor: "grab" }}
           onMouseDown={onCanvasDown} onContextMenu={openCanvasMenu} onWheel={onWheel}
           onDoubleClick={(e) => { if (cur) setPalette(toWorld(e.clientX, e.clientY)); }}>
           {!cur ? <div className="absolute inset-0 flex items-center justify-center text-[13px] text-white/40">新建或选择一个工作流</div> : null}
@@ -1025,9 +1149,17 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
                 {cur.connections.map((c, i) => {
                   const a = node(c.from), b = node(c.to); if (!a || !b) return null;
                   const p1 = anchor(a, "out", c.fromPort), p2 = anchor(b, "in");
-                  return <path key={i} d={`M ${p1.x} ${p1.y} C ${p1.x + 60} ${p1.y}, ${p2.x - 60} ${p2.y}, ${p2.x} ${p2.y}`} fill="none" stroke={selConn === i ? "#E8590C" : "#6b645c"} strokeWidth={selConn === i ? 3 : 2} />;
+                  const d = `M ${p1.x} ${p1.y} C ${p1.x + 60} ${p1.y}, ${p2.x - 60} ${p2.y}, ${p2.x} ${p2.y}`;
+                  // 选中的连线不是简单换个颜色：底下那条实线照旧，上面再叠一条橙色流动虚线，
+                  // 这样既看得出选中、也看得出走向（动画在 index.css 的 umdash）。
+                  return (
+                    <g key={i}>
+                      <path d={d} fill="none" stroke={selConn === i ? CV.orange : CV.wire} strokeWidth={1.6} />
+                      {selConn === i ? <path d={d} fill="none" stroke={CV.orange} strokeWidth={1.6} strokeDasharray="4 10" style={{ animation: "umdash .9s linear infinite" }} /> : null}
+                    </g>
+                  );
                 })}
-                {link.current && linkPos ? (() => { const a = node(link.current.from); if (!a) return null; const p1 = anchor(a, "out", link.current.port); return <path d={`M ${p1.x} ${p1.y} C ${p1.x + 60} ${p1.y}, ${linkPos.x - 60} ${linkPos.y}, ${linkPos.x} ${linkPos.y}`} fill="none" stroke="#E8590C" strokeWidth={2} strokeDasharray="4 4" />; })() : null}
+                {link.current && linkPos ? (() => { const a = node(link.current.from); if (!a) return null; const p1 = anchor(a, "out", link.current.port); return <path d={`M ${p1.x} ${p1.y} C ${p1.x + 60} ${p1.y}, ${linkPos.x - 60} ${linkPos.y}, ${linkPos.x} ${linkPos.y}`} fill="none" stroke={CV.orange} strokeWidth={1.6} strokeDasharray="4 4" />; })() : null}
               </svg>
               {cur.connections.map((c, i) => {
                 const a = node(c.from), b = node(c.to); if (!a || !b) return null;
@@ -1038,40 +1170,58 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
                   <button key={`b${i}`} title="单击选中 · 双击切换分支 · 右键删除"
                     onMouseDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); setSelConn(i); setSelNode(null); }}
                     onDoubleClick={(e) => { e.stopPropagation(); cycleMod(i); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); delConn(i); }}
-                    className={`absolute -translate-x-1/2 -translate-y-1/2 rounded-md text-[11px] px-[6px] py-[1px] border ${selConn === i ? "bg-orange text-white border-orange" : "bg-[#413C36] text-[#EDEAE4] border-[#55504a]"}`}
-                    style={{ left: (p1.x + p2.x) / 2, top: (p1.y + p2.y) / 2 }}>{portTag}{MOD_LABEL[c.mod || ""]}</button>
+                    className="absolute -translate-x-1/2 -translate-y-1/2 rounded-md text-[10.5px] px-[6px] py-px border font-mono whitespace-nowrap"
+                    style={{ left: (p1.x + p2.x) / 2, top: (p1.y + p2.y) / 2,
+                      background: selConn === i ? CV.orange : CV.chip, color: selConn === i ? "#fff" : CV.text,
+                      borderColor: selConn === i ? CV.orange : CV.nodeBorder }}>{portTag}{MOD_LABEL[c.mod || ""]}</button>
                 );
               })}
               {cur.nodes.map((n) => {
-                const meta = TYPE_META[n.type] || { label: n.type, emoji: "🔹", kind: "action" };
-                const accent = KIND_ACCENT[meta.kind] || "#888";
+                const meta = TYPE_META[n.type] || { label: n.type, icon: IconFile, kind: "action" };
+                const kind = KIND_STYLE[meta.kind] || { label: "对象", bg: "rgba(255,255,255,.06)", fg: CV.muted };
                 // 主选中和框选中的节点边框一样高亮（E4）；单击/框选出来的手感因此一致。
                 const sel = selNode === n.id || selSet.includes(n.id);
                 const ports = outPorts(n);
                 // 端口比节点本身高时把节点撑高，避免端口飘到卡片外面。
                 const minH = Math.max(NODE_H, PORT_Y + (ports.length - 1) * PORT_GAP + 16);
                 return (
-                  <div key={n.id} className="absolute rounded-xl border shadow-lg select-none cursor-grab active:cursor-grabbing"
-                    style={{ left: n.x, top: n.y, width: NODE_W, minHeight: minH, background: "#2E2B27",
-                      borderColor: sel ? "#E8590C" : "#413C36", borderStyle: n.disabled ? "dashed" : "solid",
-                      opacity: n.disabled ? 0.5 : 1,
-                      boxShadow: sel ? "0 0 0 2px rgba(232,89,12,.5)" : undefined, color: "#EDEAE4" }}
+                  <div key={n.id} className="absolute rounded-[11px] select-none cursor-grab active:cursor-grabbing"
+                    style={{ left: n.x, top: n.y, width: NODE_W, minHeight: minH,
+                      background: n.disabled ? CV.nodeOff : CV.node, color: CV.text,
+                      // 选中用 1.5px 描边 + 一圈淡橙光晕（设计规范：选中节点 1.5px，其余一律 1px）。
+                      border: `${sel ? 1.5 : 1}px ${n.disabled ? "dashed" : "solid"} ${sel ? CV.orange : n.disabled ? CV.nodeOffBorder : CV.nodeBorder}`,
+                      boxShadow: sel ? "0 0 0 4px rgba(232,89,12,.14)" : undefined,
+                      opacity: n.disabled ? 0.75 : 1 }}
                     onMouseDown={(e) => onNodeDown(e, n)} onMouseUp={() => onNodeUp(n)}
                     onDoubleClick={(e) => { e.stopPropagation(); setEditNode(n.id); }} onContextMenu={(e) => openNodeMenu(e, n)}>
-                    <div className="flex items-center gap-2 px-3 py-2 border-b" style={{ borderColor: "#413C36" }}>
-                      <span className="w-[22px] h-[22px] rounded-md flex items-center justify-center text-[13px]" style={{ background: accent + "40" }}>{meta.emoji}</span>
-                      <b className="text-[12.5px] flex-1 truncate">{meta.label}</b>
-                      {n.disabled ? <span className="text-[9.5px] px-1 rounded border border-[#55504a] text-[#B8B1A7] shrink-0">已停用</span> : null}
+                    <div className="flex items-center gap-[9px] px-[11px] py-[9px] rounded-t-[10px]"
+                      style={{ borderBottom: `1px solid ${n.disabled ? CV.nodeOffBorder : CV.nodeLine}`,
+                        background: n.disabled ? "transparent" : sel ? "rgba(232,89,12,.10)" : "rgba(255,255,255,.03)" }}>
+                      <span className="w-[22px] h-[22px] flex-none rounded-md flex items-center justify-center"
+                        style={{ background: n.disabled ? "rgba(255,255,255,.05)" : kind.bg, color: n.disabled ? CV.faint : kind.fg }}>
+                        <meta.icon size={13} />
+                      </span>
+                      <b className="flex-1 min-w-0 text-[12.5px] font-semibold truncate" style={{ color: n.disabled ? CV.muted : CV.text }}>{meta.label}</b>
+                      {/* 头部右侧那颗小徽章：停用时说「已停用」，否则说这是哪一类对象。 */}
+                      <span className="flex-none whitespace-nowrap px-[6px] py-px rounded-full text-[10px]"
+                        style={{ background: "rgba(255,255,255,.07)", color: n.disabled ? CV.faint : CV.muted }}>
+                        {n.disabled ? "已停用" : kind.label}
+                      </span>
                     </div>
-                    <div className="px-3 py-2 text-[11px] text-[#B8B1A7] truncate">{nodeSummary(n)}</div>
-                    <span data-port className="absolute w-[11px] h-[11px] rounded-full" style={{ left: -6, top: PORT_Y - 5, background: "#8a827a", border: "2px solid #2E2B27" }} />
+                    <div className="px-[11px] py-[9px] text-[11.5px] truncate" style={{ color: n.disabled ? CV.faint : CV.muted }}>{nodeSummary(n)}</div>
+                    {/* 端口 9px + 2px 画布底色描边，看着像「嵌」在卡片边上。入口在左，出口在右侧竖着排。
+                        配色表达「接没接上」：已连线橙色、空着灰色，失败出口固定红色 —— 多出口节点漏接哪一路一眼看得出。 */}
+                    <span data-port className="absolute w-[9px] h-[9px] rounded-full" style={{ left: -5, top: PORT_Y - 4, border: `2px solid ${CV.bg}`,
+                      background: cur.connections.some((c) => c.to === n.id) ? CV.orange : CV.port }} />
                     {ports.map((p, pi) => (
-                      <span key={p.port || "def"} data-port className="absolute w-[11px] h-[11px] rounded-full cursor-crosshair" title={p.label || "出口"}
-                        style={{ right: -6, top: PORT_Y + pi * PORT_GAP - 5, background: p.port === "error" ? "#C0392B" : p.port === "else" ? "#7f8c8d" : "#8a827a", border: "2px solid #2E2B27" }}
+                      <span key={p.port || "def"} data-port className="absolute w-[9px] h-[9px] rounded-full cursor-crosshair" title={p.label || "出口"}
+                        style={{ right: -5, top: PORT_Y + pi * PORT_GAP - 4, border: `2px solid ${CV.bg}`,
+                          background: p.port === "error" ? CV.danger
+                            : cur.connections.some((c) => c.from === n.id && (c.fromPort || "") === p.port) ? CV.orange : CV.port }}
                         onMouseDown={(e) => onPortDown(e, n, p.port)} />
                     ))}
                     {ports.length > 1 ? ports.map((p, pi) => (
-                      <span key={`lb${p.port}`} className="absolute text-[9px] whitespace-nowrap pointer-events-none" style={{ left: NODE_W + 9, top: PORT_Y + pi * PORT_GAP - 7, color: "#8a827a" }}>{p.label}</span>
+                      <span key={`lb${p.port}`} className="absolute text-[9.5px] whitespace-nowrap pointer-events-none" style={{ left: NODE_W + 9, top: PORT_Y + pi * PORT_GAP - 7, color: CV.faint }}>{p.label}</span>
                     )) : null}
                   </div>
                 );
@@ -1084,17 +1234,60 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
               ) : null}
             </div>
           ) : null}
-          {/* 缩放控件从顶栏挪到画布右上角：它只跟画布有关，跟着画布走更顺手，顶栏也就腾出来了。 */}
+          {/* 缩放胶囊：只跟画布有关，所以贴在画布右上角而不是顶栏。左右两个步进 + 中间百分比（点=复位）+ 适应画布。 */}
           {cur ? (
-            <div className="absolute right-3 top-3 flex items-center gap-0.5 bg-black/35 rounded-full px-1 py-0.5 text-white/75">
-              <button className="w-[22px] h-[22px] rounded-full hover:bg-white/10 text-[13px]" title="缩小" onClick={() => zoomBy(0.9)}>－</button>
-              <button className="text-[11px] px-1 min-w-[38px] text-center hover:text-white" title="复位（100%）" onClick={() => { setScale(1); setPan({ x: 0, y: 0 }); }}>{Math.round(scale * 100)}%</button>
-              <button className="w-[22px] h-[22px] rounded-full hover:bg-white/10 text-[13px]" title="放大" onClick={() => zoomBy(1.1)}>＋</button>
+            <div className="absolute right-4 top-[14px] flex items-center overflow-hidden" style={CV_FLOAT} onMouseDown={(e) => e.stopPropagation()}>
+              <button className={ZB} style={{ color: CV.dim }} title="缩小" onClick={() => zoomBy(0.9)}><IconMinus size={13} /></button>
+              <span className="flex-none px-1 min-w-[42px] text-center text-[11.5px] tabular-nums" style={{ color: CV.dim }}>{Math.round(scale * 100)}%</span>
+              <button className={ZB} style={{ color: CV.dim }} title="放大" onClick={() => zoomBy(1.1)}><IconPlus size={13} /></button>
+              <span className="w-px h-4 flex-none" style={{ background: CV.nodeBorder }} />
+              <button className={ZB} style={{ color: CV.dim }} title="适应画布 ⇧1" onClick={fitView}><IconFit size={13} /></button>
+              <button className={ZB} style={{ color: CV.dim }} title="复位视图 ⇧0（100%）" onClick={() => { setScale(1); setPan({ x: 0, y: 0 }); }}><IconRefresh size={13} /></button>
             </div>
           ) : null}
-          {cur ? <div className="absolute left-4 bottom-3 bg-black/40 text-white/70 text-[11px] px-3 py-1.5 rounded-full pointer-events-none">拖节点摆位 · 单击选中(Delete 删) · 双击配置 · ⌘D 停用 · ⇧拖空白框选 · ⌘点击加减选 · ⌘A 全选 · 右键菜单可对齐/存预制件 · 端口拉线 · 双击空白或 / 搜索对象 · ⌘Z 撤销 · ⌘/⌃+滚轮缩放 · 拖空白平移</div> : null}
-          {/* 选区计数：多选时给个明确反馈，免得用户不确定手里攥着几个。 */}
-          {selSet.length > 1 ? <div className="absolute right-4 bottom-3 bg-orange/80 text-white text-[11px] px-3 py-1.5 rounded-full pointer-events-none">已选中 {selSet.length} 个节点 · 右键可对齐/存为预制件</div> : null}
+          {/* 画布底部一条：左边是「当前选了什么 · 一共多少」，右边是四个高频快捷键 + 全部快捷键入口。
+              原来那一长串提示文字撤了 —— 一行塞十几条谁也不会读，进弹窗看反而清楚。 */}
+          {cur ? (
+            <div className="absolute left-4 right-4 bottom-[14px] flex items-center gap-[10px]" onMouseDown={(e) => e.stopPropagation()}>
+              <div className="flex items-center gap-2 min-w-0 flex-[0_1_auto] overflow-hidden px-[11px] py-[6px]" style={CV_FLOAT}>
+                <span className="w-1.5 h-1.5 flex-none rounded-full" style={{ background: selSet.length || selNode ? CV.orange : CV.port }} />
+                <span className="text-[11.5px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: CV.dim }}>
+                  {selSet.length > 1 ? `已选中 ${selSet.length} 个节点 · ` : selNode ? "已选中 1 个节点 · " : selConn !== null ? "已选中 1 条连线 · " : ""}
+                  {cur.nodes.length} 节点 · {cur.connections.length} 连线
+                </span>
+              </div>
+              <span className="flex-1" />
+              <div className="flex items-center gap-2 flex-none whitespace-nowrap px-[9px] py-[5px]" style={CV_FLOAT}>
+                {CANVAS_KEYS.slice(0, 4).map((k) => (
+                  <span key={k.key} className="flex-none flex items-center gap-[5px]">
+                    <span className="font-mono text-[10.5px] rounded px-[5px] py-px" style={{ background: "rgba(255,255,255,.07)", color: CV.dim }}>{k.key}</span>
+                    <span className="text-[10.5px]" style={{ color: CV.muted }}>{k.label}</span>
+                  </span>
+                ))}
+                <button className="flex-none whitespace-nowrap ml-0.5 bg-transparent text-[10.5px]" style={{ color: CV.orangeText }} onClick={() => setShowKeys(true)}>全部快捷键</button>
+              </div>
+            </div>
+          ) : null}
+          {/* 全部快捷键：和底部那条同一份数据（CANVAS_KEYS），不会两处各说一套。 */}
+          {showKeys ? (
+            <div className="absolute inset-0 z-[40] bg-black/50 flex items-center justify-center" onMouseDown={(e) => { e.stopPropagation(); setShowKeys(false); }}>
+              <div className="w-[420px] max-h-[calc(100%-32px)] flex flex-col rounded-xl overflow-hidden"
+                style={{ background: CV.node, border: `1px solid ${CV.nodeBorder}` }} onMouseDown={(e) => e.stopPropagation()}>
+                <div className="flex-none flex items-center gap-2 px-4 py-[13px]" style={{ borderBottom: `1px solid ${CV.nodeLine}` }}>
+                  <span className="flex-1 min-w-0 whitespace-nowrap text-[13px] font-semibold" style={{ color: CV.text }}>画布快捷键</span>
+                  <button className="w-6 h-6 flex-none flex items-center justify-center rounded-md bg-transparent" style={{ color: CV.muted }} title="关闭" onClick={() => setShowKeys(false)}><IconX size={13} /></button>
+                </div>
+                <div className="flex-1 overflow-y-auto px-4 pt-2 pb-[14px]">
+                  {CANVAS_KEYS.map((k) => (
+                    <div key={k.key} className="flex items-center gap-3 py-1.5" style={{ borderBottom: `1px solid ${CV.nodeLine}` }}>
+                      <span className="flex-none font-mono text-[11px] rounded px-1.5 py-0.5 min-w-[78px] text-center" style={{ background: "rgba(255,255,255,.07)", color: CV.dim }}>{k.key}</span>
+                      <span className="flex-none whitespace-nowrap text-[12px]" style={{ color: CV.muted }}>{k.label}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
         </div>
 
         {/* 右：对象库（默认收起，顶栏 ▤ 按钮切换） */}
@@ -1109,7 +1302,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
 
       {drawer ? (
         <DebugDrawer runs={runs}
-          nodeLabel={(id, type) => { const n = cur?.nodes.find((x) => x.id === id); return `${TYPE_META[type]?.emoji || "🔹"} ${TYPE_META[type]?.label || type}${n ? ` · ${nodeSummary(n)}` : "（节点已删除）"}`; }}
+          nodeLabel={(id, type) => { const n = cur?.nodes.find((x) => x.id === id); return `${TYPE_META[type]?.label || type}${n ? ` · ${nodeSummary(n)}` : "（节点已删除）"}`; }}
           onPickNode={(id) => { setSelNode(id); setSelConn(null); }}
           onClear={() => { void api.clearTrace(); setRuns([]); }}
           onClose={() => setDrawer(false)} />
@@ -1137,7 +1330,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
       {showVars && cur ? (
         <VarsEditor vars={cur.variables || {}} onClose={() => setShowVars(false)} onSave={(v) => { updateCur((w) => ({ ...w, variables: v })); setShowVars(false); }} />
       ) : null}
-      {menu ? <ContextMenu x={menu.x} y={menu.y} items={menu.items} onClose={() => setMenu(null)} /> : null}
+      {menu ? <ContextMenu x={menu.x} y={menu.y} items={menu.items} dark={menu.dark} title={menu.title} onClose={() => setMenu(null)} /> : null}
     </div>
   );
 }
@@ -1278,7 +1471,7 @@ function KVEditor({ kv, onChange }: { kv: Record<string, string>; onChange: (v: 
 function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Record<string, unknown>) => void; onClose: () => void }) {
   const [c, setC] = useState<Record<string, unknown>>({ ...node.config });
   const [rec, setRec] = useState(false);
-  const meta = TYPE_META[node.type] || { label: node.type, emoji: "🔹" };
+  const meta = TYPE_META[node.type] || { label: node.type, icon: IconFile };
   const set = (k: string, v: unknown) => setC((p) => ({ ...p, [k]: v }));
   const inp = "w-full bg-bg border border-border rounded-lg px-[10px] py-[7px] text-[12.5px] outline-none";
   const lab = "text-[11.5px] text-muted mb-1 block";
@@ -1303,7 +1496,7 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
       {/* List Filter 一行要摆四个输入框，440px 挤不下，单独给它宽一点 */}
       <div className={`${node.type === "input.listfilter" ? "w-[620px]" : "w-[440px]"} max-h-[86vh] overflow-y-auto bg-card border border-border rounded-2xl p-5 shadow-2xl`} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2 mb-4"><span className="text-[18px]">{meta.emoji}</span><span className="font-semibold text-[14px]">{meta.label}</span></div>
+        <div className="flex items-center gap-2 mb-4"><span className="w-7 h-7 flex-none rounded-lg bg-orange-soft text-orange-text flex items-center justify-center"><meta.icon size={15} /></span><span className="font-semibold text-[14px]">{meta.label}</span></div>
         <div className="flex flex-col gap-3">
           {node.type === "trigger.keyword" ? (<>
             <div><span className={lab}>关键词（在快捷入口输入触发）</span><input className={`${inp} font-mono`} value={String(c.keyword || "")} onChange={(e) => set("keyword", e.target.value)} placeholder="yd" /></div>
