@@ -79,11 +79,11 @@ const CATALOG: { cat: string; items: CatItem[] }[] = [
   ] },
   { cat: "输入 Inputs", items: [
     { type: "input.scriptfilter", label: "Script Filter 脚本过滤器", emoji: "🔎" },
+    { type: "input.listfilter", label: "List Filter 列表过滤器", emoji: "📃" },
     { type: "input.codec", label: "编解码", emoji: "🔡" },
     { type: "input.calc", label: "计算器", emoji: "🔢" },
     { type: "input.units", label: "单位换算", emoji: "📐" },
     { type: "input.filefilter", label: "File Filter 文件过滤器", emoji: "📁", soon: true, hint: "按范围和类型搜本地文件并列出来。等本地索引能力就绪后实现。" },
-    { type: "input.listfilter", label: "List Filter 列表过滤器", emoji: "📃", soon: true, hint: "在一份固定清单里筛选（不用写脚本的 Script Filter）。实现成本低，排在下一批。" },
     { type: "input.appsfilter", label: "Running Apps 运行中应用", emoji: "🪟", soon: true, hint: "列出当前运行的应用供切换/退出。要接系统窗口信息，暂未实现。" },
     { type: "input.dict", label: "Dictionary 词典查询", emoji: "📖", soon: true, hint: "查系统词典。macOS 专属能力，跨平台方案没定。" },
   ] },
@@ -93,6 +93,7 @@ const CATALOG: { cat: string; items: CatItem[] }[] = [
     { type: "utility.transform", label: "Transform 大小写/编解码", emoji: "🔠" },
     { type: "utility.replace", label: "Replace 查找替换", emoji: "🔁" },
     { type: "utility.delay", label: "Delay 延时", emoji: "⏱️" },
+    { type: "utility.debug", label: "Debug 调试打点", emoji: "🐞" },
     { type: "utility.split", label: "Split Arg 拆分参数", emoji: "✂️", soon: true, hint: "按分隔符把一条参数拆成多条，后面的节点逐条跑。要先支持「一进多出」的执行模型。" },
     { type: "utility.join", label: "Join Args 合并参数", emoji: "🧷", soon: true, hint: "把多条参数并成一条，和 Split 配套。" },
     { type: "utility.junction", label: "Junction 汇流点", emoji: "⤵️", soon: true, hint: "纯理线用的中转点，只影响连线走向不改数据。" },
@@ -103,7 +104,6 @@ const CATALOG: { cat: string; items: CatItem[] }[] = [
     { type: "utility.jsonconfig", label: "JSON Config 配置", emoji: "🧾", soon: true, hint: "用一段 JSON 一次性设置多个变量。" },
     { type: "utility.hide", label: "隐藏主面板", emoji: "🙈", soon: true, hint: "执行到这里先把主面板收起来再继续。等窗口控制接口补齐。" },
     { type: "utility.show", label: "显示主面板", emoji: "👁️", soon: true, hint: "把主面板重新唤起，和「隐藏主面板」配套。" },
-    { type: "utility.debug", label: "Debug 调试打点", emoji: "🐞", soon: true, hint: "往调试抽屉里打一条自定义日志。调试面板已有，这个节点排在下一批。" },
   ] },
   { cat: "动作 Actions", items: [
     { type: "action.launch", label: "Launch Apps / Files 启动", emoji: "🚀" },
@@ -134,7 +134,7 @@ const CATALOG: { cat: string; items: CatItem[] }[] = [
     { type: "output.notify", label: "Post Notification 系统通知", emoji: "🔔" },
     { type: "output.largetype", label: "Large Type 大字显示", emoji: "🅰️" },
     { type: "output.textview", label: "Text View 文本视图", emoji: "📄" },
-    { type: "output.writefile", label: "Write Text File 写文本文件", emoji: "💾", soon: true, hint: "把参数写进指定文件（默认落在工作流目录）。实现成本低，排在下一批。" },
+    { type: "output.writefile", label: "Write Text File 写文本文件", emoji: "💾" },
     { type: "output.keycombo", label: "Dispatch Key Combo 发送按键", emoji: "⌨️", soon: true, hint: "向前台应用发一组按键。要系统辅助功能权限。" },
     { type: "output.speak", label: "Speak 朗读", emoji: "🔊", soon: true, hint: "把参数念出来。等接系统 TTS。" },
     { type: "output.sound", label: "Play Sound 播放提示音", emoji: "🎧", soon: true, hint: "播一段提示音。" },
@@ -158,6 +158,7 @@ function defaultConfig(type: string): Record<string, unknown> {
     case "trigger.hotkey": return { accelerator: "" };
     case "trigger.universal": return { accelerator: "", source: "auto" };
     case "input.scriptfilter": return { script: "", cwd: "", alfredFilters: false };
+    case "input.listfilter": return { items: [{ title: "示例项", subtitle: "", arg: "" }], match: "word", learn: true };
     case "input.codec": return { mode: "unicode" };
     case "action.script": return { script: "", cwd: "", output: "none", onError: "stop" };
     case "utility.args": return { argMode: "keep", text: "{query}", vars: {} };
@@ -165,6 +166,8 @@ function defaultConfig(type: string): Record<string, unknown> {
     case "utility.transform": return { target: "", mode: "upper" };
     case "utility.replace": return { target: "", find: "", to: "", regex: false, ci: false };
     case "utility.delay": return { seconds: 1 };
+    case "utility.debug": return { text: "{query}", after: "pass", clear: false };
+    case "output.writefile": return { path: "", content: "{query}", ifExists: "overwrite", uuid: false, mkdirs: true, allowEmpty: false };
     case "action.ask_assistant": return { prompt: "{query}", title: "", show: true };
     case "action.create_task": return { text: "{query}", prefix: "帮我建个任务：" };
     case "action.device_skill": return { device: "", provider: "", skill: "", params: "" };
@@ -1071,6 +1074,7 @@ function nodeSummary(n: WFNode): string {
     case "trigger.universal": return `${c.accelerator || "未设快捷键"} · ${c.source === "files" ? "选中文件" : c.source === "text" ? "选中文本" : "文本/文件"}`;
     case "trigger.always": return "任意输入都尝试";
     case "input.scriptfilter": return c.script ? c.script.slice(0, 40) : "未设脚本";
+    case "input.listfilter": { const rows = (n.config.items as unknown[]) || []; return `${rows.length} 项 · ${c.match === "none" ? "不过滤" : c.match === "contains" ? "包含匹配" : "词首匹配"}`; }
     case "input.codec": return `编解码：${c.mode || "unicode"}`;
     case "input.calc": return "计算表达式";
     case "input.units": return "单位换算";
@@ -1083,6 +1087,8 @@ function nodeSummary(n: WFNode): string {
     case "utility.transform": return `${c.target ? `变量 ${c.target}` : "参数"} → ${c.mode || "upper"}`;
     case "utility.replace": return c.find ? `「${c.find}」→「${c.to || ""}」` : "未设查找内容";
     case "utility.delay": return `等待 ${Number(c.seconds || 0)} 秒`;
+    case "utility.debug": return String(c.text || "{query}").replace(/\s+/g, " ").slice(0, 28);
+    case "output.writefile": return c.path ? `写入 ${String(c.path).split("/").pop()}` : "未设文件名";
     case "action.ask_assistant": return String(c.prompt || "{query}").slice(0, 28);
     case "action.create_task": return String(c.text || "{query}").slice(0, 28);
     case "action.device_skill": return `${c.provider || "?"}.${c.skill || "?"}${c.device ? ` @${c.device}` : " @自动"}`;
@@ -1214,7 +1220,8 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
-      <div className="w-[440px] bg-card border border-border rounded-2xl p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
+      {/* List Filter 一行要摆四个输入框，440px 挤不下，单独给它宽一点 */}
+      <div className={`${node.type === "input.listfilter" ? "w-[620px]" : "w-[440px]"} max-h-[86vh] overflow-y-auto bg-card border border-border rounded-2xl p-5 shadow-2xl`} onMouseDown={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 mb-4"><span className="text-[18px]">{meta.emoji}</span><span className="font-semibold text-[14px]">{meta.label}</span></div>
         <div className="flex flex-col gap-3">
           {node.type === "trigger.keyword" ? (<>
@@ -1250,6 +1257,18 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
               <textarea className={`${inp} font-mono h-[90px] resize-y`} value={String(c.script || "")} onChange={(e) => set("script", e.target.value)} placeholder={`./runtime/txiki ./index.js "$1"`} /></div>
             <div><span className={lab}>运行目录 cwd（可选，支持 ~）</span><input className={`${inp} font-mono`} value={String(c.cwd || "")} onChange={(e) => set("cwd", e.target.value)} /></div>
             <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.alfredFilters} onChange={(e) => set("alfredFilters", e.target.checked)} />由 Umbra 按输入过滤结果</label>
+          </>) : null}
+          {node.type === "input.listfilter" ? (<>
+            <div className="text-[11.5px] text-muted">不用写脚本的 Script Filter：在下面维护一张固定列表，按输入过滤后作为结果给出。选中某项时，它的「参数」会作为 arg 传给下游。</div>
+            <ListRowsEditor rows={(c.items as ListRow[]) || []} onChange={(r) => set("items", r)} />
+            <div><span className={lab}>匹配方式</span>
+              <select className={inp} value={String(c.match || "word")} onChange={(e) => set("match", e.target.value)}>
+                <option value="word">词首匹配（标题/副标题里任一词以输入开头）</option>
+                <option value="contains">任意位置包含</option>
+                <option value="none">不过滤（整表全部给出）</option>
+              </select></div>
+            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={c.learn !== false} onChange={(e) => set("learn", e.target.checked)} />参与使用频率学习（常选的项会被顶到前面）</label>
+            <div className="text-[11px] text-muted">「参数」一栏支持 {"{query}"} / {"{var:名称}"} 等占位符；图标一栏填 emoji 或图片文件的绝对路径。</div>
           </>) : null}
           {node.type === "input.codec" ? (
             <div><span className={lab}>编解码类型</span>
@@ -1303,6 +1322,12 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
             ) : null}
             <div><span className={lab}>设置变量（对本节点之后的下游可见）</span>
               <KVEditor kv={(c.vars as Record<string, string>) || {}} onChange={(v) => set("vars", v)} /></div>
+            <div className="text-[11px] text-muted leading-[1.7]">可用占位符（工作流里所有文本框通用）：<br />
+              <span className="font-mono">{"{query}"}</span> 上游参数 · <span className="font-mono">{"{var:名称}"}</span> 变量 · <span className="font-mono">{"{clipboard}"}</span> 剪贴板<br />
+              <span className="font-mono">{"{date}"}</span> 日期（默认 YYYY-MM-DD，可写 <span className="font-mono">{"{date:YYYY年MM月DD日 ddd}"}</span>）<br />
+              <span className="font-mono">{"{time}"}</span> 时间（默认 HH:mm:ss，同样可自定义格式）<br />
+              <span className="font-mono">{"{random}"}</span> 随机数（<span className="font-mono">{"{random:1-100}"}</span> 范围 · <span className="font-mono">{"{random:uuid}"}</span> · <span className="font-mono">{"{random:hex8}"}</span> · <span className="font-mono">{"{random:str6}"}</span>）
+            </div>
           </>) : null}
           {node.type === "utility.conditional" ? (<>
             <div className="text-[11.5px] text-muted">从上往下逐条判断，命中哪条就走哪个出口；全不中走「否则」。出口没连线时链路自然结束。</div>
@@ -1332,6 +1357,35 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
             <div><span className={lab}>延时秒数（上限 60 秒）</span>
               <input className={inp} type="number" min={0} max={60} step={0.5} value={Number(c.seconds ?? 1)} onChange={(e) => set("seconds", Number(e.target.value))} /></div>
           ) : null}
+          {node.type === "utility.debug" ? (<>
+            <div><span className={lab}>打点文本（{"{query}"}=参数，{"{var:名称}"}=变量，{"{variables}"}=全部变量转储）</span>
+              <textarea className={`${inp} font-mono h-[70px] resize-y`} value={String(c.text ?? "")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" /></div>
+            <div><span className={lab}>打完之后</span>
+              <select className={inp} value={String(c.after || "pass")} onChange={(e) => set("after", e.target.value)}>
+                <option value="pass">把入参原样传给下游（默认）</option>
+                <option value="replace">把打点文本作为下游参数</option>
+              </select></div>
+            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.clear} onChange={(e) => set("clear", e.target.checked)} />执行到这里时先清空本工作流的调试记录</label>
+            <div className="text-[11px] text-muted">文本会出现在顶栏「🐞 调试」抽屉里这个节点下面，和脚本输出同一个位置。变量名里带 key/token/password 这类词的值会自动打码。</div>
+          </>) : null}
+          {node.type === "output.writefile" ? (<>
+            <div><span className={lab}>文件名 / 路径（支持 ~、{"{query}"}、{"{date}"} 等占位符）</span>
+              <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="notes-{date}.md" />
+              <div className="text-[11px] text-muted mt-1">填相对路径就写到本工作流的 data 目录里（脚本读得到，整包拷走时也跟着走）；要放别处就写绝对路径。</div></div>
+            <div><span className={lab}>内容（留空视为空文件）</span>
+              <textarea className={`${inp} font-mono h-[70px] resize-y`} value={String(c.content ?? "")} onChange={(e) => set("content", e.target.value)} placeholder="{query}" /></div>
+            <div><span className={lab}>文件已存在时</span>
+              <select className={inp} value={String(c.ifExists || "overwrite")} onChange={(e) => set("ifExists", e.target.value)}>
+                <option value="overwrite">覆盖</option><option value="append">追加到末尾</option>
+                <option value="unique">另存为 名称-1.后缀</option><option value="skip">什么都不做</option>
+              </select></div>
+            <div className="flex flex-col gap-1.5">
+              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.uuid} onChange={(e) => set("uuid", e.target.checked)} />文件名后加一段 UUID（每次都是新文件）</label>
+              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={c.mkdirs !== false} onChange={(e) => set("mkdirs", e.target.checked)} />自动创建中间目录</label>
+              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.allowEmpty} onChange={(e) => set("allowEmpty", e.target.checked)} />允许写空文件（不勾则内容为空时中止）</label>
+            </div>
+            <div className="text-[11px] text-muted">写完后，最终的绝对路径会作为参数传给下游 —— 接「打开文件」或「复制」就顺手了。</div>
+          </>) : null}
           {node.type === "action.ask_assistant" ? (<>
             <div><span className={lab}>发给秘书的内容（{"{query}"}=上游参数）</span>
               <textarea className={`${inp} h-[70px] resize-y`} value={String(c.prompt || "")} onChange={(e) => set("prompt", e.target.value)} placeholder="{query}" /></div>
@@ -1370,6 +1424,93 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
           <button className="px-[14px] py-[7px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => onSave(c)}>保存</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── List Filter 的列表编辑（E?）：一行一项，支持 CSV 批量导入 ──
+// CSV 解析自己写：只需要认「逗号分隔 + 双引号包裹（内部 "" 转义）+ 换行」这几样，
+// 为这点需求引一个库不划算。返回二维数组，空行跳过。
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let quoted = false;
+  const src = (text || "").replace(/\r\n?/g, "\n");
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"') { if (src[i + 1] === '"') { cell += '"'; i++; } else quoted = false; }
+      else cell += ch;
+      continue;
+    }
+    if (ch === '"') quoted = true;
+    else if (ch === ",") { row.push(cell); cell = ""; }
+    else if (ch === "\n") { row.push(cell); cell = ""; if (row.some((x) => x.trim())) rows.push(row); row = []; }
+    else cell += ch;
+  }
+  row.push(cell);
+  if (row.some((x) => x.trim())) rows.push(row);
+  return rows;
+}
+
+interface ListRow { title?: string; subtitle?: string; arg?: string; icon?: string }
+
+function ListRowsEditor({ rows, onChange }: { rows: ListRow[]; onChange: (r: ListRow[]) => void }) {
+  const [csv, setCsv] = useState("");
+  const [importing, setImporting] = useState(false);
+  const cell = "bg-bg border border-border rounded-md px-[7px] py-[5px] text-[12px] outline-none";
+  const setAt = (i: number, k: keyof ListRow, v: string) => onChange(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
+  // 上移/下移：列表顺序就是结果顺序（没输入时整表按这个顺序出），所以得能调。
+  const move = (i: number, d: number) => {
+    const j = i + d;
+    if (j < 0 || j >= rows.length) return;
+    const next = rows.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  const doImport = (replace: boolean) => {
+    // 每行按 [标题, 副标题, 参数, 图标] 取，只有一列时参数留空（执行时自动回落成标题）。
+    const parsed = parseCsv(csv).map((r) => ({ title: (r[0] || "").trim(), subtitle: (r[1] || "").trim(), arg: (r[2] || "").trim(), icon: (r[3] || "").trim() }))
+      .filter((r) => r.title || r.arg);
+    if (!parsed.length) return;
+    onChange(replace ? parsed : [...rows, ...parsed]);
+    setCsv(""); setImporting(false);
+  };
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex gap-1 text-[10.5px] text-muted px-[2px]">
+        <span className="w-[34px] shrink-0">图标</span><span className="flex-1">标题</span><span className="flex-1">副标题</span><span className="flex-1">参数（留空=用标题）</span><span className="w-[54px] shrink-0" />
+      </div>
+      <div className="max-h-[220px] overflow-y-auto flex flex-col gap-1 pr-1">
+        {rows.map((r, i) => (
+          <div key={i} className="flex gap-1 items-center">
+            <input className={`${cell} w-[34px] text-center`} value={String(r.icon || "")} onChange={(e) => setAt(i, "icon", e.target.value)} placeholder="🔹" />
+            <input className={`${cell} flex-1 min-w-0`} value={String(r.title || "")} onChange={(e) => setAt(i, "title", e.target.value)} />
+            <input className={`${cell} flex-1 min-w-0`} value={String(r.subtitle || "")} onChange={(e) => setAt(i, "subtitle", e.target.value)} />
+            <input className={`${cell} flex-1 min-w-0 font-mono`} value={String(r.arg || "")} onChange={(e) => setAt(i, "arg", e.target.value)} />
+            <div className="w-[54px] shrink-0 flex gap-[2px] justify-end">
+              <button className="w-[16px] text-[10px] text-muted hover:text-fg" title="上移" onClick={() => move(i, -1)}>↑</button>
+              <button className="w-[16px] text-[10px] text-muted hover:text-fg" title="下移" onClick={() => move(i, 1)}>↓</button>
+              <button className="w-[16px] text-[11px] text-muted hover:text-red-400" title="删除这一项" onClick={() => onChange(rows.filter((_, j) => j !== i))}>✕</button>
+            </div>
+          </div>
+        ))}
+        {!rows.length ? <div className="text-[11.5px] text-muted py-2">还没有条目，点下面「添加一项」或用 CSV 批量导入。</div> : null}
+      </div>
+      <div className="flex gap-2">
+        <button className="px-[10px] py-[5px] border border-border rounded-lg text-[11.5px]" onClick={() => onChange([...rows, { title: "", subtitle: "", arg: "" }])}>＋ 添加一项</button>
+        <button className="px-[10px] py-[5px] border border-border rounded-lg text-[11.5px]" onClick={() => setImporting((v) => !v)}>{importing ? "收起导入" : "CSV 批量导入…"}</button>
+      </div>
+      {importing ? (<>
+        <textarea className="w-full bg-bg border border-border rounded-lg px-[10px] py-[7px] text-[12px] font-mono h-[84px] resize-y outline-none"
+          value={csv} onChange={(e) => setCsv(e.target.value)}
+          placeholder={'每行一项：标题,副标题,参数,图标（后三列可省）\n含逗号的字段用双引号包起来'} />
+        <div className="flex gap-2">
+          <button className="px-[10px] py-[5px] border border-border rounded-lg text-[11.5px]" disabled={!csv.trim()} onClick={() => doImport(false)}>追加导入</button>
+          <button className="px-[10px] py-[5px] border border-border rounded-lg text-[11.5px]" disabled={!csv.trim()} onClick={() => doImport(true)}>替换全部</button>
+        </div>
+      </>) : null}
     </div>
   );
 }

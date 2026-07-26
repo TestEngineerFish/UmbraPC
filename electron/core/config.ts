@@ -99,15 +99,16 @@ export interface Phrase {
 export interface WorkflowNode {
   id: string;                        // 节点内唯一 id
   type: string;                      // "trigger.keyword" | "trigger.hotkey" | "trigger.always"
-                                     // | "input.scriptfilter" | "input.codec"
+                                     // | "input.scriptfilter" | "input.listfilter" | "input.codec"
                                      // | "input.calc" | "input.units"
                                      // | "utility.args" | "utility.conditional" | "utility.transform"
-                                     // | "utility.replace" | "utility.delay"
+                                     // | "utility.replace" | "utility.delay" | "utility.debug"
                                      // | "action.script" | "action.copy" | "action.paste"
                                      // | "action.openurl" | "action.openfile" | "action.launch"
                                      // | "action.assistant" | "action.inspiration"
                                      // | "action.device_skill" | "action.ask_assistant" | "action.create_task"
                                      // | "output.notify" | "output.largetype" | "output.textview"
+                                     // | "output.writefile"
   x: number;                         // 画布坐标
   y: number;
   config: Record<string, unknown>;   // 节点配置（随 type 不同）

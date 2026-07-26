@@ -48,13 +48,18 @@ function cut(s: string): string {
   return t.length <= MAX_TEXT ? t : `${t.slice(0, MAX_TEXT)}…（已截断 ${t.length - MAX_TEXT} 字）`;
 }
 
-// 变量快照：疑似密钥只留前 2 位 + 星号，其余原样（值同样截断）。
+// 单个变量的脱敏：疑似密钥只留前 2 位 + 星号，其余原样（值同样截断）。
+// 导出给引擎复用（Debug 打点节点的 {variables} 全量转储也要走同一套打码规则，
+// 否则调试抽屉这边打了码、Debug 文本那边又原样吐出来，等于白打）。
+export function maskSecret(key: string, value: string): string {
+  const s = String(value ?? "");
+  return SECRET_RE.test(key) && s ? `${s.slice(0, 2)}${"*".repeat(Math.min(8, Math.max(1, s.length - 2)))}` : cut(s);
+}
+
+// 变量快照：逐个走脱敏。
 function snapshot(vars: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [k, v] of Object.entries(vars || {})) {
-    const s = String(v ?? "");
-    out[k] = SECRET_RE.test(k) && s ? `${s.slice(0, 2)}${"*".repeat(Math.min(8, Math.max(1, s.length - 2)))}` : cut(s);
-  }
+  for (const [k, v] of Object.entries(vars || {})) out[k] = maskSecret(k, String(v ?? ""));
   return out;
 }
 
@@ -126,7 +131,11 @@ export class TraceRecorder {
     return wfId ? this.runs.filter((r) => r.wfId === wfId) : this.runs.slice();
   }
 
-  clear(): void { this.runs = []; }
+  // 清空记录：给 wfId 则只清这条工作流的（Debug 打点节点的「清空本工作流调试文本」用），
+  // 不给就整个清掉（调试抽屉的「清空」按钮）。
+  clear(wfId?: string): void {
+    this.runs = wfId ? this.runs.filter((r) => r.wfId !== wfId) : [];
+  }
 
   // 订阅「有新运行记录」，返回退订函数（供编辑器窗口实时刷新调试抽屉）。
   onRun(fn: (r: TraceRun) => void): () => void {

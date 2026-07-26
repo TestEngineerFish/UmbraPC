@@ -1,13 +1,16 @@
 // 工作流执行引擎（类 Alfred Workflow）。
 // 触发(Keyword/Hotkey) → 输入(Script Filter，跑脚本解析 Alfred JSON) → 修饰键分支 → 动作链(Action)。
 // 与内置 provider 结果并存：本引擎只产出/执行「工作流」结果，LauncherManager 负责合并与分发。
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { ConfigStore, expandHome, httpBase, Workflow, WorkflowNode } from "../config";
 import { run } from "../shared/util";
 import { simulatePaste, simulateCopy } from "../clipboard/paste";
 import { readClipboardFiles } from "../clipboard/watcher";
 import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } from "./tools";
 import { ensureWorkflowDir, workflowEnv, resolveCwd } from "./workspace";
-import { TraceRecorder } from "./trace";
+import { TraceRecorder, maskSecret } from "./trace";
 import type { TraceRun } from "./trace";
 
 // 与 LauncherManager 的结果结构对齐（避免运行时循环依赖，仅类型引用）。
@@ -28,6 +31,9 @@ interface AlfredItem {
   variables?: Record<string, string>;
   quicklookurl?: string;
 }
+
+// List Filter 节点里维护的一行。uid 只用于使用频率学习（不填就拿 title 当键）。
+interface ListRow { title?: string; subtitle?: string; arg?: string; icon?: string; uid?: string }
 
 // Script Filter 脚本输出的顶层结构（Alfred 约定）。
 interface SFOutput {
@@ -72,6 +78,68 @@ export interface WorkflowDeps {
 const SCRIPT_TIMEOUT = 20000;
 // 问秘书 / 设备派发走 HTTP，比本地脚本慢得多，单独给一个更长的超时。
 const REMOTE_TIMEOUT = 120000;
+
+// 日期时间占位符的格式化：只认这几个字段，够用且不用引第三方库。
+//   YYYY 年 / MM 月 / DD 日 / HH 时(24) / mm 分 / ss 秒 / SSS 毫秒 / ddd 星期几（中文）
+// 长的写在前面，避免 YYYY 被 YY 先吃掉一半。
+function formatNow(fmt: string): string {
+  const d = new Date();
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  const map: Record<string, string> = {
+    YYYY: String(d.getFullYear()),
+    YY: String(d.getFullYear()).slice(-2),
+    MM: p2(d.getMonth() + 1),
+    DD: p2(d.getDate()),
+    HH: p2(d.getHours()),
+    mm: p2(d.getMinutes()),
+    ss: p2(d.getSeconds()),
+    SSS: String(d.getMilliseconds()).padStart(3, "0"),
+    ddd: "日一二三四五六"[d.getDay()],
+  };
+  return (fmt || "").replace(/YYYY|SSS|ddd|YY|MM|DD|HH|mm|ss/g, (k) => map[k] ?? k);
+}
+
+// 随机占位符 {random[:参数]}：
+//   （空）        0~999999 的整数
+//   uuid         标准 UUID
+//   N            0~N 的整数
+//   A-B          A~B 的整数（闭区间）
+//   hexN / strN  N 位十六进制 / N 位大小写字母数字串（上限 64）
+function randomToken(param: string): string {
+  const p = (param || "").trim().toLowerCase();
+  const int = (min: number, max: number) => String(min + Math.floor(Math.random() * (max - min + 1)));
+  if (!p) return int(0, 999999);
+  if (p === "uuid") return randomUUID();
+  const hex = p.match(/^hex(\d+)$/);
+  if (hex) {
+    const n = Math.min(64, Math.max(1, Number(hex[1])));
+    return [...Array(n)].map(() => Math.floor(Math.random() * 16).toString(16)).join("");
+  }
+  const str = p.match(/^str(\d+)$/);
+  if (str) {
+    const n = Math.min(64, Math.max(1, Number(str[1])));
+    const abc = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    return [...Array(n)].map(() => abc[Math.floor(Math.random() * abc.length)]).join("");
+  }
+  const range = p.match(/^(-?\d+)\s*-\s*(-?\d+)$/);
+  if (range) {
+    const a = Number(range[1]); const b = Number(range[2]);
+    return int(Math.min(a, b), Math.max(a, b));
+  }
+  const max = Number(p);
+  return Number.isFinite(max) ? int(0, Math.max(0, Math.floor(max))) : "";
+}
+
+// 文件已存在且选了「另存新文件」时，在扩展名前加 -1、-2… 直到找到没被占用的名字。
+async function uniquePath(p: string): Promise<string> {
+  const ext = path.extname(p);
+  const base = p.slice(0, p.length - ext.length);
+  for (let i = 1; i < 1000; i++) {
+    const cand = `${base}-${i}${ext}`;
+    if (!(await fs.stat(cand).then(() => true).catch(() => false))) return cand;
+  }
+  return `${base}-${Date.now()}${ext}`;
+}
 
 export class WorkflowEngine {
   private ctx = new Map<string, ItemCtx>();  // token → 上下文（每次 query 重置）
@@ -123,11 +191,38 @@ export class WorkflowEngine {
     return [...s];
   }
 
-  // 占位替换：{query}→arg，{var:name}→变量。
+  // 占位替换（工作流全局共用的一套动态占位符）：
+  //   · {query}                 上游传下来的 arg
+  //   · {var:name}              工作流变量（含配置项、Script Filter 输出的 variables）
+  //   · {clipboard}             当前剪贴板文本
+  //   · {date} / {date:格式}    日期，默认 YYYY-MM-DD
+  //   · {time} / {time:格式}    时间，默认 HH:mm:ss
+  //   · {random} / {random:参数} 随机数，见 randomToken()
+  // 只跑一遍正则（而不是一个占位符一个 .replace 链下来）：
+  // 剪贴板/变量里如果正好有 "{query}" 这样的字面量，不会被后一轮替换二次展开。
+  // 认不出来的占位符原样留着 —— 脚本自己的模板语法不该被我们吃掉。
   private subst(tpl: string, arg: string, vars: Record<string, string>): string {
-    return (tpl || "")
-      .replace(/\{query\}/g, arg)
-      .replace(/\{var:([^}]+)\}/g, (_m, k) => vars[String(k).trim()] ?? "");
+    return (tpl || "").replace(/\{(query|var|clipboard|date|time|random)(?::([^}]*))?\}/g, (m, name: string, param?: string) => {
+      switch (name) {
+        case "query": return param === undefined ? arg : m;
+        case "var": return param === undefined ? m : (vars[param.trim()] ?? "");
+        case "clipboard": return this.clipText();
+        case "date": return formatNow(param || "YYYY-MM-DD");
+        case "time": return formatNow(param || "HH:mm:ss");
+        case "random": return randomToken(param || "");
+        default: return m;
+      }
+    });
+  }
+
+  // 同步读剪贴板：subst 是同步方法（Conditional 规则求值等地方也在用），
+  // 没有 await import("electron") 的机会，这里跟 loadIcon 一样走同步 require。
+  private clipText(): string {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { clipboard } = require("electron") as typeof import("electron");
+      return clipboard.readText() || "";
+    } catch { return ""; }   // 非 Electron 环境（单测）当作空剪贴板
   }
 
   // 取走本次查询里脚本要求的自动重查间隔（秒，0 = 不需要）。取完即清零，避免重复安排。
@@ -194,11 +289,47 @@ export class WorkflowEngine {
     if (node.disabled) return null;
     switch (node.type) {
       case "input.scriptfilter": return this.runScriptFilter(wf, node, arg);
+      case "input.listfilter": return this.runListFilter(wf, node, arg);
       case "input.codec": return this.runCodec(wf, node, arg);
       case "input.calc": return this.runCompute(wf, node, arg, "calc");
       case "input.units": return this.runCompute(wf, node, arg, "units");
       default: return null;
     }
+  }
+
+  // 内置输入：List Filter —— 在节点里维护一张固定列表，按输入过滤后当结果给出来。
+  // 和 Script Filter 的区别就是「不用写脚本」：菜单、预设、常用地址这类内容直接列进去。
+  // 过滤规则（match）对齐 Alfred：
+  //   word     = 从词首匹配（整条以输入开头，或任意一个空白分隔的词以输入开头）——默认
+  //   contains = 任意位置包含
+  //   none     = 不过滤，永远整表给出（配合上游关键词「无参数」用）
+  private runListFilter(wf: Workflow, node: WorkflowNode, arg: string): LauncherResult[] {
+    const rows = Array.isArray(node.config.items) ? (node.config.items as ListRow[]) : [];
+    if (!rows.length) return [];
+    const vars = this.baseVars(wf);
+    const mode = String(node.config.match || "word");
+    const q = (arg || "").trim().toLowerCase();
+    const hit = (row: ListRow): boolean => {
+      if (mode === "none" || !q) return true;
+      const hay = `${row.title || ""} ${row.subtitle || ""}`.toLowerCase();
+      if (mode === "contains") return hay.includes(q);
+      return hay.split(/\s+/).some((w) => w.startsWith(q));
+    };
+    // 「参与使用频率学习」默认开：同一个关键词下常选的那项会被顶上来（靠 uid 记，不是靠位置）。
+    const learn = node.config.learn !== false;
+    const mods = this.branchMods(wf, node.id);
+    const limit = Math.max(1, Math.min(Number(this.cfg.get().launcherMaxResults) || 12, 50));
+    return rows.filter(hit).slice(0, limit).map((row, i) => {
+      // 只有 arg 走占位替换：标题/副标题是给人看的，塞 {query} 会让过滤结果自相矛盾。
+      const val = this.subst(String(row.arg ?? row.title ?? ""), arg, vars);
+      const r = this.itemResult(wf, node.id, {
+        title: String(row.title || val), subtitle: row.subtitle ? String(row.subtitle) : undefined,
+        arg: val, uid: learn ? String(row.uid || row.title || i) : undefined,
+      }, mods, { rank: i, noLearn: !learn });
+      // 图标：带「/」的当文件路径去加载，否则当 emoji 直接用（列表里手写 emoji 是常态）。
+      if (row.icon) r.icon = String(row.icon).includes("/") ? this.loadIcon(String(row.icon), wf.icon || "🧩") : String(row.icon);
+      return r;
+    });
   }
 
   // 内置输入：编解码（unicode / url / base64）。
@@ -518,6 +649,18 @@ export class WorkflowEngine {
         break;
       }
 
+      // ── 工具：Debug 打点 —— 往调试轨迹里写一行文本，链路本身照常往下走 ──
+      // 文本走 stdout 字段，调试抽屉里就在这个节点下面显示，和脚本输出一个位置。
+      case "utility.debug": {
+        // 「清空本工作流的调试记录」：只清这条工作流之前的运行，本次运行还没入队，不受影响。
+        if (node.config.clear) this.trace.clear(wf.id);
+        const text = this.substDebug(String(node.config.text ?? "{query}"), arg, vars);
+        stdout = text;
+        // after=pass（默认）入参原样传给下游；after=replace 把打点文本当作下游 arg。
+        if (String(node.config.after || "pass") === "replace") outArg = text;
+        break;
+      }
+
       // ── 工具：Delay —— 等待若干秒再继续（上限 60 秒，避免卡死链路）──
       case "utility.delay": {
         const ms = Math.max(0, Math.min(Number(node.config.seconds || 0) * 1000, 60000));
@@ -672,6 +815,40 @@ export class WorkflowEngine {
       case "output.notify":
         try { new Notification({ title: wf.name, body: arg }).show(); } catch { /* 无通知权限忽略 */ }
         break;
+
+      // ── 输出：写文本文件 —— 把内容落到磁盘，并把「最终写入的绝对路径」作为下游 arg ──
+      // 路径规则：~ 展开；绝对路径按填的走；相对路径落到本工作流的 data 目录
+      //（脚本读得到 $alfred_workflow_data，工作流整包拷走时文件也跟着走）。
+      case "output.writefile": {
+        const rawPath = this.subst(String(node.config.path || ""), arg, vars).trim();
+        const body = this.subst(String(node.config.content ?? "{query}"), arg, vars);
+        if (!rawPath) { feedback = "写文件：没填文件名"; stop = true; break; }
+        if (!body && !node.config.allowEmpty) { feedback = "写文件：内容为空（未勾选允许空文件）"; stop = true; break; }
+        const dir = await ensureWorkflowDir(this.cfg.dir, wf.id);
+        const ep = expandHome(rawPath);
+        let target = path.isAbsolute(ep) ? ep : path.join(dir, "data", ep);
+        // 加 UUID：加在扩展名之前，扩展名保住（notes.md → notes-3f2a….md）。
+        if (node.config.uuid) {
+          const ext = path.extname(target);
+          target = `${target.slice(0, target.length - ext.length)}-${randomUUID()}${ext}`;
+        }
+        if (node.config.mkdirs) {
+          try { await fs.mkdir(path.dirname(target), { recursive: true }); }
+          catch (e) { feedback = `写文件：建目录失败 ${String(e).slice(0, 40)}`; stop = true; break; }
+        }
+        const exists = await fs.stat(target).then(() => true).catch(() => false);
+        // 已存在时怎么办：overwrite=覆盖（默认）| append=追加 | unique=另存 name-1.txt | skip=什么都不做
+        const mode = String(node.config.ifExists || "overwrite");
+        if (exists && mode === "skip") { outArg = target; feedback = "写文件：已存在，跳过"; break; }
+        if (exists && mode === "unique") target = await uniquePath(target);
+        try {
+          if (exists && mode === "append") await fs.appendFile(target, body, "utf8");
+          else await fs.writeFile(target, body, "utf8");
+        } catch (e) { feedback = `写文件失败：${String(e).slice(0, 60)}`; stop = true; break; }
+        outArg = target;   // 下游拿到的是绝对路径，接「打开文件」「复制」都顺手
+        feedback = `已写入：${path.basename(target)} ✓`;
+        break;
+      }
     }
     } catch (e) {
       // 节点内部抛异常：先把这一步记进轨迹（否则调试抽屉里只会看到「跑到一半没了」），再原样抛出。
@@ -734,6 +911,17 @@ export class WorkflowEngine {
       case "base64decode": { try { return Buffer.from(src, "base64").toString("utf8"); } catch { return src; } }
       default: return src;
     }
+  }
+
+  // 占位替换（Debug 打点版）：在通用占位符之外多认一个 {variables} —— 当前全部变量的转储。
+  // 顺序是「先通用替换、后展开 {variables}」：{variables} 不在通用占位符表里会原样留到最后一步，
+  // 这样变量值里若正好写着 {query} 也不会被二次展开。疑似密钥按调试抽屉同一套规则打码。
+  private substDebug(tpl: string, arg: string, vars: Record<string, string>): string {
+    const done = this.subst(tpl, arg, vars);
+    if (!done.includes("{variables}")) return done;
+    const entries = Object.entries(vars);
+    const dump = entries.length ? entries.map(([k, v]) => `${k} = ${maskSecret(k, String(v ?? ""))}`).join("\n") : "（无变量）";
+    return done.replace(/\{variables\}/g, () => dump);
   }
 
   // 占位替换（JSON 版）：值按 JSON 字符串转义后插入，供「参数是一段 JSON 文本」的节点使用。
