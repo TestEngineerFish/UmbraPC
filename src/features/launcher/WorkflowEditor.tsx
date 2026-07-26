@@ -55,52 +55,102 @@ const PORT_GAP = 20;   // 多出口节点：相邻两个输出端口的垂直间
 const MODS = ["", "cmd", "alt", "ctrl", "shift"];
 const MOD_LABEL: Record<string, string> = { "": "↵", cmd: "⌘↵", alt: "⌥↵", ctrl: "⌃↵", shift: "⇧↵" };
 const WORLD_W = 4000, WORLD_H = 3000;
+// 右侧对象库的开合状态（记在本地，跟着人走而不是跟着工作流走）。
+const LS_LIB = "umbra.wf.lib";
 
-const CATALOG: { cat: string; items: { type: string; label: string; emoji: string }[] }[] = [
+// 对象清单：分组和命名对齐 Alfred，方便从 Alfred 迁过来的人直接照着找。
+// soon=true 的项是「Alfred 有、我们还没实现」的对象 —— 照旧列在对象库里但置灰不可添加，
+// 这样面板本身就是一张能力地图（哪些能用、哪些在路上一目了然），
+// 补齐时只要写好 runNode 分支再把 soon 去掉即可，面板结构不用动。
+// hint 是置灰项的悬停说明，写清楚「为什么还没做 / 打算怎么做」。
+interface CatItem { type: string; label: string; emoji: string; soon?: boolean; hint?: string }
+const CATALOG: { cat: string; items: CatItem[] }[] = [
   { cat: "触发 Triggers", items: [
-    { type: "trigger.keyword", label: "Keyword", emoji: "⌨️" },
-    { type: "trigger.hotkey", label: "Hotkey", emoji: "⌘" },
-    { type: "trigger.always", label: "始终触发（无关键词）", emoji: "♾️" },
-    { type: "trigger.universal", label: "Universal Action（选中即用）", emoji: "🎯" },
+    { type: "trigger.keyword", label: "Keyword 关键词", emoji: "⌨️" },
+    { type: "trigger.hotkey", label: "Hotkey 全局热键", emoji: "⌘" },
+    // 对应 Alfred 的 Fallback Search：主面板没匹配到结果时兜底，所以不再单列 Fallback 一项。
+    { type: "trigger.always", label: "Fallback 始终触发", emoji: "♾️" },
+    { type: "trigger.universal", label: "Universal Action 选中即用", emoji: "🎯" },
+    { type: "trigger.snippet", label: "Snippet 片段触发", emoji: "✂️", soon: true, hint: "打字触发：输入约定的缩写就跑工作流。需要键盘监听，安全模型还没定，暂未实现。" },
+    { type: "trigger.external", label: "External 外部调用", emoji: "📡", soon: true, hint: "给别的程序留一个可被调用的入口（命令行/URL Scheme）。等对外接口定稿后实现。" },
+    { type: "trigger.remote", label: "Remote 远程触发", emoji: "📱", soon: true, hint: "手机端点一下触发桌面工作流。等可信设备网络那一期一起做。" },
+    { type: "trigger.fileaction", label: "File Action 文件动作", emoji: "🗂️", soon: true, hint: "在文件管理器里选中文件后触发。要接系统的文件服务，暂未实现。" },
+    { type: "trigger.contact", label: "Contact Action 联系人动作", emoji: "👤", soon: true, hint: "从通讯录联系人触发。我们暂时没有通讯录能力。" },
   ] },
   { cat: "输入 Inputs", items: [
-    { type: "input.scriptfilter", label: "Script Filter", emoji: "🔎" },
+    { type: "input.scriptfilter", label: "Script Filter 脚本过滤器", emoji: "🔎" },
     { type: "input.codec", label: "编解码", emoji: "🔡" },
     { type: "input.calc", label: "计算器", emoji: "🔢" },
     { type: "input.units", label: "单位换算", emoji: "📐" },
+    { type: "input.filefilter", label: "File Filter 文件过滤器", emoji: "📁", soon: true, hint: "按范围和类型搜本地文件并列出来。等本地索引能力就绪后实现。" },
+    { type: "input.listfilter", label: "List Filter 列表过滤器", emoji: "📃", soon: true, hint: "在一份固定清单里筛选（不用写脚本的 Script Filter）。实现成本低，排在下一批。" },
+    { type: "input.appsfilter", label: "Running Apps 运行中应用", emoji: "🪟", soon: true, hint: "列出当前运行的应用供切换/退出。要接系统窗口信息，暂未实现。" },
+    { type: "input.dict", label: "Dictionary 词典查询", emoji: "📖", soon: true, hint: "查系统词典。macOS 专属能力，跨平台方案没定。" },
   ] },
   { cat: "工具 Utilities", items: [
-    { type: "utility.args", label: "Args & Vars（改参数/设变量）", emoji: "🏷️" },
-    { type: "utility.conditional", label: "Conditional（条件分流）", emoji: "🔀" },
-    { type: "utility.transform", label: "Transform（大小写/编解码）", emoji: "🔠" },
-    { type: "utility.replace", label: "Replace（查找替换）", emoji: "🔁" },
-    { type: "utility.delay", label: "Delay（延时）", emoji: "⏱️" },
+    { type: "utility.args", label: "Args & Vars 改参数/设变量", emoji: "🏷️" },
+    { type: "utility.conditional", label: "Conditional 条件分流", emoji: "🔀" },
+    { type: "utility.transform", label: "Transform 大小写/编解码", emoji: "🔠" },
+    { type: "utility.replace", label: "Replace 查找替换", emoji: "🔁" },
+    { type: "utility.delay", label: "Delay 延时", emoji: "⏱️" },
+    { type: "utility.split", label: "Split Arg 拆分参数", emoji: "✂️", soon: true, hint: "按分隔符把一条参数拆成多条，后面的节点逐条跑。要先支持「一进多出」的执行模型。" },
+    { type: "utility.join", label: "Join Args 合并参数", emoji: "🧷", soon: true, hint: "把多条参数并成一条，和 Split 配套。" },
+    { type: "utility.junction", label: "Junction 汇流点", emoji: "⤵️", soon: true, hint: "纯理线用的中转点，只影响连线走向不改数据。" },
+    { type: "utility.filter", label: "Filter 过滤", emoji: "🚦", soon: true, hint: "条件不满足就整条中断（Conditional 的单出口版）。" },
+    { type: "utility.fileconditional", label: "File Conditional 文件条件", emoji: "🗃️", soon: true, hint: "按文件类型/扩展名分流。等 File Filter 一起做。" },
+    { type: "utility.dialog", label: "Dialog Conditional 对话框", emoji: "❓", soon: true, hint: "弹个框问用户，按点了哪个按钮分流。UI 规范还没定。" },
+    { type: "utility.random", label: "Random 随机值", emoji: "🎲", soon: true, hint: "生成随机数/UUID 塞进参数。" },
+    { type: "utility.jsonconfig", label: "JSON Config 配置", emoji: "🧾", soon: true, hint: "用一段 JSON 一次性设置多个变量。" },
+    { type: "utility.hide", label: "隐藏主面板", emoji: "🙈", soon: true, hint: "执行到这里先把主面板收起来再继续。等窗口控制接口补齐。" },
+    { type: "utility.show", label: "显示主面板", emoji: "👁️", soon: true, hint: "把主面板重新唤起，和「隐藏主面板」配套。" },
+    { type: "utility.debug", label: "Debug 调试打点", emoji: "🐞", soon: true, hint: "往调试抽屉里打一条自定义日志。调试面板已有，这个节点排在下一批。" },
   ] },
   { cat: "动作 Actions", items: [
-    { type: "action.launch", label: "Launch Apps / Files", emoji: "🚀" },
-    { type: "action.openfile", label: "Open File（打开文件/书签）", emoji: "📂" },
-    { type: "action.openurl", label: "打开网址", emoji: "🔗" },
-    { type: "action.script", label: "Run Script", emoji: "📜" },
-    { type: "action.copy", label: "复制到剪贴板", emoji: "📋" },
+    { type: "action.launch", label: "Launch Apps / Files 启动", emoji: "🚀" },
+    { type: "action.openfile", label: "Open File 打开文件/书签", emoji: "📂" },
+    { type: "action.openurl", label: "Open URL 打开网址", emoji: "🔗" },
+    { type: "action.script", label: "Run Script 执行脚本", emoji: "📜" },
+    { type: "action.copy", label: "Copy to Clipboard 复制", emoji: "📋" },
     { type: "action.paste", label: "粘贴到前台", emoji: "📥" },
     { type: "action.assistant", label: "发给秘书", emoji: "💬" },
     { type: "action.inspiration", label: "记为灵感", emoji: "💡" },
     { type: "action.ask_assistant", label: "问秘书（等回复）", emoji: "🤖" },
     { type: "action.create_task", label: "建任务", emoji: "🗓️" },
     { type: "action.device_skill", label: "设备技能派发", emoji: "🛰️" },
+    { type: "action.reveal", label: "Reveal in Finder 在文件管理器中显示", emoji: "🔦", soon: true, hint: "在系统文件管理器里定位到这个文件。跨平台差异小，排在下一批。" },
+    { type: "action.terminal", label: "Terminal Command 终端命令", emoji: "🖥️", soon: true, hint: "把命令送到系统终端里执行（区别于后台跑的 Run Script）。" },
+    { type: "action.browse", label: "Browse in Terminal 在终端中打开目录", emoji: "📼", soon: true, hint: "在终端里 cd 到这个目录。和终端命令一起做。" },
+    { type: "action.websearch", label: "Web Search 默认网页搜索", emoji: "🌐", soon: true, hint: "用默认搜索引擎搜关键词。等搜索引擎设置项落地。" },
+    { type: "action.filebuffer", label: "File Buffer 文件暂存区", emoji: "🗄️", soon: true, hint: "把文件攒进暂存区再一起处理。需要先有文件暂存区这个概念。" },
+    { type: "action.applescript", label: "Run AppleScript", emoji: "🍎", soon: true, hint: "macOS 专属脚本。跨平台上没有对应物，优先级低。" },
+  ] },
+  { cat: "自动化 Automations", items: [
+    { type: "automation.task", label: "Automation Task 自动化任务", emoji: "⚙️", soon: true, hint: "调用预置的系统自动化任务包。我们打算用「设备技能」来对应，先占位。" },
+    { type: "automation.shortcut", label: "Run Shortcut 运行快捷指令", emoji: "🔷", soon: true, hint: "调用系统快捷指令。macOS/iOS 专属。" },
+    { type: "automation.system", label: "System Command 系统命令", emoji: "🖲️", soon: true, hint: "锁屏、睡眠、清废纸篓这类系统操作。要逐条对齐各平台实现。" },
+    { type: "automation.music", label: "Music Command 音乐控制", emoji: "🎵", soon: true, hint: "控制音乐播放。我们暂时不碰媒体控制。" },
   ] },
   { cat: "输出 Outputs", items: [
-    { type: "output.notify", label: "系统通知", emoji: "🔔" },
-    { type: "output.largetype", label: "大字显示", emoji: "🅰️" },
-    { type: "output.textview", label: "文本视图（长文/Markdown）", emoji: "📄" },
+    { type: "output.notify", label: "Post Notification 系统通知", emoji: "🔔" },
+    { type: "output.largetype", label: "Large Type 大字显示", emoji: "🅰️" },
+    { type: "output.textview", label: "Text View 文本视图", emoji: "📄" },
+    { type: "output.writefile", label: "Write Text File 写文本文件", emoji: "💾", soon: true, hint: "把参数写进指定文件（默认落在工作流目录）。实现成本低，排在下一批。" },
+    { type: "output.keycombo", label: "Dispatch Key Combo 发送按键", emoji: "⌨️", soon: true, hint: "向前台应用发一组按键。要系统辅助功能权限。" },
+    { type: "output.speak", label: "Speak 朗读", emoji: "🔊", soon: true, hint: "把参数念出来。等接系统 TTS。" },
+    { type: "output.sound", label: "Play Sound 播放提示音", emoji: "🎧", soon: true, hint: "播一段提示音。" },
+    { type: "output.exttrigger", label: "Call External Trigger 调用外部触发", emoji: "🔁", soon: true, hint: "从这条工作流跳去触发另一条工作流。等 External 触发做完配套。" },
   ] },
 ];
 const TYPE_META: Record<string, { label: string; emoji: string; kind: string }> = {};
 for (const g of CATALOG) for (const it of g.items) TYPE_META[it.type] = { label: it.label, emoji: it.emoji, kind: it.type.split(".")[0] };
-const KIND_ACCENT: Record<string, string> = { trigger: "#8E44AD", input: "#2980B9", utility: "#B7791F", action: "#27AE60", output: "#E8590C" };
+const KIND_ACCENT: Record<string, string> = { trigger: "#8E44AD", input: "#2980B9", utility: "#B7791F", action: "#27AE60", output: "#E8590C", automation: "#16A085" };
 // 拍平的对象清单（E1 搜索面板用）：分类信息一并带上，搜索时把分类名也算进匹配范围。
+// 只收已实现的 —— 搜索面板和右键菜单是「直接添加」的入口，置灰项混进去只会白点一下。
 const ALL_ITEMS: { type: string; label: string; emoji: string; cat: string }[] =
-  CATALOG.flatMap((g) => g.items.map((it) => ({ ...it, cat: g.cat })));
+  CATALOG.flatMap((g) => g.items.filter((it) => !it.soon).map((it) => ({ type: it.type, label: it.label, emoji: it.emoji, cat: g.cat })));
+// 右键菜单用的「分类 → 已实现对象」清单（空分类直接不出现）。
+const ADD_GROUPS: { cat: string; items: CatItem[] }[] =
+  CATALOG.map((g) => ({ cat: g.cat, items: g.items.filter((it) => !it.soon) })).filter((g) => g.items.length > 0);
 
 function defaultConfig(type: string): Record<string, unknown> {
   switch (type) {
@@ -218,6 +268,82 @@ function Palette({ canConnect, onPick, onClose }: { canConnect: boolean; onPick:
   );
 }
 
+// ── 右侧对象库（布局参考 Alfred 的 Objects 面板）──
+// 默认收起（顶栏「对象库」按钮切换），画布因此能占满整个宽度；需要挑对象时再拉出来。
+// 分组可逐个折叠，顶部一个搜索框 + 全部展开/全部折叠两个箭头。
+// 未实现的对象（CATALOG 里 soon=true）照样列出来但置灰，悬停能看到原因。
+function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose }: {
+  prefabs: WFPrefab[]; canAdd: boolean;
+  onAdd: (type: string, alt: boolean) => void;
+  onPrefab: (p: WFPrefab) => void; onDelPrefab: (p: WFPrefab) => void; onClose: () => void;
+}) {
+  const [q, setQ] = useState("");
+  // 折叠状态：key 是分类名（"预制件" 单独一个 key），true = 收起。默认全展开。
+  const [fold, setFold] = useState<Record<string, boolean>>({});
+  const kw = q.trim().toLowerCase();
+  // 搜索时忽略折叠状态：既然在找东西，就把命中的都摊开。
+  const groups = CATALOG.map((g) => ({
+    cat: g.cat,
+    items: kw ? g.items.filter((it) => `${it.label} ${it.type} ${g.cat}`.toLowerCase().includes(kw)) : g.items,
+  })).filter((g) => g.items.length > 0);
+  const setAll = (v: boolean) => setFold(Object.fromEntries([...CATALOG.map((g) => g.cat), "预制件"].map((c) => [c, v])));
+  const hidden = (cat: string) => !kw && fold[cat];
+
+  return (
+    <div className="w-[228px] border-l border-border bg-card flex flex-col min-h-0">
+      <div className="flex items-center gap-1 px-2.5 pt-2.5 pb-2 border-b border-border">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 搜索对象"
+          className="flex-1 min-w-0 bg-bg border border-border rounded-lg px-2 py-[5px] text-[12px] outline-none" />
+        <button className="w-[22px] h-[22px] text-[11px] text-muted rounded hover:bg-orange/10" title="全部展开" onClick={() => setAll(false)}>⌄</button>
+        <button className="w-[22px] h-[22px] text-[11px] text-muted rounded hover:bg-orange/10" title="全部折叠" onClick={() => setAll(true)}>⌃</button>
+        <button className="w-[22px] h-[22px] text-[12px] text-muted rounded hover:bg-orange/10" title="收起对象库" onClick={onClose}>✕</button>
+      </div>
+      <div className="flex-1 overflow-y-auto px-2.5 py-2">
+        <div className="text-[10.5px] text-muted leading-[1.5] mb-2">点一下加到画布 · ⌥ 点击 = 接到选中节点后面</div>
+        {/* 预制件（E3）：点一下就落在画布中央，右键菜单里也有一份。 */}
+        {prefabs.length ? (
+          <div>
+            <button className="w-full flex items-center gap-1 text-[11px] text-muted mt-1 mb-1.5" onClick={() => setFold((f) => ({ ...f, 预制件: !f["预制件"] }))}>
+              <span className="w-[10px] text-center">{hidden("预制件") ? "›" : "⌄"}</span>预制件
+            </button>
+            {hidden("预制件") ? null : prefabs.map((p) => (
+              <div key={p.id} className="group flex items-center gap-1 mb-1.5">
+                <button disabled={!canAdd} title={`落地到画布中央（${p.nodes.length} 个节点）`} onClick={() => onPrefab(p)}
+                  className="flex-1 min-w-0 flex items-center gap-2 px-2.5 py-[7px] border border-border rounded-lg text-[12px] text-left disabled:opacity-40 hover:border-orange">
+                  <span className="w-[18px] text-center shrink-0">{p.icon || "🧩"}</span>
+                  <span className="truncate">{p.name}</span>
+                </button>
+                <button className="text-danger text-[11px] opacity-0 group-hover:opacity-100 shrink-0" onClick={() => onDelPrefab(p)}>删</button>
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {groups.map((g) => (
+          <div key={g.cat}>
+            <button className="w-full flex items-center gap-1 text-[11px] text-muted mt-2 mb-1.5" onClick={() => setFold((f) => ({ ...f, [g.cat]: !f[g.cat] }))}>
+              <span className="w-[10px] text-center">{hidden(g.cat) ? "›" : "⌄"}</span>
+              <span className="flex-1 text-left">{g.cat}</span>
+              <span className="text-[10px] opacity-70">{g.items.filter((it) => !it.soon).length}/{g.items.length}</span>
+            </button>
+            {hidden(g.cat) ? null : g.items.map((it) => (
+              <button key={it.type} disabled={!canAdd || !!it.soon}
+                title={it.soon ? `暂未实现：${it.hint || ""}` : it.type}
+                onClick={(e) => onAdd(it.type, e.altKey)}
+                className={`w-full flex items-center gap-2 px-2.5 py-[7px] mb-1.5 border rounded-lg text-[12px] text-left ${
+                  it.soon ? "border-dashed border-border text-muted opacity-55 cursor-not-allowed" : "border-border disabled:opacity-40 hover:border-orange"}`}>
+                <span className={`w-[18px] text-center shrink-0 ${it.soon ? "grayscale" : ""}`}>{it.emoji}</span>
+                <span className="flex-1 truncate">{it.label}</span>
+                {it.soon ? <span className="text-[9px] px-1 rounded border border-border shrink-0">待实现</span> : null}
+              </button>
+            ))}
+          </div>
+        ))}
+        {!groups.length ? <div className="py-6 text-center text-[12px] text-muted">没有匹配的对象</div> : null}
+      </div>
+    </div>
+  );
+}
+
 // ── 调试抽屉（W8）：左侧最近若干次运行，右侧该次运行的逐节点轨迹 ──
 // 点某一步会在画布上选中对应节点，方便「看到哪步出错就跳到哪个节点」。
 function DebugDrawer({ runs, nodeLabel, onPickNode, onClear, onClose }: {
@@ -321,6 +447,10 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   const canvasRef = useRef<HTMLDivElement>(null);
   // E1 对象面板：非 null 表示打开，值是新节点要落在画布上的世界坐标。
   const [palette, setPalette] = useState<{ x: number; y: number } | null>(null);
+  // 右侧对象库：默认收起（Alfred 的布局也是这样），画布先占满宽度，要挑对象时再拉出来。
+  // 开合状态记在 localStorage 里，免得每次进来都要重开一次。
+  const [lib, setLib] = useState<boolean>(() => localStorage.getItem(LS_LIB) === "1");
+  useEffect(() => { localStorage.setItem(LS_LIB, lib ? "1" : "0"); }, [lib]);
   // W8 调试抽屉：runs 只保留当前工作流的记录（主进程侧留最近 N 次全量）。
   const [drawer, setDrawer] = useState(false);
   const [runs, setRuns] = useState<TraceRun[]>([]);
@@ -689,7 +819,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   const anchor = (n: WFNode, side: "in" | "out", port?: string) =>
     ({ x: n.x + (side === "out" ? NODE_W : 0), y: n.y + PORT_Y + (side === "out" ? portIndex(n, port) * PORT_GAP : 0) });
 
-  const addSubmenu = (px: number, py: number): MenuItem[] => CATALOG.map((g) => ({ label: g.cat, sub: g.items.map((it) => ({ label: it.label, emoji: it.emoji, onClick: () => addNode(it.type, px, py) })) }));
+  const addSubmenu = (px: number, py: number): MenuItem[] => ADD_GROUPS.map((g) => ({ label: g.cat, sub: g.items.map((it) => ({ label: it.label, emoji: it.emoji, onClick: () => addNode(it.type, px, py) })) }));
   // 预制件相关的菜单项（E3）：落地到指定世界坐标 + 删除。没有预制件时整段不出现。
   const prefabMenu = (px: number, py: number): MenuItem[] => (prefabs.length ? [
     { sep: true },
@@ -722,7 +852,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     if (!selSetRef.current.includes(n.id)) { setSelSet([]); selSetRef.current = []; }
     setMenu({ x: e.clientX, y: e.clientY, items: [
       { label: "配置节点…", emoji: "⚙️", onClick: () => setEditNode(n.id) },
-      { label: "在其后插入", emoji: "➕", sub: CATALOG.map((g) => ({ label: g.cat, sub: g.items.map((it) => ({ label: it.label, emoji: it.emoji, onClick: () => insertAfter(n, it.type) })) })) },
+      { label: "在其后插入", emoji: "➕", sub: ADD_GROUPS.map((g) => ({ label: g.cat, sub: g.items.map((it) => ({ label: it.label, emoji: it.emoji, onClick: () => insertAfter(n, it.type) })) })) },
       { label: n.disabled ? "启用节点 ⌘D" : "停用节点 ⌘D", emoji: n.disabled ? "▶️" : "⏸", onClick: () => toggleDisabled(n.id) },
       { label: "存为预制件…", emoji: "🧩", onClick: () => setNaming({ ids: [n.id], name: TYPE_META[n.type]?.label || "节点" }) },
       { sep: true },
@@ -731,49 +861,59 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     ] });
   };
 
+  // 顶栏「⋯」菜单：低频操作都收在这里（变量表、工作流目录、导入导出、启用停用、复位视图）。
+  // 菜单往按钮左下角贴（按钮本身在最右边，直接按 x=rect.left 会把菜单甩出窗口）。
+  const openMoreMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const r = e.currentTarget.getBoundingClientRect();
+    const items: MenuItem[] = [];
+    if (cur) {
+      items.push({ label: "变量表…", emoji: "🏷️", onClick: () => setShowVars(true) });
+      // 每条工作流一个独立目录：脚本节点默认就在这里跑，随行的 runtime/、index.js 之类放进去即可写相对路径。
+      items.push({ label: "打开工作流目录", emoji: "📁", onClick: () => { void (async () => { const rr = await api.openWorkflowDir(cur.id); if (!rr?.ok) setNote(`打开目录失败：${rr?.error || "未知错误"}`); })(); } });
+      items.push({ sep: true });
+    }
+    // 导入导出（W9）：走浏览器的文件选择/下载，不额外开主进程通道。
+    items.push({ label: "导入 JSON…", emoji: "📥", onClick: () => fileRef.current?.click() });
+    if (cur) items.push({ label: "导出当前工作流", emoji: "📤", onClick: () => exportWfs([cur], `${cur.name || "workflow"}.json`) });
+    items.push({ label: "导出全部工作流", emoji: "📦", onClick: () => exportWfs(wfs, "umbra-workflows.json") });
+    items.push({ sep: true });
+    if (cur) items.push({ label: cur.enabled === false ? "启用这条工作流" : "停用这条工作流", emoji: cur.enabled === false ? "✅" : "⏸️", onClick: () => updateCur((w) => ({ ...w, enabled: w.enabled === false })) });
+    items.push({ label: "复位视图", emoji: "⤢", onClick: () => { setScale(1); setPan({ x: 0, y: 0 }); } });
+    setMenu({ x: Math.max(8, r.right - 200), y: r.bottom + 6, items });
+  };
+
   const inp = "bg-bg border border-border rounded-lg px-[10px] py-[6px] text-[13px] outline-none";
 
   return (
     <div className={`flex flex-col ${embedded ? "h-full" : "h-screen"} bg-bg text-text`}>
-      {/* 顶栏 */}
-      <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-border bg-card">
-        <span className="text-[14px] font-semibold shrink-0">工作流编排</span>
+      {/* 顶栏（参考 Alfred）：左边只留「图标 + 名称 + 配置工作流… + 描述」这条身份信息，
+          低频操作（变量表/目录/导入导出/启用停用）全收进右上角的「⋯」菜单，
+          画布缩放挪到画布自己的右上角浮层 —— 顶栏一行放得下，内嵌到主窗口右侧才不会挤成一团。 */}
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-card">
         {cur ? (<>
-          <input value={cur.icon || ""} onChange={(e) => updateCur((w) => ({ ...w, icon: e.target.value }))} className={`w-[40px] text-center ${inp} text-[15px]`} maxLength={2} title="图标" />
-          <input value={cur.name} onChange={(e) => updateCur((w) => ({ ...w, name: e.target.value }))} className={`w-[150px] ${inp}`} placeholder="名称" />
-          <input value={cur.desc || ""} onChange={(e) => updateCur((w) => ({ ...w, desc: e.target.value }))} className={`flex-1 ${inp} text-[12.5px]`} placeholder="描述（可选）" />
-          <button className="text-[12px] text-muted border border-border rounded-lg px-[10px] py-[6px] shrink-0" title="配置项：给使用者填的表单（密钥进保险箱）" onClick={() => setShowCfg(true)}>配置</button>
-          <button className="text-[12px] text-muted border border-border rounded-lg px-[10px] py-[6px] shrink-0" title="原始变量表（配置项最终也落在这里）" onClick={() => setShowVars(true)}>变量</button>
-          {/* 每条工作流一个独立目录：脚本节点默认就在这里跑，随行的 runtime/、index.js 之类放进去即可写相对路径。 */}
-          <button className="text-[12px] text-muted border border-border rounded-lg px-[10px] py-[6px] shrink-0" title="打开这条工作流自己的目录（脚本节点的默认运行目录）"
-            onClick={async () => { const r = await api.openWorkflowDir(cur.id); if (!r?.ok) setNote(`打开目录失败：${r?.error || "未知错误"}`); }}>目录</button>
-          <label className="flex items-center gap-1.5 text-[12px] text-muted shrink-0"><input type="checkbox" checked={cur.enabled !== false} onChange={(e) => updateCur((w) => ({ ...w, enabled: e.target.checked }))} />启用</label>
+          <input value={cur.icon || ""} onChange={(e) => updateCur((w) => ({ ...w, icon: e.target.value }))} className={`w-[34px] shrink-0 text-center ${inp} text-[15px] px-0`} maxLength={2} title="图标" />
+          <input value={cur.name} onChange={(e) => updateCur((w) => ({ ...w, name: e.target.value }))} className={`w-[150px] shrink-0 ${inp} font-semibold`} placeholder="名称" />
+          <button className="text-[12px] text-muted border border-border rounded-lg px-[10px] py-[6px] shrink-0" title="配置项：给使用者填的表单（密钥进保险箱）" onClick={() => setShowCfg(true)}>配置工作流…</button>
+          {/* 描述做成无边框输入：平时看着就是一行说明文字，点上去才是可编辑的。 */}
+          <input value={cur.desc || ""} onChange={(e) => updateCur((w) => ({ ...w, desc: e.target.value }))}
+            className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px] text-muted px-1" placeholder="加一句描述…" />
+          {cur.enabled === false ? <span className="text-[10.5px] text-muted border border-border rounded px-1.5 py-0.5 shrink-0">已停用</span> : null}
         </>) : <span className="flex-1 text-[12.5px] text-muted">← 左侧新建或选择一个工作流</span>}
         {note ? <span className="text-[11.5px] text-orange shrink-0">{note}</span> : null}
-        {/* 导入导出（W9）：走浏览器的文件选择/下载，不额外开主进程通道。 */}
-        <div className="flex items-center gap-1 shrink-0 text-muted">
-          <button className="text-[12px] border border-border rounded-lg px-[8px] py-[5px]" title="从 JSON 文件导入工作流" onClick={() => fileRef.current?.click()}>导入</button>
-          <button className="text-[12px] border border-border rounded-lg px-[8px] py-[5px]" title="把当前工作流导出成 JSON" disabled={!cur}
-            onClick={() => cur && exportWfs([cur], `${cur.name || "workflow"}.json`)}>导出</button>
-          <button className="text-[12px] border border-border rounded-lg px-[8px] py-[5px]" title="把全部工作流导出成一个 JSON"
-            onClick={() => exportWfs(wfs, "umbra-workflows.json")}>导出全部</button>
-          <button className={`text-[12px] border rounded-lg px-[8px] py-[5px] ${drawer ? "border-orange text-orange" : "border-border"}`} title="调试抽屉：最近若干次执行的逐节点轨迹"
-            onClick={() => setDrawer((v) => !v)}>调试</button>
-        </div>
         <input ref={fileRef} type="file" accept=".json,application/json" className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void importFile(f); }} />
+        {/* 右上角图标条：只放高频的四个 + 一个「⋯」。 */}
         <div className="flex items-center gap-1 shrink-0 text-muted">
-          <button className="w-[26px] h-[26px] border border-border rounded-lg" title="撤销 ⌘Z" onClick={undo}>↶</button>
-          <button className="w-[26px] h-[26px] border border-border rounded-lg" title="缩小" onClick={() => zoomBy(0.9)}>－</button>
-          <span className="text-[11px] w-[38px] text-center">{Math.round(scale * 100)}%</span>
-          <button className="w-[26px] h-[26px] border border-border rounded-lg" title="放大" onClick={() => zoomBy(1.1)}>＋</button>
-          <button className="w-[26px] h-[26px] border border-border rounded-lg" title="复位" onClick={() => { setScale(1); setPan({ x: 0, y: 0 }); }}>⤢</button>
+          <button className="w-[27px] h-[27px] border border-border rounded-lg" title="撤销 ⌘Z" onClick={undo}>↶</button>
+          <button className={`w-[27px] h-[27px] border rounded-lg ${drawer ? "border-orange text-orange" : "border-border"}`} title="调试：最近若干次执行的逐节点轨迹" onClick={() => setDrawer((v) => !v)}>🐞</button>
+          <button className={`w-[27px] h-[27px] border rounded-lg ${lib ? "border-orange text-orange" : "border-border"}`} title="对象库（右侧面板）" onClick={() => setLib((v) => !v)}>▤</button>
+          <button className="w-[27px] h-[27px] border border-border rounded-lg" title="更多" onClick={openMoreMenu}>⋯</button>
+          {embedded ? (
+            <button className="w-[27px] h-[27px] border border-border rounded-lg" title="在独立窗口里打开编辑器（画布更大）" onClick={() => onPopout?.()}>⧉</button>
+          ) : (
+            <button className="text-[13px] px-[16px] py-[6px] bg-orange text-white rounded-lg font-semibold shrink-0" onClick={() => onClose?.()}>完成</button>
+          )}
         </div>
-        {embedded ? (
-          <button className="text-[12px] border border-border text-muted rounded-lg px-[10px] py-[6px] shrink-0" title="在独立窗口里打开编辑器（画布更大）" onClick={() => onPopout?.()}>独立窗口 ⧉</button>
-        ) : (
-          <button className="text-[13px] px-[16px] py-[6px] bg-orange text-white rounded-lg font-semibold shrink-0" onClick={() => onClose?.()}>完成</button>
-        )}
       </div>
 
       <div className="flex flex-1 min-h-0">
@@ -865,44 +1005,27 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
               ) : null}
             </div>
           ) : null}
+          {/* 缩放控件从顶栏挪到画布右上角：它只跟画布有关，跟着画布走更顺手，顶栏也就腾出来了。 */}
+          {cur ? (
+            <div className="absolute right-3 top-3 flex items-center gap-0.5 bg-black/35 rounded-full px-1 py-0.5 text-white/75">
+              <button className="w-[22px] h-[22px] rounded-full hover:bg-white/10 text-[13px]" title="缩小" onClick={() => zoomBy(0.9)}>－</button>
+              <button className="text-[11px] px-1 min-w-[38px] text-center hover:text-white" title="复位（100%）" onClick={() => { setScale(1); setPan({ x: 0, y: 0 }); }}>{Math.round(scale * 100)}%</button>
+              <button className="w-[22px] h-[22px] rounded-full hover:bg-white/10 text-[13px]" title="放大" onClick={() => zoomBy(1.1)}>＋</button>
+            </div>
+          ) : null}
           {cur ? <div className="absolute left-4 bottom-3 bg-black/40 text-white/70 text-[11px] px-3 py-1.5 rounded-full pointer-events-none">拖节点摆位 · 单击选中(Delete 删) · 双击配置 · ⌘D 停用 · ⇧拖空白框选 · ⌘点击加减选 · ⌘A 全选 · 右键菜单可对齐/存预制件 · 端口拉线 · 双击空白或 / 搜索对象 · ⌘Z 撤销 · ⌘/⌃+滚轮缩放 · 拖空白平移</div> : null}
           {/* 选区计数：多选时给个明确反馈，免得用户不确定手里攥着几个。 */}
           {selSet.length > 1 ? <div className="absolute right-4 bottom-3 bg-orange/80 text-white text-[11px] px-3 py-1.5 rounded-full pointer-events-none">已选中 {selSet.length} 个节点 · 右键可对齐/存为预制件</div> : null}
         </div>
 
-        {/* 右：节点面板 */}
-        <div className="w-[186px] border-l border-border bg-card overflow-y-auto p-3">
-          <div className="text-[10.5px] text-muted leading-[1.5] mb-1">⌥ 点击 = 新节点接到选中节点后面</div>
-          {/* 预制件（E3）：点一下就落在画布中央，右键菜单里也有一份。 */}
-          {prefabs.length ? (
-            <div>
-              <div className="text-[11px] text-muted mt-2 mb-1.5">预制件</div>
-              {prefabs.map((p) => (
-                <div key={p.id} className="group flex items-center gap-1 mb-1.5">
-                  <button disabled={!cur} title={`落地到画布中央（${p.nodes.length} 个节点）`}
-                    onClick={() => { const c = canvasCenter(); placePrefab(p, c.x, c.y); }}
-                    className="flex-1 min-w-0 flex items-center gap-2 px-2.5 py-2 border border-border rounded-lg text-[12.5px] text-left disabled:opacity-40 hover:border-orange">
-                    <span className="w-[20px] text-center shrink-0">{p.icon || "🧩"}</span>
-                    <span className="truncate">{p.name}</span>
-                  </button>
-                  <button className="text-danger text-[11px] opacity-0 group-hover:opacity-100 shrink-0"
-                    onClick={() => { savePrefabs(prefabs.filter((x) => x.id !== p.id)); setNote(`已删除预制件「${p.name}」`); }}>删</button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {CATALOG.map((g) => (
-            <div key={g.cat}>
-              <div className="text-[11px] text-muted mt-2 mb-1.5 first:mt-0">{g.cat}</div>
-              {g.items.map((it) => (
-                <button key={it.type} disabled={!cur} onClick={(e) => addNode(it.type, undefined, undefined, e.altKey && selNode ? selNode : undefined)}
-                  className="w-full flex items-center gap-2 px-2.5 py-2 mb-1.5 border border-border rounded-lg text-[12.5px] text-left disabled:opacity-40 hover:border-orange">
-                  <span className="w-[20px] text-center">{it.emoji}</span>{it.label}
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
+        {/* 右：对象库（默认收起，顶栏 ▤ 按钮切换） */}
+        {lib ? (
+          <ObjectLibrary prefabs={prefabs} canAdd={!!cur}
+            onAdd={(type, alt) => addNode(type, undefined, undefined, alt && selNode ? selNode : undefined)}
+            onPrefab={(p) => { const c = canvasCenter(); placePrefab(p, c.x, c.y); }}
+            onDelPrefab={(p) => { savePrefabs(prefabs.filter((x) => x.id !== p.id)); setNote(`已删除预制件「${p.name}」`); }}
+            onClose={() => setLib(false)} />
+        ) : null}
       </div>
 
       {drawer ? (
