@@ -97,8 +97,6 @@ export function Tools() {
                           <Icon size={14} />
                         </span>
                         <span className="truncate flex-1 min-w-0">{t(i.labelKey)}</span>
-                        {/* 选中项行尾的橙点：底色是浅橙时对比度不强，靠这一点补一个明确的「就是它」 */}
-                        {on ? <span className="w-[5px] h-[5px] rounded-full bg-orange shrink-0" /> : null}
                       </button>
                     );
                   })}

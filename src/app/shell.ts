@@ -12,19 +12,33 @@ import { t } from "../i18n";
 
 export type Nav = "chat" | "tasks" | "workspaces" | "inspiration" | "abilities" | "realtime" | "tools" | "logs" | "settings";
 
-// 深浅色开关的持久化 key。标题栏那颗按钮是全软件唯一的主题入口，
+// 外观偏好的持久化 key。标题栏那颗按钮与设置页的「外观」是同一份状态，
 // 独立窗口（保险箱 vault.html / 工作流 workflow.html）与主窗口同源共享 localStorage，
 // 靠这个 key + storage 事件跟随主窗口，因此它们内部不再各挂一个切换按钮。
-const LS_DARK = "umbra.dark";
+const LS_THEME = "umbra.theme";
+// 三档：显式浅色 / 显式深色 / 跟随系统。system 时实际深浅由 prefers-color-scheme 决定。
+export type ThemePref = "light" | "dark" | "system";
 
-// 读取已持久化的深浅色。隐私模式 / storage 被禁时按浅色兜底，不让它抛出打断启动。
-function readDark(): boolean {
-  try { return localStorage.getItem(LS_DARK) === "1"; } catch { return false; }
+// 读取已持久化的外观偏好。隐私模式 / storage 被禁时按浅色兜底，不让它抛出打断启动。
+function readThemePref(): ThemePref {
+  try {
+    const v = localStorage.getItem(LS_THEME);
+    return v === "dark" || v === "system" ? v : "light";
+  } catch { return "light"; }
+}
+// 系统当前是不是深色。matchMedia 在极老的环境里可能没有，兜底当浅色。
+function systemDark(): boolean {
+  try { return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false; } catch { return false; }
+}
+// 偏好 → 实际深浅。
+function resolveDark(p: ThemePref): boolean {
+  return p === "system" ? systemDark() : p === "dark";
 }
 
 const state = {
   nav: "chat" as Nav,
-  dark: readDark(),
+  themePref: readThemePref(),
+  dark: resolveDark(readThemePref()),
   cu: false,
   codingMode: 1,
   tasks: {
@@ -72,13 +86,30 @@ export function setBridge(rerender: () => void, nav: (n: Nav) => void): void {
   bridgeRerender = rerender;
   bridgeNav = nav;
 }
-// 切换深浅色。写 localStorage 是为了让独立窗口跟随（storage 事件只在别的窗口触发，正合适），
+// 设置外观偏好。写 localStorage 是为了让独立窗口跟随（storage 事件只在别的窗口触发，正合适），
 // 顺带做到重启后保留上次选择。
-export function toggleTheme(): void {
-  state.dark = !state.dark;
-  try { localStorage.setItem(LS_DARK, state.dark ? "1" : "0"); } catch { /* 写不进去只影响持久化，当前窗口照常切 */ }
+export function setThemePref(p: ThemePref): void {
+  state.themePref = p;
+  state.dark = resolveDark(p);
+  try { localStorage.setItem(LS_THEME, p); } catch { /* 写不进去只影响持久化，当前窗口照常切 */ }
   bridgeRerender();
 }
+export function getThemePref(): ThemePref {
+  return state.themePref;
+}
+// 标题栏那颗按钮：始终在「显式浅色 / 显式深色」之间翻，按当前实际效果取反。
+// 从「跟随系统」点一下就落到显式档，这跟系统设置类里的快捷开关是一个手感。
+export function toggleTheme(): void {
+  setThemePref(state.dark ? "light" : "dark");
+}
+// 跟随系统时要实时跟着系统日夜切换走。偏好不是 system 时监听器什么也不做。
+try {
+  window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener("change", () => {
+    if (state.themePref !== "system") return;
+    state.dark = systemDark();
+    bridgeRerender();
+  });
+} catch { /* 老环境没有 matchMedia，跟随系统就退化成静态取值 */ }
 export function mountChat(el: HTMLElement): void {
   chat.mount(el);
 }

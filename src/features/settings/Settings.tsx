@@ -1,79 +1,387 @@
 // 设置页（React + Tailwind）。受控输入，不再整页重建 → 根治失焦 / 滚动跳顶。
 // 业务逻辑复用 server.ts / desktop.ts 与 main.ts 导出的处理器。
-// 排版与「工具」下的二级页保持同一套：36px 标题图标 + RowsCard/SettingRow 的表单行 + Panel 的说明卡。
+//
+// 结构对齐 ClaudeDesign 的设置稿：左侧 198px 二级目录（四个分组 / 九个分页），
+// 右侧每页一个 17px 标题 + 一句说明 + 若干张卡，卡内是「110px 标签 + 说明 + 控件」的表单行。
+// 和「工具」模块同形，两处的二级目录视觉完全一致。
 import { useState, useEffect } from "react";
+import type { ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import { chatConn, getServerUrl, getDeviceName, getAutoApproveOperate, setAutoApproveOperate, fetchProfile, saveProfile, resetProfile } from "../../services/server";
 import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/locale";
 import { changeLocale } from "../../i18n";
-import { Toggle, RowsCard, SettingRow, RowHint, Panel, Pill, Segmented, btnGhost, btnPrimary, btnDanger, inputFlex, selectBox } from "../../components/ui";
+import { Toggle, RowsCard, SettingRow, RowHint, Pill, Segmented, btnGhost, btnPrimary, btnDanger, btnIcon, inputFlex, selectBox } from "../../components/ui";
 import type { PillTone } from "../../components/ui";
 import { OWNER_LABEL, normAcc, readHotkeys, type HotkeyOwner } from "../tools/hotkeys";
 import { gotoTool } from "../tools/Tools";
-import { IconGear } from "../../components/icons";
+import {
+  IconSliders, IconPlug, IconCpu, IconShield, IconKeyboard, IconMouse, IconChat, IconGrid, IconInfo,
+  IconCopy, IconCheck, IconAlert,
+} from "../../components/icons";
 
-// 快捷键归属方 → 「工具」下对应的二级页 key，点「去设置」直接跳到那一页去改。
-// 常用语的快捷键在剪贴板那一页上（它是剪贴板面板的一个分类），所以两者都指向 phrases 自己的页。
+// 九个分页的标识。顺序即二级目录里的渲染顺序。
+type SecKey = "general" | "conn" | "device" | "perm" | "keys" | "chat" | "ops" | "cap" | "about";
+type IconComp = ComponentType<{ size?: number }>;
+
+// 二级目录的分组与条目。labelKey / descKey 走 i18n，icon 是线性描边图标。
+const SEC_GROUPS: { labelKey: string; items: { key: SecKey; labelKey: string; icon: IconComp }[] }[] = [
+  { labelKey: "settings.secGroupBasic", items: [
+    { key: "general", labelKey: "settings.secGeneral", icon: IconSliders },
+    { key: "conn", labelKey: "settings.secConn", icon: IconPlug },
+    { key: "device", labelKey: "settings.secDevice", icon: IconCpu },
+  ] },
+  { labelKey: "settings.secGroupSecurity", items: [
+    { key: "perm", labelKey: "settings.secPerm", icon: IconShield },
+    { key: "keys", labelKey: "settings.secKeys", icon: IconKeyboard },
+    { key: "ops", labelKey: "settings.secOps", icon: IconMouse },
+  ] },
+  { labelKey: "settings.secGroupAssistant", items: [
+    { key: "chat", labelKey: "settings.secChat", icon: IconChat },
+    { key: "cap", labelKey: "settings.secCap", icon: IconGrid },
+  ] },
+  { labelKey: "settings.secGroupOther", items: [
+    { key: "about", labelKey: "settings.secAbout", icon: IconInfo },
+  ] },
+];
+
+// 快捷键归属方 → 「工具」下对应的二级页 key，点「前往」直接跳到那一页去改。
 const OWNER_TOOL: Record<HotkeyOwner, string> = {
   clip: "clipboard", phrases: "phrases", shot: "screenshot", launcher: "launcher", vault: "vault",
 };
 
-// 全局快捷键总览卡：只读地列出五处键位 + 标出重复，改键位一律跳去对应工具页。
-// 数据走 hotkeys.tsx 的 readHotkeys / normAcc，和各工具页自己的冲突提示同源 ——
-// 否则会出现「总览说不冲突、工具页横幅说冲突」这种自相矛盾。
-function HotkeysCard() {
-  const { t } = useTranslation();
-  const [map, setMap] = useState<Partial<Record<HotkeyOwner, string>> | null>(null);
-  // 进页面读一次就够：改键位要跳到工具页去改，改完回来时这个组件会重新挂载。
+// 每页顶部的标题块：17px 标题 + 一句说明。九页共用。
+function SecHead({ title, desc }: { title: string; desc: string }) {
+  return (
+    <div>
+      <div className="text-[17px] font-semibold">{title}</div>
+      <div className="text-[12.5px] text-muted mt-[3px]">{desc}</div>
+    </div>
+  );
+}
+
+// 一整块提示横幅（冲突警告、总开关未开这类）。tone 决定配色语义。
+function Banner({ tone, children }: { tone: "danger" | "warning"; children: React.ReactNode }) {
+  const skin = tone === "danger" ? "bg-danger-soft border-danger text-danger" : "bg-warning-soft border-warning text-warning";
+  return (
+    <div className={`flex items-center gap-[10px] rounded-[11px] border px-[14px] py-[12px] ${skin}`}>
+      <span className="flex-none flex"><IconAlert size={15} /></span>
+      <span className="flex-1 min-w-0 text-[12.5px] text-text">{children}</span>
+    </div>
+  );
+}
+
+export function Settings() {
+  const { t, i18n } = useTranslation();
+  const [sec, setSec] = useState<SecKey>("general");
+  const [server, setServer] = useState(getServerUrl());
+  const [token, setToken] = useState("");
+  const [device, setDevice] = useState(getDeviceName());
+  const [autoApprove, setAutoApproveState] = useState(getAutoApproveOperate());
+  const [copied, setCopied] = useState(false);
+  const [skillPolicy, setSkillPolicy] = useState<Record<string, "allow" | "deny">>(
+    desktop.getDesktopConfig()?.computerSkillPolicy || {},
+  );
+  // 快捷键总览的数据：进页面读一次；改键位要跳到工具页去改，回来时组件会重新挂载。
+  const [keyMap, setKeyMap] = useState<Partial<Record<HotkeyOwner, string>> | null>(null);
   useEffect(() => {
     let alive = true;
-    void readHotkeys().then((m) => { if (alive) setMap(m); });
+    void readHotkeys().then((m) => { if (alive) setKeyMap(m); });
     return () => { alive = false; };
   }, []);
 
+  const isDesk = desktop.isDesktop();
+  const cs = chatConn.status as "online" | "connecting" | "offline";
+  const ds = desktop.getDeviceState();
+  const perms = desktop.getPermissions();
+  const cfg = desktop.getDesktopConfig();
+  const codingMode = legacy.getCodingMode();
+  const cuOn = legacy.computerEnabled();
+  const themePref = legacy.getThemePref();
+
+  const currentLocale = (i18n.language || cfg?.locale || "zh-CN") as Locale;
+  const csLabel = cs === "online" ? t("conn.online") : cs === "connecting" ? t("conn.connecting") : t("conn.offline");
+  const engStatus = (ds?.status || "offline") as "online" | "connecting" | "offline";
+  const engLabel = engStatus === "online" ? t("settings.engineRunning") : engStatus === "connecting" ? t("conn.connecting") : t("conn.offline");
+  // 连接类状态统一走徽章语义：在线绿、连接中橙、离线红。
+  const connTone = (k: "online" | "connecting" | "offline"): PillTone => (k === "online" ? "success" : k === "connecting" ? "warning" : "danger");
+
+  // 快捷键冲突：归一化后按键位分桶，桶里超过一个的算重复。
   const owners = Object.keys(OWNER_LABEL) as HotkeyOwner[];
-  // 归一化后按键位分桶，桶里超过一个的就是重复。归一化过的空串表示「没设」，不参与比较。
+  const keyRows = keyMap ? owners.filter((o) => keyMap[o] !== undefined) : [];
   const bucket = new Map<string, HotkeyOwner[]>();
   for (const o of owners) {
-    const n = normAcc(map?.[o] || "");
-    if (!n) continue;
-    bucket.set(n, [...(bucket.get(n) || []), o]);
+    const n = normAcc(keyMap?.[o] || "");
+    if (n) bucket.set(n, [...(bucket.get(n) || []), o]);
   }
-  const dupKeys = [...bucket.entries()].filter(([, os]) => os.length > 1);
-  const dupOwners = new Set(dupKeys.flatMap(([, os]) => os));
-  // 只在桌面端有桥的情况下才有东西可列；一条都读不到就给一句说明，不摆一张空表。
-  const rows = map ? owners.filter((o) => map[o] !== undefined) : [];
+  const dupOf = (o: HotkeyOwner): HotkeyOwner[] => {
+    const n = normAcc(keyMap?.[o] || "");
+    return n ? (bucket.get(n) || []).filter((x) => x !== o) : [];
+  };
+  const dupCount = [...bucket.values()].filter((os) => os.length > 1).length;
+
+  const copyDeviceId = () => {
+    void navigator.clipboard.writeText(legacy.deviceIdLabel()).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  const secTitle = (k: SecKey) => t(`settings.sec${k.charAt(0).toUpperCase()}${k.slice(1)}`);
+  const secDesc = (k: SecKey) => t(`settings.sec${k.charAt(0).toUpperCase()}${k.slice(1)}Desc`);
 
   return (
-    <Panel title={t("settings.hotkeys")} hint={t("settings.hotkeysHint")} stack>
-      {map && !rows.length ? (
-        <div className="text-[12.5px] text-muted">{t("settings.hotkeysEmpty")}</div>
-      ) : (
-        <>
-          <div className="flex flex-col">
-            {rows.map((o, i) => (
-              <div key={o} className={`flex items-center gap-[12px] py-[10px] ${i < rows.length - 1 ? "border-b border-border-soft" : ""}`}>
-                <div className="w-[120px] flex-none whitespace-nowrap text-[13px]">{t(OWNER_LABEL[o])}</div>
-                <div className="flex-1 min-w-0 flex items-center gap-[8px]">
-                  {map?.[o]
-                    ? <Pill tone={dupOwners.has(o) ? "warning" : "neutral"} mono>{map[o]}</Pill>
-                    : <span className="text-[12px] text-faint">{t("settings.hotkeysUnset")}</span>}
-                  {dupOwners.has(o) ? <Pill tone="warning" dot>{t("settings.hotkeysConflict")}</Pill> : null}
-                </div>
-                <button className={btnGhost} onClick={() => gotoTool(OWNER_TOOL[o])}>{t("settings.hotkeysGoto")}</button>
+    <div className="h-full flex min-h-0">
+      {/* 二级目录：和「工具」那一列同一套外观（--rail 底、分组小标题、22px 图标块、橙底选中态）。 */}
+      <nav className="w-[198px] flex-none border-r border-border bg-rail flex flex-col min-h-0">
+        <div className="flex-none p-[14px_14px_10px] text-[14px] font-semibold">{t("settings.title")}</div>
+        <div className="flex-1 overflow-y-auto p-[0_8px_12px]">
+          {SEC_GROUPS.map((g) => (
+            <div key={g.labelKey} className="mb-[12px]">
+              <div className="text-[10.5px] font-semibold tracking-[.06em] text-faint p-[0_8px_6px]">{t(g.labelKey)}</div>
+              <div className="flex flex-col gap-px">
+                {g.items.map((i) => {
+                  const on = sec === i.key;
+                  const Icon = i.icon;
+                  // 快捷键那一项在有冲突时挂一个红色计数徽章，不用点进去也知道有事。
+                  const badge = i.key === "keys" && dupCount > 0 ? dupCount : 0;
+                  return (
+                    <button key={i.key} onClick={() => setSec(i.key)}
+                      className={`w-full text-left flex items-center gap-[9px] p-[6px_8px] rounded-[8px] text-[12.5px] cursor-pointer transition-colors ${
+                        on ? "bg-orange-soft text-orange-text font-semibold" : "bg-transparent text-text hover:bg-hover"}`}>
+                      <span className={`w-[22px] h-[22px] rounded-[6px] flex items-center justify-center flex-none ${on ? "bg-orange text-white" : "text-muted"}`}>
+                        <Icon size={14} />
+                      </span>
+                      <span className="flex-1 min-w-0 truncate">{t(i.labelKey)}</span>
+                      {badge ? <span className="flex-none whitespace-nowrap px-[6px] rounded-full bg-danger-soft text-danger text-[10px] font-semibold">{badge}</span> : null}
+                    </button>
+                  );
+                })}
               </div>
-            ))}
-          </div>
-          {rows.length ? (
-            dupKeys.length
-              ? <div className="mt-[12px] text-[12px] text-warning">{t("settings.hotkeysConflictHint", { count: dupKeys.length })}</div>
-              : <div className="mt-[12px] text-[12px] text-faint">{t("settings.hotkeysAllClear")}</div>
+            </div>
+          ))}
+        </div>
+      </nav>
+
+      <main id="scroll-main" className="flex-1 min-w-0 overflow-y-auto p-[22px_26px_40px]">
+        <div className="max-w-[760px] flex flex-col gap-[16px]">
+          <SecHead title={secTitle(sec)} desc={secDesc(sec)} />
+
+          {sec === "general" ? (
+            <RowsCard>
+              <SettingRow label={t("settings.language")}>
+                <RowHint>{t("settings.langHint")}</RowHint>
+                <select value={currentLocale} onChange={(e) => { const l = e.target.value as Locale; void desktop.pushConfig({ locale: l }).then(() => changeLocale(l)); }} className={selectBox}>
+                  {SUPPORTED_LOCALES.map(({ value, labelKey }) => <option key={value} value={value}>{t(labelKey)}</option>)}
+                </select>
+              </SettingRow>
+              <SettingRow label={t("settings.appearance")}>
+                <RowHint>{t("settings.appearanceHint")}</RowHint>
+                <Segmented value={themePref} onChange={(v) => legacy.setThemePref(v)} options={[
+                  { v: "light" as const, label: t("settings.appearanceLight") },
+                  { v: "dark" as const, label: t("settings.appearanceDark") },
+                  { v: "system" as const, label: t("settings.appearanceSystem") },
+                ]} />
+              </SettingRow>
+            </RowsCard>
           ) : null}
-        </>
-      )}
-    </Panel>
+
+          {sec === "conn" ? (
+            <RowsCard>
+              <SettingRow label={t("settings.serverUrl")}>
+                <input value={server} onChange={(e) => setServer(e.target.value)} className={`${inputFlex} font-mono`} />
+              </SettingRow>
+              <SettingRow label={t("settings.token")}>
+                <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={legacy.tokenPlaceholder()} className={`${inputFlex} font-mono tracking-widest`} />
+              </SettingRow>
+              <SettingRow label={t("settings.connStatus")}>
+                <div className="flex-1 min-w-0"><Pill tone={connTone(cs)} dot>{csLabel}</Pill></div>
+                <button className={btnGhost} onClick={() => legacy.applyConnection(server, token, device)}>{t("settings.saveReconnect")}</button>
+              </SettingRow>
+            </RowsCard>
+          ) : null}
+
+          {sec === "device" ? (<>
+            <RowsCard>
+              <SettingRow label={t("settings.deviceId")}>
+                <div className="flex-1 min-w-0 text-[12.5px] font-mono break-all">{legacy.deviceIdLabel()}</div>
+                <button className={btnIcon} title={t("settings.copyDeviceId")} onClick={copyDeviceId}>
+                  {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+                </button>
+              </SettingRow>
+              <SettingRow label={t("settings.deviceName")}>
+                <input value={device} onChange={(e) => setDevice(e.target.value)} className={inputFlex} />
+              </SettingRow>
+            </RowsCard>
+            {isDesk ? (
+              <RowsCard>
+                <SettingRow label={t("settings.engineStatus")}>
+                  <div className="flex-1 min-w-0"><Pill tone={connTone(engStatus)} dot>{engLabel}</Pill></div>
+                  <button className={btnGhost} onClick={() => legacy.goNav("logs")}>{t("settings.goLogs")}</button>
+                </SettingRow>
+                <SettingRow label={t("settings.availablePrograms")}>
+                  {/* 可用程序改成 chips 逐个列出来，比只给一个数字有用得多。 */}
+                  <div className="flex-1 min-w-0 flex items-center gap-[6px] flex-wrap">
+                    {(ds?.providers || []).filter((p) => p.available).map((p) => <Pill key={p.provider}>{p.display_name || p.provider}</Pill>)}
+                    {!(ds?.providers || []).some((p) => p.available) ? <span className="text-[12.5px] text-muted">{t("settings.noPrograms")}</span> : null}
+                  </div>
+                  <button className={btnGhost} onClick={() => legacy.goNav("abilities")}>{t("settings.goAbilities")}</button>
+                </SettingRow>
+                <SettingRow label={t("settings.recentTask")}>
+                  <RowHint>{ds && ds.recentTasks[0] ? `${ds.recentTasks[0].provider}.${ds.recentTasks[0].skill} · ${ds.recentTasks[0].message}` : t("settings.noTask")}</RowHint>
+                </SettingRow>
+                <SettingRow label={t("settings.recentLogs")}>
+                  {/* 日志行给一块 --track 底的等宽区，和周围的表单行区分开。 */}
+                  <div className="flex-1 min-w-0 font-mono text-[11.5px] text-muted bg-track rounded-[7px] px-[10px] py-[7px] truncate">
+                    {desktop.getDeviceLogs()[0] || t("settings.noLogs")}
+                  </div>
+                </SettingRow>
+              </RowsCard>
+            ) : null}
+          </>) : null}
+
+          {sec === "perm" ? (
+            <RowsCard>
+              <PermRow title={t("settings.accessibility")} desc={t("settings.accessibilityDesc")} granted={perms.accessibility} onGrant={() => desktop.openPrivacy("accessibility")} />
+              <PermRow title={t("settings.screenCapture")} desc={t("settings.screenCaptureDesc")} granted={perms.screen === "granted"} onGrant={() => desktop.openPrivacy("screen")} />
+              <SettingRow label={t("settings.computerUse")}>
+                <RowHint>{t("settings.computerUseDesc")}</RowHint>
+                <Toggle on={cuOn} onClick={() => legacy.toggleComputerUse()} />
+              </SettingRow>
+            </RowsCard>
+          ) : null}
+
+          {sec === "keys" ? (<>
+            {dupCount ? <Banner tone="danger">{t("settings.keysConflictBanner", { count: dupCount })}</Banner> : null}
+            {keyMap && !keyRows.length ? (
+              <RowsCard><SettingRow label={t("settings.secKeys")}><RowHint>{t("settings.hotkeysEmpty")}</RowHint></SettingRow></RowsCard>
+            ) : (
+              <section className="bg-card border border-border rounded-[12px] overflow-hidden">
+                <div className="flex items-center gap-[12px] px-[15px] py-[9px] bg-bg border-b border-border-soft text-[11px] text-faint">
+                  <span className="w-[150px] flex-none whitespace-nowrap">{t("settings.keysTableTool")}</span>
+                  <span className="w-[130px] flex-none whitespace-nowrap">{t("settings.keysTableKey")}</span>
+                  <span className="flex-1 min-w-0 whitespace-nowrap">{t("settings.keysTableState")}</span>
+                  <span className="w-[56px] flex-none text-right whitespace-nowrap">{t("settings.keysTableGo")}</span>
+                </div>
+                {keyRows.map((o) => {
+                  const dup = dupOf(o);
+                  const acc = keyMap?.[o] || "";
+                  return (
+                    <div key={o} className="flex items-center gap-[12px] px-[15px] py-[10px] border-b border-border-soft last:border-b-0 hover:bg-hover">
+                      <span className="w-[150px] flex-none truncate text-[12.5px]">{t(OWNER_LABEL[o])}</span>
+                      <span className={`w-[130px] flex-none font-mono text-[12px] whitespace-nowrap ${acc ? "text-text" : "text-faint"}`}>{acc || "—"}</span>
+                      <span className={`flex-1 min-w-0 truncate text-[11.5px] ${dup.length ? "text-warning" : acc ? "text-success" : "text-faint"}`}>
+                        {dup.length ? t("settings.keyStateDup", { owner: t(OWNER_LABEL[dup[0]]) }) : acc ? t("settings.keyStateOk") : t("settings.keyStateUnset")}
+                      </span>
+                      <button className="w-[56px] flex-none text-right text-[12px] whitespace-nowrap bg-transparent text-orange-text" onClick={() => gotoTool(OWNER_TOOL[o])}>{t("settings.keysGo")}</button>
+                    </div>
+                  );
+                })}
+              </section>
+            )}
+            <div className="text-[11.5px] text-faint leading-[1.7]">{t("settings.keysFootnote")}</div>
+          </>) : null}
+
+          {sec === "chat" ? (<>
+            <RowsCard>
+              <SettingRow label={t("settings.autoApproveOperate")}>
+                <RowHint>{t("settings.autoApproveOperateHint")}</RowHint>
+                <Pill tone="danger">{t("settings.cautious")}</Pill>
+                <Toggle on={autoApprove} onClick={() => { const next = !autoApprove; setAutoApproveOperate(next); setAutoApproveState(next); }} />
+              </SettingRow>
+            </RowsCard>
+            <ProfileCard />
+          </>) : null}
+
+          {sec === "ops" ? (<>
+            {!cuOn ? (
+              <Banner tone="warning">
+                <span className="flex items-center gap-[10px]">
+                  <span className="flex-1 min-w-0">{t("settings.cuOffBanner")}</span>
+                  <button className="flex-none whitespace-nowrap px-[12px] py-[5px] border border-warning text-warning bg-transparent rounded-[7px] text-[12px] font-semibold cursor-pointer hover:bg-warning hover:text-white" onClick={() => legacy.toggleComputerUse()}>{t("settings.cuOffGo")}</button>
+                </span>
+              </Banner>
+            ) : null}
+            <RowsCard>
+              {([
+                ["open_app", t("settings.skillOpenApp")],
+                ["click", t("settings.skillClick")],
+                ["type", t("settings.skillType")],
+                ["key", t("settings.skillKey")],
+                ["scroll", t("settings.skillScroll")],
+              ] as const).map(([key, label]) => {
+                const cur = (skillPolicy[key] || "ask") as "ask" | "allow" | "deny";
+                const set = (v: "ask" | "allow" | "deny") => {
+                  const next = { ...skillPolicy };
+                  if (v === "ask") delete next[key]; else next[key] = v;
+                  setSkillPolicy(next);
+                  void desktop.pushConfig({ computerSkillPolicy: next });
+                };
+                return (
+                  <SettingRow key={key} label={label}>
+                    <RowHint />
+                    <Segmented value={cur} onChange={set} options={[
+                      { v: "ask" as const, label: t("settings.policy_ask"), tone: "neutral" },
+                      { v: "allow" as const, label: t("settings.policy_allow"), tone: "accent" },
+                      { v: "deny" as const, label: t("settings.policy_deny"), tone: "danger" },
+                    ]} />
+                  </SettingRow>
+                );
+              })}
+            </RowsCard>
+            <div className="flex items-center gap-[10px]">
+              <span className="flex-1 min-w-0 text-[11.5px] text-faint">{t("settings.opsFootnote")}</span>
+              {/* 「全部改为询问」= 清空策略表（ask 就是不写入这张表的默认档）。 */}
+              <button className={btnGhost} onClick={() => { setSkillPolicy({}); void desktop.pushConfig({ computerSkillPolicy: {} }); }}>{t("settings.opsAllAsk")}</button>
+            </div>
+          </>) : null}
+
+          {sec === "cap" ? (
+            <RowsCard>
+              <SettingRow label={t("settings.providersFile")}>
+                <div className="flex-1 min-w-0 font-mono text-[11.5px] text-muted truncate">{cfg?.providersFile || t("common.desktopOnly")}</div>
+                <button className={btnGhost} onClick={() => desktop.openProvidersFile()}>{t("settings.edit")}</button>
+              </SettingRow>
+              <SettingRow label={t("settings.codingPerm")}>
+                <RowHint>{t("settings.codingPermHint")}</RowHint>
+                <Segmented value={String(codingMode)} onChange={(v) => legacy.setCodingMode(Number(v))}
+                  options={[t("settings.codingGenOnly"), t("settings.codingConfirm"), t("settings.codingDirect")].map((label, i) => ({ v: String(i), label }))} />
+              </SettingRow>
+            </RowsCard>
+          ) : null}
+
+          {sec === "about" ? (
+            <section className="bg-card border border-border rounded-[12px] p-[18px] flex items-center gap-[14px]">
+              <span className="w-[44px] h-[44px] flex-none rounded-[12px] bg-orange text-white font-bold text-[20px] flex items-center justify-center">U</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] font-semibold">{t("settings.aboutProduct")}</div>
+                <div className="text-[11.5px] text-muted mt-[3px]">{t("settings.aboutVersion")} · {t("settings.aboutLatest")}</div>
+              </div>
+              <button className={btnGhost}>{t("settings.checkUpdate")}</button>
+            </section>
+          ) : null}
+        </div>
+      </main>
+    </div>
+  );
+}
+
+// 权限行：标签 + 说明 + 已授予/待授权徽章（+ 去授权按钮）。
+function PermRow({ title, desc, granted, onGrant }: { title: string; desc: string; granted: boolean; onGrant: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <SettingRow label={title}>
+      <RowHint>{desc}</RowHint>
+      {granted ? (
+        <Pill tone="success">{t("common.granted")}</Pill>
+      ) : (<>
+        <Pill tone="warning" dot>{t("common.notGranted")}</Pill>
+        <button className="flex-none whitespace-nowrap px-[12px] py-[5px] border border-warning text-warning bg-transparent rounded-[7px] text-[12px] font-semibold cursor-pointer hover:bg-warning hover:text-white" onClick={onGrant}>
+          {t("common.goAuthorize")}
+        </button>
+      </>)}
+    </SettingRow>
   );
 }
 
@@ -86,19 +394,12 @@ function ProfileCard() {
   const [saved, setSaved] = useState(false);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
-    void (async () => {
-      setMd(await fetchProfile());
-      setLoaded(true);
-    })();
+    void (async () => { setMd(await fetchProfile()); setLoaded(true); })();
   }, []);
   const doSave = async () => {
     setBusy(true);
     const r = await saveProfile(md);
-    if (r !== null) {
-      setMd(r);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
-    }
+    if (r !== null) { setMd(r); setSaved(true); setTimeout(() => setSaved(false), 1500); }
     setBusy(false);
   };
   const doReset = async () => {
@@ -109,237 +410,26 @@ function ProfileCard() {
     setBusy(false);
   };
   return (
-    <Panel title={t("settings.profile")} hint={t("settings.profileHint")} stack>
+    <section className="bg-card border border-border rounded-[12px] p-[16px]">
+      <div className="flex items-baseline gap-[8px] mb-[4px]">
+        <span className="flex-none whitespace-nowrap text-[13px] font-semibold">{t("settings.profile")}</span>
+      </div>
+      <div className="text-[11.5px] text-muted mb-[11px] leading-[1.6]">{t("settings.profileHint")}</div>
       <textarea
         value={md}
         onChange={(e) => setMd(e.target.value)}
         placeholder={loaded ? "" : "…"}
         spellCheck={false}
-        className="w-full h-[260px] border border-border bg-bg text-text rounded-[8px] px-[12px] py-[10px] text-[12.5px] leading-[1.7] outline-none resize-y font-mono"
+        aria-label={t("settings.profileMono")}
+        className="w-full h-[260px] border border-border bg-track text-text rounded-[9px] px-[13px] py-[11px] text-[12px] leading-[1.75] outline-none resize-y font-mono"
       />
-      <div className="flex items-center gap-2 justify-end mt-[12px]">
+      <div className="flex items-center gap-[10px] mt-[12px]">
+        <span className="flex-1" />
         <button className={btnDanger} disabled={busy} onClick={doReset}>{t("settings.profileReset")}</button>
         <button className={btnPrimary} disabled={busy || !loaded} onClick={doSave}>
           {saved ? t("settings.profileSaved") : t("settings.profileSave")}
         </button>
       </div>
-    </Panel>
-  );
-}
-
-export function Settings() {
-  const { t, i18n } = useTranslation();
-  const [server, setServer] = useState(getServerUrl());
-  const [token, setToken] = useState("");
-  const [device, setDevice] = useState(getDeviceName());
-  const [autoApprove, setAutoApproveState] = useState(getAutoApproveOperate());
-  const [skillPolicy, setSkillPolicy] = useState<Record<string, "allow" | "deny">>(
-    desktop.getDesktopConfig()?.computerSkillPolicy || {},
-  );
-
-  const isDesk = desktop.isDesktop();
-  const cs = chatConn.status as "online" | "connecting" | "offline";
-  const ds = desktop.getDeviceState();
-  const perms = desktop.getPermissions();
-  const cfg = desktop.getDesktopConfig();
-  const codingMode = legacy.getCodingMode();
-  const cuOn = legacy.computerEnabled();
-
-  const currentLocale = (i18n.language || cfg?.locale || "zh-CN") as Locale;
-  const csLabel = cs === "online" ? t("conn.online") : cs === "connecting" ? t("conn.connecting") : t("conn.offline");
-  const engStatus = (ds?.status || "offline") as "online" | "connecting" | "offline";
-  const engLabel = engStatus === "online" ? t("settings.engineRunning") : engStatus === "connecting" ? t("conn.connecting") : t("conn.offline");
-  // 连接类状态统一走徽章语义：在线绿、连接中橙、离线红。
-  const connTone = (k: "online" | "connecting" | "offline"): PillTone => (k === "online" ? "success" : k === "connecting" ? "warning" : "danger");
-
-  const codingModes = [t("settings.codingGenOnly"), t("settings.codingConfirm"), t("settings.codingDirect")];
-
-  const onLocaleChange = (locale: Locale) => {
-    void desktop.pushConfig({ locale }).then(() => changeLocale(locale));
-  };
-
-  return (
-    <div id="scroll-main" className="h-full overflow-y-auto p-[22px_26px]">
-      <div className="max-w-[740px] flex flex-col gap-[16px]">
-        {/* 标题头与「工具」二级页同一套：36px 橙底圆角图标 + 标题 + 一句说明 */}
-        <div className="flex items-start gap-[12px]">
-          <span className="w-[36px] h-[36px] rounded-[9px] flex items-center justify-center flex-none bg-orange-soft text-orange-text">
-            <IconGear size={18} />
-          </span>
-          <div className="min-w-0">
-            <h1 className="m-0 text-[16px] font-semibold leading-tight">{t("settings.title")}</h1>
-            <div className="text-[12.5px] text-muted mt-[2px]">{t("settings.desc")}</div>
-          </div>
-        </div>
-
-        <RowsCard>
-          <SettingRow label={t("settings.language")}>
-            <RowHint />
-            <select value={currentLocale} onChange={(e) => onLocaleChange(e.target.value as Locale)} className={selectBox}>
-              {SUPPORTED_LOCALES.map(({ value, labelKey }) => (
-                <option key={value} value={value}>{t(labelKey)}</option>
-              ))}
-            </select>
-          </SettingRow>
-        </RowsCard>
-
-        <Panel title={t("settings.connection")}>
-          <RowsCard>
-            <SettingRow label={t("settings.serverUrl")}>
-              <input value={server} onChange={(e) => setServer(e.target.value)} className={`${inputFlex} font-mono`} />
-            </SettingRow>
-            <SettingRow label={t("settings.token")}>
-              <input type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder={legacy.tokenPlaceholder()} className={`${inputFlex} font-mono tracking-widest`} />
-            </SettingRow>
-            <SettingRow label={t("settings.connStatus")}>
-              <div className="flex-1 min-w-0"><Pill tone={connTone(cs)} dot>{csLabel}</Pill></div>
-              <button className={btnGhost} onClick={() => legacy.applyConnection(server, token, device)}>
-                {t("settings.saveReconnect")}
-              </button>
-            </SettingRow>
-          </RowsCard>
-        </Panel>
-
-        {isDesk ? (
-          <Panel title={t("settings.deviceEngine")}>
-            <RowsCard>
-              <SettingRow label={t("settings.engineStatus")}>
-                <div className="flex-1 min-w-0"><Pill tone={connTone(engStatus)} dot>{engLabel}</Pill></div>
-                <span className="flex-none whitespace-nowrap text-[12px] text-faint">{t("settings.checkLogs")}</span>
-              </SettingRow>
-              <SettingRow label={t("settings.availablePrograms")}>
-                <RowHint>{t("settings.programCount", { count: ds ? ds.providers.filter((p) => p.available).length : 0 })}</RowHint>
-              </SettingRow>
-              <SettingRow label={t("settings.recentTask")}>
-                <RowHint>{ds && ds.recentTasks[0] ? `${ds.recentTasks[0].provider}.${ds.recentTasks[0].skill} · ${ds.recentTasks[0].message}` : t("settings.noTask")}</RowHint>
-              </SettingRow>
-              <SettingRow label={t("settings.recentLogs")}>
-                <div className="flex-1 min-w-0 text-[12px] text-muted font-mono break-all">{desktop.getDeviceLogs()[0] || t("settings.noLogs")}</div>
-              </SettingRow>
-            </RowsCard>
-          </Panel>
-        ) : null}
-
-        <HotkeysCard />
-
-        <Panel title={t("nav.chat")}>
-          <RowsCard>
-            <SettingRow label={t("settings.autoApproveOperate")}>
-              <RowHint>{t("settings.autoApproveOperateHint")}</RowHint>
-              <Toggle
-                on={autoApprove}
-                onClick={() => {
-                  const next = !autoApprove;
-                  setAutoApproveOperate(next);
-                  setAutoApproveState(next);
-                }}
-              />
-            </SettingRow>
-          </RowsCard>
-        </Panel>
-
-        <ProfileCard />
-
-        {isDesk && cuOn ? (
-          <Panel title={t("settings.computerAuth")} hint={t("settings.computerAuthSub")} stack>
-            <RowsCard>
-              {([
-                ["open_app", t("settings.skillOpenApp")],
-                ["click", t("settings.skillClick")],
-                ["type", t("settings.skillType")],
-                ["key", t("settings.skillKey")],
-                ["scroll", t("settings.skillScroll")],
-              ] as const).map(([key, label]) => {
-                const cur = (skillPolicy[key] || "ask") as "ask" | "allow" | "deny";
-                const set = (v: "ask" | "allow" | "deny") => {
-                  const next = { ...skillPolicy };
-                  if (v === "ask") delete next[key];
-                  else next[key] = v;
-                  setSkillPolicy(next);
-                  void desktop.pushConfig({ computerSkillPolicy: next });
-                };
-                return (
-                  <SettingRow key={key} label={label}>
-                    <RowHint />
-                    <Segmented value={cur} onChange={set} options={[
-                      { v: "ask", label: t("settings.policy_ask"), tone: "neutral" },
-                      { v: "allow", label: t("settings.policy_allow"), tone: "accent" },
-                      { v: "deny", label: t("settings.policy_deny"), tone: "danger" },
-                    ]} />
-                  </SettingRow>
-                );
-              })}
-            </RowsCard>
-          </Panel>
-        ) : null}
-
-        <Panel title={t("settings.device")}>
-          <RowsCard>
-            <SettingRow label={t("settings.deviceId")}>
-              <div className="flex-1 min-w-0 text-[12.5px] font-mono break-all">{legacy.deviceIdLabel()}</div>
-            </SettingRow>
-            <SettingRow label={t("settings.deviceName")}>
-              <input value={device} onChange={(e) => setDevice(e.target.value)} className={inputFlex} />
-            </SettingRow>
-          </RowsCard>
-        </Panel>
-
-        <Panel title={t("settings.permissions")} hint={t("settings.macos")}>
-          <RowsCard>
-            <PermRow title={t("settings.accessibility")} desc={t("settings.accessibilityDesc")} granted={perms.accessibility} onGrant={() => desktop.openPrivacy("accessibility")} />
-            <PermRow title={t("settings.screenCapture")} desc={t("settings.screenCaptureDesc")} granted={perms.screen === "granted"} onGrant={() => desktop.openPrivacy("screen")} />
-            <SettingRow label={t("settings.computerUse")}>
-              <RowHint>{t("settings.computerUseDesc")}</RowHint>
-              <Toggle on={cuOn} onClick={() => legacy.toggleComputerUse()} />
-            </SettingRow>
-          </RowsCard>
-        </Panel>
-
-        <Panel title={t("settings.capabilities")}>
-          <RowsCard>
-            <SettingRow label={t("settings.providersFile")}>
-              <div className="flex-1 min-w-0 text-[12px] font-mono text-muted break-all">{cfg?.providersFile || t("common.desktopOnly")}</div>
-              <button className={btnGhost} onClick={() => desktop.openProvidersFile()}>{t("settings.edit")}</button>
-            </SettingRow>
-            <SettingRow label={t("settings.codingPerm")}>
-              <RowHint />
-              <Segmented value={String(codingMode)} onChange={(v) => legacy.setCodingMode(Number(v))}
-                options={codingModes.map((label, i) => ({ v: String(i), label }))} />
-            </SettingRow>
-          </RowsCard>
-        </Panel>
-
-        <Panel>
-          <div className="flex items-center gap-[14px]">
-            <div className="flex-1 min-w-0">
-              <div className="text-[13px] font-semibold">{t("settings.about")}</div>
-              <div className="text-[12px] text-muted mt-[3px]">{t("settings.aboutDesc")}</div>
-            </div>
-            <button className={btnGhost}>{t("settings.checkUpdate")}</button>
-          </div>
-        </Panel>
-      </div>
-    </div>
-  );
-}
-
-// 权限行：左侧标签 + 中间说明 + 右侧「已授予」徽章或「待授权」徽章 + 去授权按钮。
-// 走 SettingRow 是为了和同卡里其它行共用发丝线与标签宽度。
-function PermRow({ title, desc, granted, onGrant }: { title: string; desc: string; granted: boolean; onGrant: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <SettingRow label={title}>
-      <RowHint>{desc}</RowHint>
-      {granted ? (
-        <Pill tone="success">{t("common.granted")}</Pill>
-      ) : (
-        <>
-          <Pill tone="warning" dot>{t("common.notGranted")}</Pill>
-          <button className="flex-none whitespace-nowrap px-[13px] py-[6px] border border-warning text-warning bg-transparent rounded-[8px] text-[12.5px] font-semibold cursor-pointer hover:bg-warning hover:text-white" onClick={onGrant}>
-            {t("common.goAuthorize")}
-          </button>
-        </>
-      )}
-    </SettingRow>
+    </section>
   );
 }

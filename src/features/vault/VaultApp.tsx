@@ -192,11 +192,17 @@ function ConfirmModal({ title, desc, okLabel, onOk, onClose }: { title: string; 
 // （见 app/shell.ts 的同名常量）。独立窗口（vault.html）与主窗口同源，读同一个 key 即可；
 // storage 事件只在「别的窗口写入」时触发，正好用来实时跟随主窗口的切换。
 // 这里刻意不 import shell.ts —— 那会把 chat / services 整条依赖拉进保险箱这个入口的 bundle。
-const LS_DARK = "umbra.dark";
+const LS_THEME = "umbra.theme";
 
-// 读取已持久化的深浅色。storage 被禁时按浅色兜底，不让它抛出打断渲染。
+// 读取已持久化的外观偏好并解析成实际深浅（"system" 时看系统的 prefers-color-scheme）。
+// storage 被禁或没有 matchMedia 时按浅色兜底，不让它抛出打断渲染。
 function readDark(): boolean {
-  try { return localStorage.getItem(LS_DARK) === "1"; } catch { return false; }
+  try {
+    const v = localStorage.getItem(LS_THEME);
+    if (v === "dark") return true;
+    if (v === "system") return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
+    return false;
+  } catch { return false; }
 }
 
 export function VaultApp({ embedded = false }: { embedded?: boolean }) {
@@ -221,10 +227,17 @@ export function VaultApp({ embedded = false }: { embedded?: boolean }) {
   useEffect(() => {
     if (embedded) return;
     const sync = () => setDark(readDark());
-    const onStorage = (e: StorageEvent) => { if (e.key === null || e.key === LS_DARK) sync(); };
+    const onStorage = (e: StorageEvent) => { if (e.key === null || e.key === LS_THEME) sync(); };
     window.addEventListener("storage", onStorage);
     window.addEventListener("focus", sync);
-    return () => { window.removeEventListener("storage", onStorage); window.removeEventListener("focus", sync); };
+    // 主窗口选了「跟随系统」时，本窗口也要跟着系统日夜走（storage 事件这时不会触发）。
+    const mq = window.matchMedia?.("(prefers-color-scheme: dark)");
+    mq?.addEventListener("change", sync);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", sync);
+      mq?.removeEventListener("change", sync);
+    };
   }, [embedded]);
 
   return (

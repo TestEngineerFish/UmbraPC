@@ -29,7 +29,7 @@ import {
   ScaleSnap,
   HandleId,
 } from "./geometry";
-import { textSize, FONT_FAMILY } from "./text";
+import { textSize, lineHeightPx, FONT_FAMILY } from "./text";
 
 interface CaptureData {
   dataUrl: string;
@@ -652,11 +652,17 @@ export function App() {
   function placeText(p: Point) {
     const s = st.current;
     const sel = s.selection!;
+    const fontSize = FONT_SIZES[s.sizeIdx];
+    // at 是文字框的左上角，而点下去的那一下在视觉上应该落在第一行的竖直中线上
+    // （光标就长在那儿），所以整块往上抬半个行高；否则输入框看着比鼠标位置低半行。
+    const lh = lineHeightPx(fontSize);
+    const y = Math.max(sel.y + 2, Math.min(p.y - lh / 2, sel.y + sel.h - 2 - lh));
+    const at: Point = { x: p.x, y };
     // wrapWidth = 到选区右缘（折行上限）；显示宽度随内容自适应（autoWidth）。
-    const wrapWidth = Math.max(60, sel.x + sel.w - p.x - 4);
+    const wrapWidth = Math.max(60, sel.x + sel.w - at.x - 4);
     g.current.textSnap = s.objects;
     setSelectedIds([]);
-    setEditing({ id: uid(), at: p, value: "", fontSize: FONT_SIZES[s.sizeIdx], wrapWidth, autoWidth: true, rotation: 0, color: COLORS[s.colorIdx], isNew: true });
+    setEditing({ id: uid(), at, value: "", fontSize, wrapWidth, autoWidth: true, rotation: 0, color: COLORS[s.colorIdx], isNew: true });
     shot.setInputMode(true);
   }
   function startEditText(obj: TextObj) {

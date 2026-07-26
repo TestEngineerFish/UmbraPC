@@ -699,3 +699,64 @@ export function IconFit(p: IconProps) {
     </svg>
   );
 }
+
+// ── 设置页二级目录用的图标（取自 ClaudeDesign 的设置稿）──
+
+// 滑杆：设置 → 通用。
+export function IconSliders(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 7h10M18 7h2M4 17h2M10 17h10" />
+      <circle cx="16" cy="7" r="2.2" />
+      <circle cx="8" cy="17" r="2.2" />
+    </svg>
+  );
+}
+
+// 插头：设置 → 连接。
+export function IconPlug(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0zM12 18v3" />
+    </svg>
+  );
+}
+
+// 芯片：设置 → 设备与引擎。
+export function IconCpu(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="7" y="7" width="10" height="10" rx="2" />
+      <path d="M4 10v4M20 10v4M10 4h4M10 20h4" />
+    </svg>
+  );
+}
+
+// 盾牌：设置 → 权限。
+export function IconShield(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6z" />
+    </svg>
+  );
+}
+
+// 鼠标：设置 → 电脑操作授权。
+export function IconMouse(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="7" y="3" width="10" height="18" rx="5" />
+      <path d="M12 7v3" />
+    </svg>
+  );
+}
+
+// 信息：设置 → 关于。
+export function IconInfo(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </svg>
+  );
+}
