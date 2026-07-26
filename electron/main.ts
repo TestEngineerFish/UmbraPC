@@ -386,6 +386,8 @@ app.whenReady().then(async () => {
     }
   });
   vault = new VaultManager(store, app.getPath("userData"), winOpts, { copyConceal: (t) => clipboard.writeConcealed(t) }, reregisterShortcuts);
+  // 工作流配置项里的密钥存保险箱（W10）：launcher 先于 vault 建好，所以建完再回填。
+  launcher.setVault(vault);
   Promise.all([clipboard.init(), screenshot.init(), launcher.init(), vault.init()])
     .then(() => {
       reregisterShortcuts(); // 就绪后统一注册各自快捷键

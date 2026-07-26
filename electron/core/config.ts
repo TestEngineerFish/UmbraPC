@@ -47,6 +47,7 @@ export interface UmbraConfig {
   launcherScripts: LauncherScript[]; // 自定义脚本（旧；加载时迁移为工作流）
   phrases: Phrase[];                 // 常用语（快捷入口可搜、回车插入；设置里管理排序）
   launcherWorkflows: Workflow[];     // 工作流编排（类 Alfred Workflow）
+  launcherPrefabs: WorkflowPrefab[]; // 预制件：存起来的节点组，可在任意工作流里一键落地（E3）
   launcherMaxResults: number;        // 结果列表最多显示几条（同时也是 Script Filter 单次取用上限）
   launcherFallbackAssistant: boolean; // 兜底搜索：搜不到任何结果时，追加一条「问秘书」可执行项
   launcherScriptsMigrated?: boolean; // 迁移标记：launcherScripts 已转成工作流（幂等）
@@ -101,6 +102,10 @@ export interface WorkflowNode {
   x: number;                         // 画布坐标
   y: number;
   config: Record<string, unknown>;   // 节点配置（随 type 不同）
+  // 临时停用（调试用，不必删节点）。语义是「旁路」而不是「当作不存在」：
+  //   · 触发器被停用 → 不注册、不参与查询/快捷键扫描，整条链路唤不起来；
+  //   · 其它节点被停用 → 不执行自身逻辑，入参原样从默认出口继续往下传，下游照跑。
+  disabled?: boolean;
 }
 // 连线：from 节点输出 → to 节点输入；mod 指定触发该分支的修饰键（空=回车）。
 // fromPort 指定从发出节点的哪个「出口」引出（多出口节点用）：
@@ -114,13 +119,36 @@ export interface WorkflowConnection {
   mod?: "" | "cmd" | "alt" | "ctrl" | "shift" | "cmd+alt" | "cmd+shift" | "cmd+ctrl";
   fromPort?: string;
 }
+// 工作流配置项（W10「Configuration 分层」）：把「作者写死的变量」升级成「使用者填的表单」。
+// 声明放在这里，填出来的值仍旧落在 workflow.variables[key]，所以脚本/节点里照常用 {var:key} 取。
+// 唯一的例外是 type:"password"：值不进 JSON，改成写进密码保险箱，variables[key] 只留一条
+// vault://<身份库id>/<记录id> 的引用，执行时由引擎现取现用（保险箱锁着就取不到）。
+export interface WorkflowConfigField {
+  key: string;                       // 变量名（脚本里 {var:key} / 环境变量同名）
+  label: string;                     // 界面上显示的名字
+  type: "text" | "password" | "file" | "select" | "checkbox";
+  default?: string;                  // 使用者没填时的默认值
+  help?: string;                     // 一行说明
+  options?: string[];                // type=select 的候选项
+}
+// 预制件（E3 Prefabs）：把选中的一组节点连同它们之间的连线整块存下来，
+// 之后在任何工作流里一键落地。节点 id 落地时会重新生成，所以这里存的是「模板」。
+export interface WorkflowPrefab {
+  id: string;
+  name: string;
+  icon?: string;
+  nodes: WorkflowNode[];             // 坐标以组内左上角为原点（落地时再加偏移）
+  connections: WorkflowConnection[];
+  createdAt: number;
+}
 export interface Workflow {
   id: string;
   name: string;
   icon?: string;                     // emoji 或 图标路径
   desc?: string;                     // 描述（可选）
   enabled: boolean;
-  variables?: Record<string, string>; // 工作流级变量（可含密钥），注入脚本 env
+  config?: WorkflowConfigField[];     // 配置项声明（W10），值仍存在 variables 里
+  variables?: Record<string, string>; // 工作流级变量（可含密钥引用），注入脚本 env
   nodes: WorkflowNode[];
   connections: WorkflowConnection[];
 }
@@ -180,6 +208,7 @@ function defaults(configDir: string): UmbraConfig {
     launcherScripts: [],
     phrases: [],
     launcherWorkflows: [],
+    launcherPrefabs: [],
     launcherMaxResults: Number(process.env.UMBRA_LAUNCHER_MAX_RESULTS || 12),
     launcherFallbackAssistant: envBool("UMBRA_LAUNCHER_FALLBACK_ASSISTANT", true),
     launcherScriptsMigrated: false,

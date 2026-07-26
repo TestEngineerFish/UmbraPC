@@ -9,6 +9,7 @@ import { Tasks } from "../features/tasks/Tasks";
 import { Workspaces } from "../features/workspaces/Workspaces";
 import { Inspirations } from "../features/inspiration/Inspirations";
 import { Abilities } from "../features/abilities/Abilities";
+import { Tools } from "../features/tools/Tools";
 import { subscribeLocale } from "../i18n";
 
 // 把 legacy 生成的 HTML 挂进一个 div，挂载后还原滚动位置 / 触发回调（如挂载聊天子树）。
@@ -61,6 +62,8 @@ export function App() {
             <Inspirations />
           ) : nav === "abilities" ? (
             <Abilities />
+          ) : nav === "tools" ? (
+            <Tools />
           ) : (
             <LegacyHost
               html={legacy.currentScreen()}

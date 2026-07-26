@@ -14,6 +14,9 @@ import { ConfigStore, httpBase } from "../config";
 // 导入用的明文 bundle 结构（每个 vault 会作为新身份库追加）。
 interface ImportBundle { vaults: { name: string; owner?: string; icon?: string; types?: VaultType[]; items?: Item[]; attachments?: Record<string, string> }[] }
 
+// 工作流配置项密钥（W10）统一收纳到这个类型下，便于用户在保险箱里一眼认出来。
+const WF_SECRET_TYPE = "工作流密钥";
+
 const rid = (p = "") => p + randomBytes(9).toString("hex");
 const b64 = (b: Buffer) => b.toString("base64");
 const unb64 = (s: string) => Buffer.from(s, "base64");
@@ -331,6 +334,65 @@ export class VaultManager {
     };
     this.data(vaultId).items.push(it); await this.persistVault(vaultId); return it.id;
   }
+  // ── 工作流配置项的密钥（W10）──
+  // 工作流 JSON 里只留一条 vault://<身份库id>/<记录id> 引用，明文一律待在保险箱里，
+  // 执行工作流时才现取。记录统一落在第一个身份库的「工作流密钥」类型下。
+
+  // 找「工作流密钥」类型，没有就建一个。调用方保证已解锁。
+  private async wfSecretType(vaultId: string): Promise<string> {
+    const d = this.data(vaultId);
+    const hit = d.types.find((t) => t.name === WF_SECRET_TYPE);
+    if (hit) return hit.id;
+    const t: VaultType = { id: rid("t"), name: WF_SECRET_TYPE, icon: "🧩", order: d.types.length };
+    d.types.push(t);
+    await this.persistVault(vaultId);
+    return t.id;
+  }
+
+  // 解析 vault://<身份库id>/<记录id>，格式不对返回 null。
+  private parseRef(ref: string): { vid: string; iid: string } | null {
+    const m = /^vault:\/\/([^/]+)\/([^/]+)$/.exec(String(ref || "").trim());
+    return m ? { vid: m[1], iid: m[2] } : null;
+  }
+
+  // 取引用对应的明文。保险箱锁着或引用已失效都返回 null，调用方自行提示「请先解锁」。
+  getSecret(ref: string): string | null {
+    if (!this.unlocked) return null;
+    const r = this.parseRef(ref);
+    if (!r) return null;
+    try {
+      const it = this.data(r.vid).items.find((i) => i.id === r.iid && !i.deleted);
+      const b = it?.blocks.find((x) => x.type === "secret");
+      const v = b?.data?.value;
+      return v === undefined || v === null ? null : String(v);
+    } catch { return null; }   // 身份库没加载（多半是锁着）→ 当作取不到
+  }
+
+  // 写入/更新一个工作流密钥，返回引用串。ref 还有效就原地改，否则新建一条记录。
+  async putSecret(ref: string | undefined, title: string, value: string): Promise<string> {
+    if (!this.unlocked || !this.meta) throw new Error("保险箱已锁定");
+    const old = ref ? this.parseRef(ref) : null;
+    if (old) {
+      const it = this.data(old.vid).items.find((i) => i.id === old.iid && !i.deleted);
+      if (it) {
+        const b = it.blocks.find((x) => x.type === "secret");
+        if (b) b.data = { ...b.data, value };
+        else it.blocks.push({ id: rid("b"), type: "secret", label: "值", data: { value } });
+        it.title = title; it.updatedAt = Date.now(); it.revision += 1;
+        await this.persistVault(old.vid);
+        return `vault://${old.vid}/${it.id}`;
+      }
+    }
+    const vid = this.meta.vaults.slice().sort((a, b) => a.order - b.order)[0]?.id;
+    if (!vid) throw new Error("没有可用的身份库");
+    const typeId = await this.wfSecretType(vid);
+    const iid = await this.addItem(vid, {
+      typeId, title, icon: "🧩",
+      blocks: [{ id: rid("b"), type: "secret", label: "值", data: { value } }],
+    });
+    return `vault://${vid}/${iid}`;
+  }
+
   private async updateItem(vaultId: string, item: Item) {
     const d = this.data(vaultId);
     const idx = d.items.findIndex((i) => i.id === item.id); if (idx < 0) throw new Error("记录不存在");

@@ -12,8 +12,8 @@ function sha1(s: string | Buffer): string {
   return createHash("sha1").update(s).digest("hex");
 }
 
-// 解析剪贴板中的文件路径（mac / win）。
-function readClipboardFiles(clipboard: Electron.Clipboard): string[] {
+// 解析剪贴板中的文件路径（mac / win）。W4 的 Universal Action 也复用它抓「选中的文件」。
+export function readClipboardFiles(clipboard: Electron.Clipboard): string[] {
   try {
     if (process.platform === "darwin") {
       const buf = clipboard.readBuffer("NSFilenamesPboardType");

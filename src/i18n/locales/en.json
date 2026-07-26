@@ -6,8 +6,16 @@
     "inspiration": "Ideas",
     "abilities": "Abilities",
     "realtime": "Realtime",
+    "tools": "Tools",
     "logs": "Logs",
     "settings": "Settings"
+  },
+  "tools": {
+    "clipboardDesc": "Everything you copy stays here — text, images and files, one shortcut away.",
+    "screenshotDesc": "Region capture with pin-to-desktop, OCR and whole-image translation.",
+    "launcherDesc": "One shortcut opens a search box for apps, folders, scripts and workflows.",
+    "phrasesDesc": "Save the things you type often and paste them from the launcher.",
+    "vaultDesc": "Credentials encrypted on this device, readable only after unlocking."
   },
   "workspaces": {
     "title": "Workspaces",

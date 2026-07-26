@@ -10,7 +10,7 @@ import * as chat from "../features/chat/chat";
 import * as desktop from "../services/desktop";
 import { t } from "../i18n";
 
-export type Nav = "chat" | "tasks" | "workspaces" | "inspiration" | "abilities" | "realtime" | "logs" | "settings";
+export type Nav = "chat" | "tasks" | "workspaces" | "inspiration" | "abilities" | "realtime" | "tools" | "logs" | "settings";
 
 const state = {
   nav: "chat" as Nav,
@@ -96,6 +96,7 @@ const SVG = {
   realtime: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg>`,
   logs: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"></rect><path d="M6.5 9l3 2.5-3 2.5M12 15h5"></path></svg>`,
   settings: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><circle cx="16" cy="7" r="2.4"></circle><circle cx="8" cy="17" r="2.4"></circle></svg>`,
+  tools: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 6.5a3.8 3.8 0 0 0 5 5l-7.6 7.6a2.1 2.1 0 0 1-3-3z"></path><path d="M6 3.5l2.6 2.6-2 2L4 5.5z"></path></svg>`,
 };
 
 function navItem(key: Nav, label: string, svg: string): string {
@@ -163,6 +164,7 @@ function sidebar(): string {
     ${navItem("inspiration", t("nav.inspiration"), SVG.inspiration)}
     ${navItem("abilities", t("nav.abilities"), SVG.abilities)}
     ${navItem("realtime", t("nav.realtime"), SVG.realtime)}
+    ${navItem("tools", t("nav.tools"), SVG.tools)}
     ${navItem("logs", t("nav.logs"), SVG.logs)}
     ${navItem("settings", t("nav.settings"), SVG.settings)}
     <div style="flex:1;"></div>

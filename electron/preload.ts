@@ -117,6 +117,28 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   getWorkflows: () => ipcRenderer.invoke("launcher:getWorkflows"),
   setWorkflows: (workflows: unknown) => ipcRenderer.invoke("launcher:setWorkflows", workflows),
   openWorkflowEditor: () => ipcRenderer.invoke("launcher:openWorkflowEditor"),
+  // 预制件（E3）：存起来的节点组，可在任意工作流里一键落地。
+  getPrefabs: () => ipcRenderer.invoke("launcher:getPrefabs"),
+  setPrefabs: (prefabs: unknown) => ipcRenderer.invoke("launcher:setPrefabs", prefabs),
+  // 工作流配置项里的密钥（W10）：明文交给密码保险箱，换回一条 vault://... 引用存进工作流。
+  setWfSecret: (ref: string, title: string, value: string) => ipcRenderer.invoke("launcher:setWfSecret", ref, title, value),
+  vaultUnlocked: () => ipcRenderer.invoke("launcher:vaultUnlocked"),
+  // 工作流调试轨迹（编辑器底部调试抽屉）：拉最近若干次执行记录 / 清空 / 订阅新记录。
+  getTrace: (wfId?: string) => ipcRenderer.invoke("launcher:getTrace", wfId || ""),
+  clearTrace: () => ipcRenderer.invoke("launcher:clearTrace"),
+  onTrace: (cb: (run: unknown) => void) => {
+    const l = (_e: unknown, run: unknown) => cb(run);
+    ipcRenderer.on("launcher:trace", l);
+    return () => ipcRenderer.removeListener("launcher:trace", l);
+  },
+  // ⌘Y 预览（W3 的 quicklookurl）：把 URL/路径交给主进程用系统默认程序打开，面板不收起。
+  quicklook: (target: string) => ipcRenderer.invoke("launcher:quicklook", target),
+  // Script Filter 的 rerun（W3）：主进程到点自动重查后，把新结果推回来。
+  onResults: (cb: (payload: { q: string; results: unknown[] }) => void) => {
+    const l = (_e: unknown, payload: { q: string; results: unknown[] }) => cb(payload);
+    ipcRenderer.on("launcher:results", l);
+    return () => ipcRenderer.removeListener("launcher:results", l);
+  },
   fileIcon: (p: string) => ipcRenderer.invoke("launcher:fileIcon", p),
   getPhrases: () => ipcRenderer.invoke("launcher:getPhrases"),
   setPhrases: (phrases: unknown) => ipcRenderer.invoke("launcher:setPhrases", phrases),

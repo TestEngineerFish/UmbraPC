@@ -6,8 +6,16 @@
     "inspiration": "灵感",
     "abilities": "能力",
     "realtime": "实时操作",
+    "tools": "工具",
     "logs": "日志",
     "settings": "设置"
+  },
+  "tools": {
+    "clipboardDesc": "复制过的文本、图片、文件都会留在这里，按快捷键随时翻出来。",
+    "screenshotDesc": "框选截图，支持贴图钉在桌面、OCR 取字和整图翻译。",
+    "launcherDesc": "一个快捷键唤起搜索框，直达应用、文件夹、脚本与工作流。",
+    "phrasesDesc": "把常写的话存成短语，在快捷入口里一键粘贴。",
+    "vaultDesc": "本地加密保存账号密码，主密码解锁后才可读取。"
   },
   "workspaces": {
     "title": "工作区",

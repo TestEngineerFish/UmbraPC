@@ -9,6 +9,8 @@ interface LauncherResult {
   source: string;
   score: number;
   mods?: string[];    // 工作流结果的修饰键分支（如 ["cmd"]）
+  autocomplete?: string;  // Tab 补全时写回输入框的完整查询词
+  quicklook?: string;     // ⌘Y 预览的 URL 或文件路径
 }
 interface LauncherAPI {
   query(q: string): Promise<LauncherResult[]>;
@@ -17,6 +19,8 @@ interface LauncherAPI {
   hide(): Promise<void>;
   resize(h: number): Promise<void>;
   onShown(cb: () => void): () => void;
+  quicklook(target: string): Promise<void>;
+  onResults(cb: (payload: { q: string; results: LauncherResult[] }) => void): () => void;
 }
 const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
 
@@ -77,6 +81,16 @@ export function Launcher() {
     return () => window.clearTimeout(timer.current);
   }, [q]);
 
+  // Script Filter 的 rerun（W3）：主进程到点自动重查后推新结果过来。
+  // 只有查询词还是当前这个才替换列表，避免用户已经改词了还被旧词的结果覆盖；
+  // 选中项不重置，免得列表刷新时把用户的光标顶回第一行。
+  useEffect(() => {
+    return api.onResults((p) => {
+      if (p.q !== q.trim()) return;
+      setResults(p.results);
+    });
+  }, [q]);
+
   // 选中项滚动到可见。
   useEffect(() => {
     const el = listRef.current?.querySelector<HTMLElement>(".row.sel");
@@ -120,6 +134,18 @@ export function Launcher() {
         void runAt(sel);  // ↵：执行选中结果的主动作
       }
     }
+    else if (e.key === "Tab") {
+      // Tab 补全（W3 的 autocomplete）：把选中项声明的查询词写回输入框，接着往下钻。
+      e.preventDefault();
+      const r = results[sel];
+      if (r?.autocomplete) setQ(r.autocomplete);
+    }
+    else if (e.metaKey && e.key.toLowerCase() === "y") {
+      // ⌘Y 预览（W3 的 quicklookurl）：交给系统默认程序打开，面板保持展开。
+      e.preventDefault();
+      const r = results[sel];
+      if (r?.quicklook) void api.quicklook(r.quicklook);
+    }
     else if (e.key === "Escape") { e.preventDefault(); void api.hide(); }
     else if (e.metaKey && e.key >= "1" && e.key <= "9") { e.preventDefault(); void runAt(Number(e.key) - 1); }
   };
@@ -139,7 +165,12 @@ export function Launcher() {
             onKeyDown={onKey}
             autoFocus
           />
-          <span className="hint">↵ 打开 · ⌘↵ 发给秘书 · esc 关闭</span>
+          {/* 提示只在选中项真支持时才显示 Tab/⌘Y，避免一行塞满用不上的快捷键。 */}
+          <span className="hint">
+            {results[sel]?.autocomplete ? "⇥ 补全 · " : ""}
+            {results[sel]?.quicklook ? "⌘Y 预览 · " : ""}
+            ↵ 打开 · ⌘↵ 发给秘书 · esc 关闭
+          </span>
         </div>
         {results.length ? (
           <div className="list" ref={listRef}>

@@ -4,7 +4,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
-import { ConfigStore, expandHome, LauncherFolder, LauncherScript, Phrase, Workflow } from "../config";
+import { ConfigStore, expandHome, LauncherFolder, LauncherScript, Phrase, Workflow, WorkflowPrefab } from "../config";
 import { ClipStore } from "../clipboard/store";
 import { writeToClipboard, simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
@@ -26,6 +26,20 @@ export interface LauncherResult {
   score: number;           // 合并排序用
   action: LauncherAction;  // 主动作（回车执行）
   mods?: string[];         // 工作流结果的修饰键分支（如 ["cmd"]），供渲染层提示 ⌘ 分支
+  // 使用频率学习用的稳定标识。工作流结果的 id 是一次性 token，每次查询都在变，
+  // 拿它当学习键永远学不会；有 learnId 时一律用 learnId 记账。缺省回落到 id。
+  learnId?: string;
+  noLearn?: boolean;       // 明确不参与频率学习（脚本声明了 skipknowledge / 纯提示项）
+  autocomplete?: string;   // Tab 补全时写回输入框的完整查询词
+  quicklook?: string;      // ⌘Y 预览的 URL 或文件路径
+}
+
+// 密码保险箱在 Launcher 这边需要的最小面（W10）。
+// 只声明用到的三个成员，不 import VaultManager —— 免得两个模块互相依赖。
+export interface VaultBridge {
+  readonly unlocked: boolean;
+  getSecret(ref: string): string | null;
+  putSecret(ref: string | undefined, title: string, value: string): Promise<string>;
 }
 
 interface ManagerOpts {
@@ -52,6 +66,8 @@ export class LauncherManager {
   private pendingText: TextViewPayload | null = null;      // 文本视图待展示内容（等渲染层 ready 后发送）
   private textBounds: Electron.Rectangle | null = null;    // 文本视图窗目标位置（渲染完成后再显示）
   private textLoading = false;                             // 文本视图正在等远程回复：此时失焦不自动收起
+  private secretDeps: VaultBridge | null = null;   // 密码保险箱桥（W10 的 password 配置项）
+  private rerunTimer: NodeJS.Timeout | undefined;          // Script Filter 的 rerun 定时器（W3）
 
   constructor(private cfg: ConfigStore, private clipStore: ClipStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
     this.usageFile = path.join(userData, "launcher-usage.json");
@@ -60,11 +76,20 @@ export class LauncherManager {
       hide: (rf) => this.hide(rf),
       showLargeType: (t) => { void this.showLargeType(t); },
       showTextView: (p) => { void this.showTextView(p); },
+      getSecret: (ref) => this.secretDeps?.getSecret(ref) ?? null,
     });
   }
 
+  // 密码保险箱接线（W10）：工作流配置项里 type=password 的值只在保险箱里，
+  // 引擎执行时现取。主进程建 launcher 时保险箱还没建好，所以这里后置注入。
+  setVault(v: VaultBridge): void { this.secretDeps = v; }
+
   async init(): Promise<void> {
     this.registerIpc();
+    // 每跑完一条工作流链路，就把轨迹推给工作流编辑器窗口（没开着就不推）。
+    this.engine.trace.onRun((r) => {
+      if (this.wfWin && !this.wfWin.isDestroyed()) this.wfWin.webContents.send("launcher:trace", r);
+    });
     migrateScriptsToWorkflows(this.cfg);   // 一次性：旧脚本 → 工作流
     migrateFoldersAndYoudao(this.cfg);     // 一次性：文件夹书签 + 有道 → 工作流
     seedBuiltinTools(this.cfg);            // 一次性：编解码/计算/换算 → 默认工作流
@@ -81,9 +106,9 @@ export class LauncherManager {
     if (!u) return 0;
     return Math.min(u.c * 25, 200) + (Date.now() - u.t < 7 * 864e5 ? 20 : 0);
   }
-  private noteUse(id: string): void {
+  private noteUse(key: string): void {
     if (!this.lastQuery) return;
-    const k = this.usageKey(this.lastQuery, id);
+    const k = this.usageKey(this.lastQuery, key);
     const u = this.usage[k] || { c: 0, t: 0 };
     this.usage[k] = { c: u.c + 1, t: Date.now() };
     fs.mkdir(path.dirname(this.usageFile), { recursive: true })
@@ -149,6 +174,8 @@ export class LauncherManager {
   }
 
   private async hide(returnFocus = false): Promise<void> {
+    // 面板一收起，脚本要求的自动重查就没意义了，定时器要跟着停掉。
+    if (this.rerunTimer) { clearTimeout(this.rerunTimer); this.rerunTimer = undefined; }
     if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) this.panel.hide();
     if (returnFocus && !this.appWasActive && process.platform === "darwin") {
       const { app } = await import("electron");
@@ -181,7 +208,33 @@ export class LauncherManager {
   }
 
   // ── 查询分发 ──
+  // 对外入口：查一次，然后按脚本声明的 rerun 安排下一次自动重查（W3）。
   private async query(raw: string): Promise<LauncherResult[]> {
+    const res = await this.queryOnce(raw);
+    this.scheduleRerun((raw || "").trim());
+    return res;
+  }
+
+  // rerun（W3）：Script Filter 在输出里写了 rerun 就代表「结果还会变，过 N 秒再问我一次」。
+  // 到点时若输入框还是同一个词、面板也还开着，就重查一遍并把新结果推给渲染层；
+  // 新结果里若还带 rerun，就自然接着排下一次，直到脚本不再要求为止。
+  private scheduleRerun(q: string): void {
+    if (this.rerunTimer) clearTimeout(this.rerunTimer);
+    this.rerunTimer = undefined;
+    const sec = this.engine.takeRerun();
+    if (!sec) return;
+    this.rerunTimer = setTimeout(() => {
+      this.rerunTimer = undefined;
+      if (this.lastQuery !== q) return;                                        // 用户已经改词了
+      if (!this.panel || this.panel.isDestroyed() || !this.panel.isVisible()) return;
+      void this.query(q).then((r) => {
+        if (this.lastQuery !== q || !this.panel || this.panel.isDestroyed()) return;
+        this.panel.webContents.send("launcher:results", { q, results: r });
+      }).catch(() => { /* 自动重查失败就安静收手，不打扰用户 */ });
+    }, Math.round(sec * 1000));
+  }
+
+  private async queryOnce(raw: string): Promise<LauncherResult[]> {
     const q = (raw || "").trim();
     this.lastQuery = q;
     const results: LauncherResult[] = [];
@@ -234,7 +287,7 @@ export class LauncherManager {
 
   // 使用频率加权 + 排序 + 截断 + 缓存。
   private finalize(q: string, results: LauncherResult[]): LauncherResult[] {
-    for (const r of results) r.score += this.boost(q, r.id);
+    for (const r of results) if (!r.noLearn) r.score += this.boost(q, r.learnId || r.id);
     results.sort((a, b) => b.score - a.score);
     // 展示条数跟随设置（launcherMaxResults），上限 50 条防止列表失控。
     const max = Math.max(1, Math.min(Number(this.cfg.get().launcherMaxResults) || 12, 50));
@@ -365,7 +418,8 @@ export class LauncherManager {
   private async runResult(id: string, mod = ""): Promise<string> {
     const r = this.cache.get(id);
     if (!r) return "";
-    this.noteUse(id);  // 学习：这次在该 query 下选了它
+    // 学习：这次在该 query 下选了它（工作流结果按 learnId 记，避免记到一次性 token 上）。
+    if (!r.noLearn) this.noteUse(r.learnId || id);
     const clip = async (text: string) => { const { clipboard } = await import("electron"); clipboard.writeText(text); };
 
     const a = r.action;
@@ -430,6 +484,15 @@ export class LauncherManager {
     ipcMain.handle("launcher:query", (_e, q: string) => this.query(q));
     ipcMain.handle("launcher:run", (_e, id: string, mod?: string) => this.runResult(id, mod || ""));
     ipcMain.handle("launcher:sendAssistant", (_e, text: string) => this.sendAssistant(text));
+    // ⌘Y 预览（W3 的 quicklookurl）：http(s) 交给默认浏览器，其余当作路径交给系统默认程序打开。
+    // 面板不收起 —— 预览的意义就是「看一眼再决定选哪个」。
+    ipcMain.handle("launcher:quicklook", async (_e, target: string) => {
+      const t = String(target || "").trim();
+      if (!t) return;
+      const { shell } = await import("electron");
+      if (/^https?:\/\//i.test(t)) await shell.openExternal(t);
+      else await shell.openPath(expandHome(t));
+    });
     ipcMain.handle("launcher:hide", () => this.hide(true));
     // 渲染层上报内容高度 → 窗口贴合内容（顶部锚点不变），消除空白/暗框。
     ipcMain.handle("launcher:resize", (_e, h: number) => {
@@ -479,6 +542,22 @@ export class LauncherManager {
       this.reregister();  // 工作流里的 Hotkey 触发可能变化 → 重注册全局快捷键
     });
     ipcMain.handle("launcher:openWorkflowEditor", () => this.openWorkflowEditor());
+    // 预制件读写（E3）：跨工作流复用的节点组，存在全局配置里而不是某条工作流里。
+    ipcMain.handle("launcher:getPrefabs", () => this.cfg.get().launcherPrefabs || []);
+    ipcMain.handle("launcher:setPrefabs", (_e, prefabs: WorkflowPrefab[]) =>
+      this.cfg.save({ launcherPrefabs: Array.isArray(prefabs) ? prefabs : [] }));
+    // 工作流配置项里的密钥（W10）：明文只交给保险箱，工作流 JSON 里存回来的引用串。
+    // 保险箱锁着就直说，让用户先去解锁 —— 不做「先存明文回头再搬」这种将就。
+    ipcMain.handle("launcher:setWfSecret", async (_e, ref: string, title: string, value: string) => {
+      if (!this.secretDeps) return { ok: false, error: "保险箱不可用" };
+      try { return { ok: true, ref: await this.secretDeps.putSecret(String(ref || "") || undefined, String(title || "工作流密钥"), String(value ?? "")) }; }
+      catch (e) { return { ok: false, error: e instanceof Error ? e.message : String(e) }; }
+    });
+    // 保险箱是否已解锁：配置面板据此提示「先解锁才能存/改密钥」。
+    ipcMain.handle("launcher:vaultUnlocked", () => !!this.secretDeps?.unlocked);
+    // 工作流调试轨迹：只读内存里最近若干次执行（编辑器底部调试抽屉用）。
+    ipcMain.handle("launcher:getTrace", (_e, wfId: string) => this.engine.trace.list(wfId || undefined));
+    ipcMain.handle("launcher:clearTrace", () => { this.engine.trace.clear(); });
     // 常用语读写（设置页管理）。
     ipcMain.handle("launcher:getPhrases", () => this.cfg.get().phrases || []);
     ipcMain.handle("launcher:setPhrases", (_e, phrases: Phrase[]) => this.cfg.save({ phrases: Array.isArray(phrases) ? phrases : [] }));
@@ -611,16 +690,23 @@ export class LauncherManager {
     }
   }
 
-  // 注册工作流里的 Hotkey 触发（由 main.ts 在 reregisterShortcuts 里调用；清理由 main.ts 统一做）。
+  // 注册工作流里的 Hotkey / Universal Action 触发（由 main.ts 在 reregisterShortcuts 里调用；
+  // 清理由 main.ts 统一做）。两者都是全局快捷键，区别只在按下之后 arg 从哪来。
   async registerWorkflowHotkeys(): Promise<void> {
     if (!this.cfg.get().launcherEnabled) return;
     const { globalShortcut } = await import("electron");
-    for (const h of this.engine.hotkeys()) {
+    const list = [
+      ...this.engine.hotkeys().map((h) => ({ ...h, universal: false })),
+      ...this.engine.universals().map((h) => ({ ...h, universal: true })),
+    ];
+    for (const h of list) {
       try {
         if (globalShortcut.isRegistered(h.accelerator)) continue;  // 让位给已占用的快捷键
-        globalShortcut.register(h.accelerator, () => this.engine.fireHotkey(h.wfId, h.nodeId));
+        globalShortcut.register(h.accelerator, () => (h.universal
+          ? this.engine.fireUniversal(h.wfId, h.nodeId)
+          : this.engine.fireHotkey(h.wfId, h.nodeId)));
       } catch (e) {
-        console.warn(`[launcher] 工作流 Hotkey 注册失败：${h.accelerator}`, e);
+        console.warn(`[launcher] 工作流快捷键注册失败：${h.accelerator}`, e);
       }
     }
   }

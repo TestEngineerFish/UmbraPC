@@ -56,6 +56,35 @@ export async function writeToClipboard(it: ClipItem): Promise<void> {
   clipboard.writeText(it.content);
 }
 
+// 模拟 Cmd/Ctrl+C（W4 Universal Action）：让前台应用把当前选中的东西写进剪贴板。
+// 和 simulatePaste 一样依赖辅助功能授权，未授权/非 mac/win 一律返回 false，由调用方决定怎么兜底。
+export async function simulateCopy(): Promise<boolean> {
+  try {
+    if (process.platform === "darwin") {
+      const { systemPreferences } = await import("electron");
+      if (!systemPreferences.isTrustedAccessibilityClient(false)) return false; // 未授权 → 抓不到选区
+      await new Promise<void>((resolve, reject) => {
+        execFile("osascript", ["-e", 'tell application "System Events" to keystroke "c" using command down'], { timeout: 4000 }, (e) => (e ? reject(e) : resolve()));
+      });
+      return true;
+    }
+    if (process.platform === "win32") {
+      await new Promise<void>((resolve, reject) => {
+        execFile(
+          "powershell",
+          ["-NoProfile", "-Command", 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("^c")'],
+          { timeout: 4000 },
+          (e) => (e ? reject(e) : resolve()),
+        );
+      });
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 // 模拟 Cmd/Ctrl+V。返回是否成功触发按键（失败即降级为仅复制）。
 export async function simulatePaste(): Promise<boolean> {
   try {

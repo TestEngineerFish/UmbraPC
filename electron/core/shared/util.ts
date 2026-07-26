@@ -36,6 +36,9 @@ export interface RunOpts {
   // 拿到子进程句柄：长任务（agent）需要在收工/退出时把它杀掉，
   // 否则会留下孤儿进程（上次那个等交互授权的 claude 就一直没死）。
   onSpawn?: (child: ChildProcess) => void;
+  // 单独拿到 stderr（output 里仍然是 stdout+stderr 合并，行为不变）。
+  // 工作流调试抽屉要把「脚本报错」和「脚本输出」分开显示，才加了这个旁路。
+  onStderr?: (chunk: string) => void;
   // 独立进程组：agent 这类会拉起后台服务（dev server）的命令要用，配合 killTree 整组带走。
   detached?: boolean;
 }
@@ -82,7 +85,10 @@ export function run(cmd: string, args: string[], opts: RunOpts = {}): Promise<Ru
       }
     };
     child.stdout.on("data", onData);
-    child.stderr.on("data", onData);
+    child.stderr.on("data", (chunk: Buffer) => {
+      opts.onStderr?.(chunk.toString("utf-8"));
+      onData(chunk);
+    });
 
     let timer: NodeJS.Timeout | undefined;
     if (opts.timeoutMs && opts.timeoutMs > 0) {

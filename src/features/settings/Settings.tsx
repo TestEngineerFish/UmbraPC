@@ -7,49 +7,7 @@ import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/locale";
 import { changeLocale } from "../../i18n";
-import { type WF } from "../launcher/WorkflowEditor";
-
-const hasClip = typeof (window as unknown as { umbraClip?: unknown }).umbraClip !== "undefined";
-const hasShot = typeof (window as unknown as { umbraShot?: unknown }).umbraShot !== "undefined";
-const hasLauncher = typeof (window as unknown as { umbraLauncher?: unknown }).umbraLauncher !== "undefined";
-const hasVault = typeof (window as unknown as { umbraVault?: unknown }).umbraVault !== "undefined";
-
-function Card({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
-  return (
-    <section className="bg-card border border-border rounded-xl p-[16px_18px]">
-      <div className="font-semibold mb-[14px]">
-        {title}
-        {sub ? <span className="text-[12px] text-muted font-normal ml-1.5">{sub}</span> : null}
-      </div>
-      <div className="flex flex-col gap-[13px]">{children}</div>
-    </section>
-  );
-}
-
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-[14px]">
-      <label className="w-[120px] text-[13px] text-muted shrink-0">{label}</label>
-      {children}
-    </div>
-  );
-}
-
-function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className={`w-[38px] h-[22px] rounded-full p-[2px] flex shrink-0 transition-colors ${on ? "justify-end bg-orange" : "justify-start bg-border"}`}>
-      <span className="w-[18px] h-[18px] rounded-full bg-white shadow" />
-    </button>
-  );
-}
-
-const input = "flex-1 border border-border bg-bg text-text rounded-lg px-[11px] py-[7px] text-[13px] outline-none";
-const btnGhost = "px-[13px] py-[6px] border border-border bg-transparent text-text rounded-lg text-[12.5px] cursor-pointer";
-
-function StatusDot({ kind }: { kind: "online" | "connecting" | "offline" }) {
-  const color = kind === "online" ? "bg-success" : kind === "connecting" ? "bg-warning" : "bg-danger";
-  return <span className={`w-2 h-2 rounded-full ${color}`} />;
-}
+import { Card, Row, Toggle, StatusDot, input, btnGhost } from "../../components/ui";
 
 // 用户画像卡：查看/编辑/重置服务端的 user_profile.md（秘书对用户的当前认知快照）。
 // 画像由对话自动沉淀，可能积累错误——这里给用户直接改或一键重置的口子。
@@ -112,16 +70,10 @@ export function Settings() {
   const [server, setServer] = useState(getServerUrl());
   const [token, setToken] = useState("");
   const [device, setDevice] = useState(getDeviceName());
-  const [glmKey, setGlmKey] = useState("");
-  const [clipAutoPaste, setClipAutoPaste] = useState(false);
   const [autoApprove, setAutoApproveState] = useState(getAutoApproveOperate());
   const [skillPolicy, setSkillPolicy] = useState<Record<string, "allow" | "deny">>(
     desktop.getDesktopConfig()?.computerSkillPolicy || {},
   );
-  useEffect(() => {
-    if (!hasClip) return;
-    void (window as unknown as { umbraClip?: { getSettings(): Promise<{ autoPaste?: boolean }> } }).umbraClip?.getSettings().then((s) => setClipAutoPaste(!!s.autoPaste));
-  }, []);
 
   const isDesk = desktop.isDesktop();
   const cs = chatConn.status as "online" | "connecting" | "offline";
@@ -130,8 +82,6 @@ export function Settings() {
   const cfg = desktop.getDesktopConfig();
   const codingMode = legacy.getCodingMode();
   const cuOn = legacy.computerEnabled();
-  const clip = legacy.getClipState();
-  const shot = legacy.getShotState();
 
   const currentLocale = (i18n.language || cfg?.locale || "zh-CN") as Locale;
   const csLabel = cs === "online" ? t("conn.online") : cs === "connecting" ? t("conn.connecting") : t("conn.offline");
@@ -300,61 +250,6 @@ export function Settings() {
           </Row>
         </Card>
 
-        {hasClip ? (
-          <Card title={t("settings.clipboard")}>
-            <Row label={t("settings.clipEnable")}>
-              <span className="flex-1 text-[12px] text-muted">{t("settings.clipEnableDesc", { status: clip.enabled ? t("common.enabled") : t("settings.clipHistoryKept") })}</span>
-              <Toggle on={clip.enabled} onClick={() => legacy.toggleClipEnabled()} />
-            </Row>
-            <Row label={t("settings.clipShortcut")}>
-              <button onClick={() => legacy.beginShortcutRecording("clip")} className={`flex-1 text-left border rounded-lg px-[11px] py-[7px] text-[13px] font-mono bg-bg text-text ${clip.recording ? "border-orange" : "border-border"}`}>
-                {clip.recording ? t("settings.pressShortcut") : clip.shortcut}
-              </button>
-              <button className={btnGhost} onClick={async () => { await (window as unknown as { umbraClip: { setShortcut(a: string): Promise<unknown> } }).umbraClip.setShortcut("Command+Shift+V"); await legacy.loadClipSettings(); }}>
-                {t("common.reset")}
-              </button>
-            </Row>
-            <Row label={t("settings.clipAutoPaste")}>
-              <span className="flex-1 text-[12px] text-muted">{t("settings.clipAutoPasteDesc")}</span>
-              <Toggle on={clipAutoPaste} onClick={() => { const n = !clipAutoPaste; setClipAutoPaste(n); void (window as unknown as { umbraClip: { setAutoPaste(on: boolean): Promise<unknown> } }).umbraClip.setAutoPaste(n); }} />
-            </Row>
-            <Row label={t("settings.clipClear")}>
-              <span className="flex-1 text-[12px] text-muted">{t("settings.clipClearDesc")}</span>
-              <button className="px-[13px] py-[6px] border border-danger text-danger bg-transparent rounded-lg text-[12.5px]" onClick={() => legacy.clearClipHistory()}>
-                {t("settings.clipClearBtn")}
-              </button>
-            </Row>
-          </Card>
-        ) : null}
-
-        {hasShot ? (
-          <Card title={t("settings.screenshot")}>
-            <Row label={t("settings.shotEnable")}>
-              <span className="flex-1 text-[12px] text-muted">{t("settings.shotEnableDesc", { status: shot.enabled ? t("common.enabled") : t("settings.shotNoShortcut") })}</span>
-              <Toggle on={shot.enabled} onClick={() => legacy.toggleShotEnabled()} />
-            </Row>
-            <Row label={t("settings.shotShortcut")}>
-              <button onClick={() => legacy.beginShortcutRecording("shot")} className={`flex-1 text-left border rounded-lg px-[11px] py-[7px] text-[13px] font-mono bg-bg text-text ${shot.recording ? "border-orange" : "border-border"}`}>
-                {shot.recording ? t("settings.pressShortcut") : shot.shortcut}
-              </button>
-              <button className={btnGhost} onClick={async () => { await (window as unknown as { umbraShot: { setShortcut(a: string): Promise<unknown> } }).umbraShot.setShortcut("Command+Control+A"); await legacy.loadShotSettings(); }}>
-                {t("common.reset")}
-              </button>
-            </Row>
-            <Row label={t("settings.translateKey")}>
-              <input type="password" value={glmKey} onChange={(e) => setGlmKey(e.target.value)} placeholder={shot.hasGlmKey ? t("settings.glmKeySet") : t("settings.glmKeyHint")} className={`${input} font-mono`} />
-              <button className={btnGhost} onClick={() => { legacy.setShotGlmKey(glmKey); setGlmKey(""); }}>
-                {t("common.save")}
-              </button>
-            </Row>
-          </Card>
-        ) : null}
-
-        {hasLauncher ? <LauncherCard /> : null}
-
-        {hasLauncher ? <PhrasesCard /> : null}
-
-        {hasVault ? <VaultCard /> : null}
 
         <section className="bg-card border border-border rounded-xl p-[16px_18px] flex items-center gap-[14px]">
           <div className="flex-1">
@@ -365,196 +260,6 @@ export function Settings() {
         </section>
       </div>
     </div>
-  );
-}
-
-// 快捷入口（Launcher）设置：开关 + 唤起快捷键 + 文件夹书签（用指定软件打开固定文件夹）。自足，直连 IPC。
-interface LauncherFolder { name: string; path: string; app?: string }
-interface LauncherScript { name: string; keyword?: string; command: string; icon?: string; needsInput?: boolean; output?: "copy" | "none" }
-interface Phrase { id: string; name: string; content: string; keyword?: string }
-interface LauncherAPI {
-  getSettings(): Promise<{ enabled: boolean; shortcut: string; folders: LauncherFolder[]; scripts: LauncherScript[]; registered: boolean; youdaoConfigured: boolean }>;
-  setEnabled(enabled: boolean): Promise<void>;
-  setShortcut(acc: string): Promise<{ ok: boolean }>;
-  setFolders(folders: LauncherFolder[]): Promise<void>;
-  setScripts(scripts: LauncherScript[]): Promise<void>;
-  setYoudao(appKey: string, secret: string): Promise<void>;
-  pickPath(): Promise<string>;
-  pickApp(): Promise<string>;
-  getWorkflows(): Promise<WF[]>;
-  setWorkflows(workflows: WF[]): Promise<void>;
-  openWorkflowEditor(): Promise<void>;
-  getPhrases(): Promise<Phrase[]>;
-  setPhrases(phrases: Phrase[]): Promise<void>;
-}
-
-// 浏览器 KeyboardEvent → Electron Accelerator（如 ⌥Space → "Alt+Space"）。未按到主键返回 null。
-function toAccelerator(e: KeyboardEvent): string | null {
-  if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) return null;
-  const mods: string[] = [];
-  if (e.metaKey) mods.push("Command");
-  if (e.ctrlKey) mods.push("Control");
-  if (e.altKey) mods.push("Alt");
-  if (e.shiftKey) mods.push("Shift");
-  let key: string;
-  if (e.key === " ") key = "Space";
-  else if (e.key.startsWith("Arrow")) key = e.key.slice(5);
-  else if (e.key.length === 1) key = e.key.toUpperCase();
-  else key = e.key;
-  return [...mods, key].join("+");
-}
-
-function LauncherCard() {
-  const { t } = useTranslation();
-  const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
-  const [enabled, setEnabled] = useState(true);
-  const [shortcut, setShortcut] = useState("Alt+Space");
-  const [recording, setRecording] = useState(false);
-  const [wfCount, setWfCount] = useState(0);
-
-  useEffect(() => {
-    void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); });
-    const refreshWf = () => void api.getWorkflows().then((w) => setWfCount(w.length));
-    refreshWf();
-    window.addEventListener("focus", refreshWf);  // 从编辑器窗口切回时刷新计数
-    return () => window.removeEventListener("focus", refreshWf);
-  }, []);
-
-  // 录制快捷键：按下组合键即保存；Esc 取消。
-  useEffect(() => {
-    if (!recording) return;
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") { setRecording(false); return; }
-      const acc = toAccelerator(e);
-      if (!acc) return;
-      setShortcut(acc); void api.setShortcut(acc); setRecording(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording]);
-
-  return (
-    <Card title={t("settings.launcher")}>
-      <Row label={t("settings.launcherEnable")}>
-        <span className="flex-1 text-[12px] text-muted">{t("settings.launcherEnableDesc")}</span>
-        <Toggle on={enabled} onClick={() => { const n = !enabled; setEnabled(n); void api.setEnabled(n); }} />
-      </Row>
-      <Row label={t("settings.launcherShortcut")}>
-        <button
-          onClick={() => setRecording(true)}
-          className={`flex-1 text-left border rounded-lg px-[11px] py-[7px] text-[13px] font-mono bg-bg text-text ${recording ? "border-orange" : "border-border"}`}
-        >
-          {recording ? t("settings.pressShortcut") : shortcut}
-        </button>
-        <button className="px-[13px] py-[6px] border border-border bg-card text-text rounded-lg text-[12.5px]" onClick={() => { setShortcut("Alt+Space"); void api.setShortcut("Alt+Space"); }}>
-          {t("common.reset")}
-        </button>
-      </Row>
-      <div className="pt-2">
-        <div className="flex items-center gap-2 mb-1.5">
-          <div className="text-[12.5px] font-semibold flex-1">{t("settings.launcherWorkflows")}</div>
-          <span className="text-[11.5px] text-muted">{t("settings.launcherWorkflowsCount", { count: wfCount })}</span>
-          <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => void api.openWorkflowEditor()}>{t("settings.launcherWorkflowsOpen")}</button>
-        </div>
-        <div className="text-[11px] text-muted">{t("settings.launcherWorkflowsHint")}</div>
-      </div>
-    </Card>
-  );
-}
-
-function PhrasesCard() {
-  const { t } = useTranslation();
-  const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
-  const [phrases, setPhrases] = useState<Phrase[]>([]);
-  const [draft, setDraft] = useState<{ name: string; keyword: string; content: string }>({ name: "", keyword: "", content: "" });
-  const [editId, setEditId] = useState<string | null>(null);
-
-  useEffect(() => { void api.getPhrases().then((p) => setPhrases(p || [])); }, []);
-  const save = (list: Phrase[]) => { setPhrases(list); void api.setPhrases(list); };
-
-  const add = () => {
-    if (!draft.content.trim()) return;
-    const p: Phrase = { id: `ph${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`, name: draft.name.trim() || draft.content.trim().slice(0, 20), content: draft.content.trim(), keyword: draft.keyword.trim() || undefined };
-    save([...phrases, p]);
-    setDraft({ name: "", keyword: "", content: "" });
-  };
-  const update = (id: string, patch: Partial<Phrase>) => save(phrases.map((p) => (p.id === id ? { ...p, ...patch } : p)));
-  const move = (i: number, dir: -1 | 1) => {
-    const j = i + dir; if (j < 0 || j >= phrases.length) return;
-    const list = phrases.slice(); [list[i], list[j]] = [list[j], list[i]]; save(list);
-  };
-  const inputCls = "border border-border rounded-lg px-[10px] py-[6px] text-[12.5px] bg-bg text-text";
-
-  return (
-    <Card title={t("settings.phrases")} sub={t("settings.phrasesSub")}>
-      <div className="flex flex-col gap-1.5">
-        {phrases.length ? phrases.map((p, i) => (
-          <div key={p.id} className="flex items-center gap-2 bg-bg border border-border rounded-lg px-[10px] py-[7px]">
-            <div className="flex flex-col leading-none mr-1">
-              <button className="text-muted text-[10px] disabled:opacity-30" disabled={i === 0} onClick={() => move(i, -1)}>▲</button>
-              <button className="text-muted text-[10px] disabled:opacity-30" disabled={i === phrases.length - 1} onClick={() => move(i, 1)}>▼</button>
-            </div>
-            {editId === p.id ? (
-              <div className="flex-1 flex items-center gap-1.5 flex-wrap">
-                <input value={p.name} onChange={(e) => update(p.id, { name: e.target.value })} placeholder={t("settings.phraseName")} className={`w-[110px] ${inputCls}`} />
-                <input value={p.keyword || ""} onChange={(e) => update(p.id, { keyword: e.target.value || undefined })} placeholder={t("settings.phraseKeyword")} className={`w-[90px] ${inputCls} font-mono`} />
-                <input value={p.content} onChange={(e) => update(p.id, { content: e.target.value })} placeholder={t("settings.phraseContent")} className={`flex-1 min-w-[160px] ${inputCls}`} />
-                <button className="px-[10px] py-[5px] bg-orange text-white rounded-lg text-[12px]" onClick={() => setEditId(null)}>{t("common.done")}</button>
-              </div>
-            ) : (
-              <div className="flex-1 flex items-center gap-2 min-w-0 cursor-pointer" onClick={() => setEditId(p.id)}>
-                <span className="font-medium text-[12.5px]">{p.name}</span>
-                {p.keyword ? <span className="text-orange-text text-[11px]">{p.keyword}</span> : null}
-                <span className="text-muted truncate flex-1 text-[11.5px]">{p.content}</span>
-              </div>
-            )}
-            <button className="text-danger text-[12px]" onClick={() => save(phrases.filter((x) => x.id !== p.id))}>{t("common.delete")}</button>
-          </div>
-        )) : <div className="text-[12px] text-muted">{t("settings.phrasesEmpty")}</div>}
-      </div>
-      <div className="flex items-center gap-1.5 flex-wrap pt-1">
-        <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder={t("settings.phraseName")} className={`w-[110px] ${inputCls}`} />
-        <input value={draft.keyword} onChange={(e) => setDraft({ ...draft, keyword: e.target.value })} placeholder={t("settings.phraseKeyword")} className={`w-[90px] ${inputCls} font-mono`} />
-        <input value={draft.content} onChange={(e) => setDraft({ ...draft, content: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder={t("settings.phraseContent")} className={`flex-1 min-w-[160px] ${inputCls}`} />
-        <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={add}>{t("common.add")}</button>
-      </div>
-      <div className="text-[11px] text-muted">{t("settings.phrasesHint")}</div>
-    </Card>
-  );
-}
-
-interface VaultBridge { openWindow(): Promise<void>; status(): Promise<{ shortcut: string }>; setShortcut(acc: string): Promise<{ ok: boolean }> }
-function VaultCard() {
-  const { t } = useTranslation();
-  const api = (window as unknown as { umbraVault: VaultBridge }).umbraVault;
-  const [shortcut, setShortcut] = useState("Command+Alt+P");
-  const [recording, setRecording] = useState(false);
-  useEffect(() => { void api.status().then((s) => setShortcut(s.shortcut || "")); }, []);
-  useEffect(() => {
-    if (!recording) return;
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") { setRecording(false); return; }
-      const acc = toAccelerator(e); if (!acc) return;
-      setShortcut(acc); void api.setShortcut(acc); setRecording(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording]);
-  return (
-    <Card title={t("settings.vault")}>
-      <Row label={t("settings.vaultOpenLabel")}>
-        <span className="flex-1 text-[12px] text-muted">{t("settings.vaultDesc")}</span>
-        <button className="px-[14px] py-[7px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => void api.openWindow()}>{t("settings.vaultOpen")}</button>
-      </Row>
-      <Row label={t("settings.vaultShortcut")}>
-        <button onClick={() => setRecording(true)} className={`flex-1 text-left border rounded-lg px-[11px] py-[7px] text-[13px] font-mono bg-bg text-text ${recording ? "border-orange" : "border-border"}`}>
-          {recording ? t("settings.pressShortcut") : (shortcut || t("common.none"))}
-        </button>
-        <button className={btnGhost} onClick={() => { setShortcut("Command+Alt+P"); void api.setShortcut("Command+Alt+P"); }}>{t("common.reset")}</button>
-      </Row>
-    </Card>
   );
 }
 
