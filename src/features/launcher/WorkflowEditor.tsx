@@ -5,7 +5,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import {
   IconAlert, IconBell, IconBook, IconBranch, IconBug, IconBulb, IconCalc, IconCalendar, IconChat, IconCheck,
-  IconChevronRight, IconClip, IconClock, IconCloud, IconCode, IconCommand, IconCopy, IconDice, IconDots, IconDownload,
+  IconChevronDown, IconChevronRight, IconClip, IconClock, IconCloud, IconCode, IconCommand, IconCopy, IconDice,
+  IconDots, IconDownload,
   IconExternal, IconEye,
   IconFit, IconMinus,
   IconEyeOff, IconFile, IconFilter, IconFlow, IconFolder, IconGear, IconGlobe, IconGrid, IconInfinity, IconKeyboard,
@@ -355,21 +356,25 @@ function Palette({ canConnect, onPick, onClose }: { canConnect: boolean; onPick:
 
   return (
     <div className="fixed inset-0 z-[80] bg-black/40 flex items-start justify-center pt-[14vh]" onMouseDown={onClose}>
-      <div className="w-[440px] bg-card border border-border rounded-xl shadow-2xl overflow-hidden" onMouseDown={(e) => e.stopPropagation()}>
-        <input autoFocus value={q} onChange={(e) => { setQ(e.target.value); setIdx(0); }} onKeyDown={onKey}
-          placeholder="搜索对象…（↑↓ 选择 · 回车添加 · ⌥回车 接到选中节点后）"
-          className="w-full bg-transparent px-4 py-3 text-[13px] outline-none border-b border-border" />
-        <div ref={listRef} className="max-h-[320px] overflow-y-auto py-1">
+      <div className="w-[440px] bg-card border border-border rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[70vh]" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="flex-none flex items-center gap-[9px] px-[14px] py-3 border-b border-border">
+          <span className="flex-none text-faint"><IconSearch size={14} /></span>
+          <input autoFocus value={q} onChange={(e) => { setQ(e.target.value); setIdx(0); }} onKeyDown={onKey}
+            placeholder="搜索对象…（↑↓ 选择 · 回车添加 · ⌥回车 接到选中节点后）"
+            className="flex-1 min-w-0 bg-transparent border-none outline-none text-[13px]" />
+        </div>
+        <div ref={listRef} className="flex-1 overflow-y-auto p-2 flex flex-col gap-px">
           {list.map((it, i) => (
             <button key={it.type} data-i={i} onMouseEnter={() => setIdx(i)}
               onClick={(e) => { onPick(it.type, e.altKey && canConnect); onClose(); }}
-              className={`w-full flex items-center gap-2.5 px-4 py-2 text-left text-[12.5px] ${i === sel ? "bg-orange text-white" : ""}`}>
-              <span className="w-[20px] flex-none flex justify-center"><it.icon size={14} /></span>
-              <span className="flex-1 truncate">{it.label}</span>
-              <span className={`text-[10.5px] ${i === sel ? "text-white/70" : "text-muted"}`}>{it.cat}</span>
+              className={`w-full flex items-center gap-[9px] px-2 py-1.5 rounded-lg text-left text-[12.5px] ${
+                i === sel ? "bg-orange-soft text-orange-text font-semibold" : "bg-transparent"}`}>
+              <span className={`w-5 h-5 flex-none flex items-center justify-center rounded-md ${i === sel ? "text-orange-text" : "text-muted"}`}><it.icon size={14} /></span>
+              <span className="flex-1 min-w-0 truncate">{it.label}</span>
+              <span className={`flex-none whitespace-nowrap text-[10.5px] font-normal ${i === sel ? "text-orange-text" : "text-faint"}`}>{it.cat}</span>
             </button>
           ))}
-          {!list.length ? <div className="px-4 py-6 text-center text-[12px] text-muted">没有匹配的对象</div> : null}
+          {!list.length ? <div className="px-4 py-6 text-center text-[12px] text-muted">没有匹配「{q.trim()}」的对象</div> : null}
         </div>
       </div>
     </div>
@@ -397,56 +402,82 @@ function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose 
   const setAll = (v: boolean) => setFold(Object.fromEntries([...CATALOG.map((g) => g.cat), "预制件"].map((c) => [c, v])));
   const hidden = (cat: string) => !kw && fold[cat];
 
+  // 分组头：展开时给一块浅色底 + 描边计数胶囊，收起时整行淡下去 —— 一眼能看出哪些组是开着的。
+  const head = (open: boolean) => `w-full flex items-center gap-[7px] px-2 py-1.5 rounded-[7px] ${
+    open ? "bg-chip text-text" : "bg-transparent text-muted"} hover:bg-hover`;
+  const countPill = (open: boolean) => `flex-none whitespace-nowrap text-[10px] tabular-nums px-1.5 py-px rounded-full text-faint border ${
+    open ? "bg-card border-border" : "bg-transparent border-transparent"}`;
+  // 组内条目：靠左边一条竖线归拢在分组下面（Alfred 的 Objects 面板也是这个层次感）。
+  const nest = "flex flex-col gap-px mt-[3px] mb-2 ml-[15px] pl-[9px] border-l border-border";
+  const row = "w-full flex items-center gap-[9px] px-2 py-1.5 rounded-[7px] text-[12px] text-left";
+
   return (
-    <div className="w-[228px] border-l border-border bg-card flex flex-col min-h-0">
-      <div className="flex items-center gap-1 px-2.5 pt-2.5 pb-2 border-b border-border">
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="🔍 搜索对象"
-          className="flex-1 min-w-0 bg-bg border border-border rounded-lg px-2 py-[5px] text-[12px] outline-none" />
-        <button className="w-[22px] h-[22px] text-[11px] text-muted rounded hover:bg-orange/10" title="全部展开" onClick={() => setAll(false)}>⌄</button>
-        <button className="w-[22px] h-[22px] text-[11px] text-muted rounded hover:bg-orange/10" title="全部折叠" onClick={() => setAll(true)}>⌃</button>
-        <button className="w-[22px] h-[22px] text-[12px] text-muted rounded hover:bg-orange/10" title="收起对象库" onClick={onClose}>✕</button>
+    <div className="w-[272px] flex-none border-l border-border bg-card flex flex-col min-h-0">
+      <div className="flex-none flex flex-col gap-[9px] p-3 border-b border-border-soft">
+        <div className="flex items-center gap-2">
+          <div className="flex-1 min-w-0 flex items-center gap-[7px] bg-bg border border-border rounded-lg px-[9px] py-[5px]">
+            <span className="flex-none text-faint"><IconSearch size={12} /></span>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索对象"
+              className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
+          </div>
+          <button className="w-[26px] h-[26px] flex-none flex items-center justify-center bg-transparent border border-border rounded-[7px] text-muted hover:bg-hover" title="全部展开" onClick={() => setAll(false)}><IconChevronDown size={13} /></button>
+          <button className="w-[26px] h-[26px] flex-none flex items-center justify-center bg-transparent border border-border rounded-[7px] text-muted hover:bg-hover" title="全部折叠" onClick={() => setAll(true)}><IconChevronRight size={13} /></button>
+          <button className="w-[26px] h-[26px] flex-none flex items-center justify-center bg-transparent border border-border rounded-[7px] text-muted hover:bg-hover" title="收起对象库" onClick={onClose}><IconX size={13} /></button>
+        </div>
+        <div className="text-[11px] text-faint leading-[1.5]">点一下加到画布 · <span className="font-mono">⌥</span> 点击接到选中节点后面</div>
       </div>
-      <div className="flex-1 overflow-y-auto px-2.5 py-2">
-        <div className="text-[10.5px] text-muted leading-[1.5] mb-2">点一下加到画布 · ⌥ 点击 = 接到选中节点后面</div>
-        {/* 预制件（E3）：点一下就落在画布中央，右键菜单里也有一份。 */}
+      <div className="flex-1 overflow-y-auto p-2">
+        {/* 预制件（E3）：点一下就落在画布中央，右键菜单里也有一份。和对象分组同一套外观。 */}
         {prefabs.length ? (
-          <div>
-            <button className="w-full flex items-center gap-1 text-[11px] text-muted mt-1 mb-1.5" onClick={() => setFold((f) => ({ ...f, 预制件: !f["预制件"] }))}>
-              <span className="w-[10px] text-center">{hidden("预制件") ? "›" : "⌄"}</span>预制件
+          <div className="mb-1">
+            <button className={head(!hidden("预制件"))} onClick={() => setFold((f) => ({ ...f, 预制件: !f["预制件"] }))}>
+              <span className="flex-none transition-transform" style={{ transform: hidden("预制件") ? "rotate(0deg)" : "rotate(90deg)" }}><IconChevronRight size={11} /></span>
+              <span className="flex-1 min-w-0 text-left text-[12px] font-semibold truncate">预制件</span>
+              <span className={countPill(!hidden("预制件"))}>{prefabs.length}</span>
             </button>
-            {hidden("预制件") ? null : prefabs.map((p) => (
-              <div key={p.id} className="group flex items-center gap-1 mb-1.5">
-                <button disabled={!canAdd} title={`落地到画布中央（${p.nodes.length} 个节点）`} onClick={() => onPrefab(p)}
-                  className="flex-1 min-w-0 flex items-center gap-2 px-2.5 py-[7px] border border-border rounded-lg text-[12px] text-left disabled:opacity-40 hover:border-orange">
-                  <span className="w-[18px] flex-none flex justify-center"><IconGrid size={14} /></span>
-                  <span className="truncate">{p.name}</span>
-                </button>
-                <button className="text-danger text-[11px] opacity-0 group-hover:opacity-100 shrink-0" onClick={() => onDelPrefab(p)}>删</button>
+            {hidden("预制件") ? null : (
+              <div className={nest}>
+                {prefabs.map((p) => (
+                  <div key={p.id} className="group flex items-center gap-1">
+                    <button disabled={!canAdd} title={`落地到画布中央（${p.nodes.length} 个节点）`} onClick={() => onPrefab(p)}
+                      className={`${row} flex-1 min-w-0 bg-transparent hover:bg-hover disabled:opacity-40`}>
+                      <span className="w-5 h-5 flex-none flex items-center justify-center rounded-[5px] text-muted"><IconGrid size={14} /></span>
+                      <span className="flex-1 min-w-0 truncate">{p.name}</span>
+                    </button>
+                    <button className="flex-none bg-transparent text-danger opacity-0 group-hover:opacity-100" title="删除这个预制件" onClick={() => onDelPrefab(p)}><IconTrash size={12} /></button>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         ) : null}
-        {groups.map((g) => (
-          <div key={g.cat}>
-            <button className="w-full flex items-center gap-1 text-[11px] text-muted mt-2 mb-1.5" onClick={() => setFold((f) => ({ ...f, [g.cat]: !f[g.cat] }))}>
-              <span className="w-[10px] text-center">{hidden(g.cat) ? "›" : "⌄"}</span>
-              <span className="flex-1 text-left">{g.cat}</span>
-              <span className="text-[10px] opacity-70">{g.items.filter((it) => !it.soon).length}/{g.items.length}</span>
-            </button>
-            {hidden(g.cat) ? null : g.items.map((it) => (
-              <button key={it.type} disabled={!canAdd || !!it.soon}
-                title={it.soon ? `暂未实现：${it.hint || ""}` : it.type}
-                onClick={(e) => onAdd(it.type, e.altKey)}
-                className={`w-full flex items-center gap-2 px-2.5 py-[7px] mb-1.5 border rounded-lg text-[12px] text-left ${
-                  it.soon ? "border-dashed border-border text-muted opacity-55 cursor-not-allowed" : "border-border disabled:opacity-40 hover:border-orange"}`}>
-                <span className="w-[18px] flex-none flex justify-center"><it.icon size={14} /></span>
-                <span className="flex-1 truncate">{it.label}</span>
-                {it.soon ? <span className="text-[9px] px-1 rounded border border-border shrink-0">待实现</span> : null}
+        {groups.map((g) => {
+          const open = !hidden(g.cat);
+          return (
+            <div key={g.cat} className="mb-1">
+              <button className={head(open)} onClick={() => setFold((f) => ({ ...f, [g.cat]: !f[g.cat] }))}>
+                <span className="flex-none transition-transform" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}><IconChevronRight size={11} /></span>
+                <span className="flex-1 min-w-0 text-left text-[12px] font-semibold truncate">{g.cat}</span>
+                <span className={countPill(open)}>{g.items.filter((it) => !it.soon).length}/{g.items.length}</span>
               </button>
-            ))}
-          </div>
-        ))}
-        {!groups.length ? <div className="py-6 text-center text-[12px] text-muted">没有匹配的对象</div> : null}
+              {open ? (
+                <div className={nest}>
+                  {g.items.map((it) => (
+                    <button key={it.type} disabled={!canAdd || !!it.soon}
+                      title={it.soon ? `暂未实现：${it.hint || ""}` : it.type}
+                      onClick={(e) => onAdd(it.type, e.altKey)}
+                      className={`${row} ${it.soon ? "bg-transparent text-faint cursor-default" : "bg-transparent hover:bg-hover disabled:opacity-40"}`}>
+                      <span className={`w-5 h-5 flex-none flex items-center justify-center rounded-[5px] ${it.soon ? "text-faint" : "text-muted"}`}><it.icon size={14} /></span>
+                      <span className="flex-1 min-w-0 truncate">{it.label}</span>
+                      {it.soon ? <span className="flex-none whitespace-nowrap px-1.5 py-px rounded-full border border-border text-faint text-[10px] font-normal">待实现</span> : null}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+        {!groups.length ? <div className="py-6 text-center text-[12px] text-muted">没有匹配「{q.trim()}」的对象</div> : null}
       </div>
     </div>
   );
@@ -464,41 +495,42 @@ function DebugDrawer({ runs, nodeLabel, onPickNode, onClear, onClose }: {
   const time = (ts: number) => new Date(ts).toLocaleTimeString("zh-CN", { hour12: false });
 
   return (
-    <div className="h-[240px] shrink-0 border-t border-border bg-card flex flex-col">
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border">
-        <b className="text-[12.5px]">调试</b>
-        <span className="text-[11px] text-muted flex-1">最近 {runs.length} 次执行 · 点某一步可跳到对应节点（变量里疑似密钥的值已打码）</span>
-        <button className="text-[11.5px] text-muted border border-border rounded-md px-2 py-[3px]" onClick={onClear}>清空</button>
-        <button className="text-[11.5px] text-muted border border-border rounded-md px-2 py-[3px]" onClick={onClose}>收起</button>
+    <div className="h-[240px] flex-none border-t border-border bg-card flex flex-col">
+      <div className="flex-none flex items-center gap-2 px-3 py-1.5 border-b border-border-soft">
+        <b className="flex-none whitespace-nowrap text-[12.5px]">调试</b>
+        <span className="flex-1 min-w-0 truncate text-[11px] text-faint">最近 {runs.length} 次执行 · 点某一步可跳到对应节点（变量里疑似密钥的值已打码）</span>
+        <button className="flex-none whitespace-nowrap text-[11.5px] text-muted bg-transparent border border-border rounded-md px-2 py-[3px] hover:bg-hover" onClick={onClear}>清空</button>
+        <button className="flex-none whitespace-nowrap text-[11.5px] text-muted bg-transparent border border-border rounded-md px-2 py-[3px] hover:bg-hover" onClick={onClose}>收起</button>
       </div>
       <div className="flex flex-1 min-h-0">
-        <div className="w-[190px] shrink-0 border-r border-border overflow-y-auto">
+        <div className="w-[190px] flex-none border-r border-border overflow-y-auto">
           {runs.map((r) => (
             <button key={r.id} onClick={() => { setCurRun(r.id); setOpenStep(null); }}
-              className={`w-full text-left px-3 py-1.5 text-[11.5px] border-b border-border/50 ${run?.id === r.id ? "bg-orange/10" : ""}`}>
+              className={`w-full text-left px-3 py-1.5 text-[11.5px] border-b border-border-soft ${run?.id === r.id ? "bg-orange-soft text-orange-text" : "bg-transparent hover:bg-hover"}`}>
               <div className="flex items-center gap-1.5">
-                <span className="font-mono text-muted">{time(r.at)}</span>
-                <span className="flex-1 truncate">{r.trigger}</span>
-                <span className="text-muted">{r.ms}ms</span>
+                <span className="flex-none font-mono text-muted">{time(r.at)}</span>
+                <span className="flex-1 min-w-0 truncate">{r.trigger}</span>
+                <span className="flex-none whitespace-nowrap text-muted">{r.ms}ms</span>
               </div>
-              <div className="text-muted truncate">{r.wfName} · {r.steps.length} 步{r.arg ? ` · ${r.arg.slice(0, 16)}` : ""}</div>
+              <div className="text-faint truncate">{r.wfName} · {r.steps.length} 步{r.arg ? ` · ${r.arg.slice(0, 16)}` : ""}</div>
             </button>
           ))}
-          {!runs.length ? <div className="px-3 py-4 text-[11.5px] text-muted">还没有执行记录。<br />在启动器里跑一次这个工作流试试。</div> : null}
+          {!runs.length ? <div className="px-3 py-4 text-[11.5px] text-muted leading-[1.6]">还没有执行记录。<br />在启动器里跑一次这个工作流试试。</div> : null}
         </div>
         <div className="flex-1 min-w-0 overflow-y-auto">
           {run?.steps.map((s) => (
-            <div key={s.seq} className="border-b border-border/50">
-              <button className="w-full flex items-center gap-2 px-3 py-1.5 text-[11.5px] text-left"
+            <div key={s.seq} className="border-b border-border-soft">
+              <button className="w-full flex items-center gap-2 px-3 py-1.5 text-[11.5px] text-left bg-transparent hover:bg-hover"
                 onClick={() => { setOpenStep(openStep === s.seq ? null : s.seq); onPickNode(s.nodeId); }}>
-                <span className="w-[18px] text-muted font-mono">{s.seq}</span>
-                <span className="flex-1 truncate">{nodeLabel(s.nodeId, s.type)}</span>
-                {s.skipped ? <span className="text-[10px] text-muted border border-border rounded px-1">已停用·旁路</span> : null}
-                {s.stopped ? <span className="text-[10px] text-danger border border-danger rounded px-1">终止</span> : null}
-                {s.error ? <span className="text-[10px] text-danger">异常</span> : null}
-                {s.outPort ? <span className="text-[10px] text-muted">出口 {s.outPort}</span> : null}
-                <span className="text-muted font-mono">{s.ms}ms</span>
-                <span className="text-muted">{openStep === s.seq ? "▾" : "▸"}</span>
+                <span className="w-[18px] flex-none text-faint font-mono">{s.seq}</span>
+                <span className="flex-1 min-w-0 truncate">{nodeLabel(s.nodeId, s.type)}</span>
+                {/* 状态徽章沿用全局语义：灰=旁路、红=终止/异常、灰底=出口名。 */}
+                {s.skipped ? <span className="flex-none whitespace-nowrap text-[10px] text-muted bg-chip rounded-full px-1.5">已停用 · 旁路</span> : null}
+                {s.stopped ? <span className="flex-none whitespace-nowrap text-[10px] text-danger bg-danger-soft rounded-full px-1.5">终止</span> : null}
+                {s.error ? <span className="flex-none whitespace-nowrap text-[10px] text-danger bg-danger-soft rounded-full px-1.5">异常</span> : null}
+                {s.outPort ? <span className="flex-none whitespace-nowrap text-[10px] text-muted bg-chip rounded-full px-1.5">出口 {s.outPort}</span> : null}
+                <span className="flex-none whitespace-nowrap text-faint font-mono">{s.ms}ms</span>
+                <span className="flex-none text-faint">{openStep === s.seq ? <IconChevronDown size={11} /> : <IconChevronRight size={11} />}</span>
               </button>
               {openStep === s.seq ? (
                 <div className="px-3 pb-2 text-[11px] text-muted grid gap-1">
@@ -1805,9 +1837,9 @@ function ListRowsEditor({ rows, onChange }: { rows: ListRow[]; onChange: (r: Lis
             <input className={`${cell} flex-1 min-w-0`} value={String(r.subtitle || "")} onChange={(e) => setAt(i, "subtitle", e.target.value)} />
             <input className={`${cell} flex-1 min-w-0 font-mono`} value={String(r.arg || "")} onChange={(e) => setAt(i, "arg", e.target.value)} />
             <div className="w-[54px] shrink-0 flex gap-[2px] justify-end">
-              <button className="w-[16px] text-[10px] text-muted hover:text-fg" title="上移" onClick={() => move(i, -1)}>↑</button>
-              <button className="w-[16px] text-[10px] text-muted hover:text-fg" title="下移" onClick={() => move(i, 1)}>↓</button>
-              <button className="w-[16px] text-[11px] text-muted hover:text-red-400" title="删除这一项" onClick={() => onChange(rows.filter((_, j) => j !== i))}>✕</button>
+              <button className="w-4 flex-none bg-transparent text-[10px] text-muted hover:text-text" title="上移" onClick={() => move(i, -1)}>↑</button>
+              <button className="w-4 flex-none bg-transparent text-[10px] text-muted hover:text-text" title="下移" onClick={() => move(i, 1)}>↓</button>
+              <button className="w-4 flex-none bg-transparent text-[11px] text-muted hover:text-danger" title="删除这一项" onClick={() => onChange(rows.filter((_, j) => j !== i))}>✕</button>
             </div>
           </div>
         ))}
