@@ -80,3 +80,48 @@ export function IconLock(p: IconProps) {
     </svg>
   );
 }
+
+// 删除：垃圾桶。
+export function IconTrash(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13" />
+    </svg>
+  );
+}
+
+// 搜索：放大镜。
+export function IconSearch(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m20 20-4.3-4.3" />
+    </svg>
+  );
+}
+
+// 警告：三角感叹号，用在冲突/待授权这类需要提醒但不阻断的横幅上。
+export function IconAlert(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M12 3.5 21.5 20h-19z" />
+      <path d="M12 10v4M12 17h.01" />
+    </svg>
+  );
+}
+
+// 上移 / 下移：列表调序用的小箭头。
+export function IconUp(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M6 14.5 12 8.5l6 6" />
+    </svg>
+  );
+}
+export function IconDown(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M6 9.5 12 15.5l6-6" />
+    </svg>
+  );
+}

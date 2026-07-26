@@ -20,7 +20,17 @@
     "groupCommon": "常用",
     "groupAuto": "自动化",
     "groupSecurity": "安全",
-    "count": "{{n}} 个"
+    "count": "{{n}} 个",
+    "hotkeyConflict": "这个键位和「{{owner}}」重了，系统里只会有一个生效，建议改掉其中一个。",
+    "permScreenNeed": "需「屏幕录制」权限",
+    "shotOcrTitle": "翻译与取字",
+    "shotOcrHint": "OCR 在本机完成；整图翻译需要一个模型 Key。",
+    "launcherPreview": "按下后长这样",
+    "previewFolder": "文件夹",
+    "phraseCount": "{{n}} 条",
+    "phraseListHint": "点行可编辑 · 左侧箭头调序",
+    "moveUp": "上移",
+    "moveDown": "下移"
   },
   "workspaces": {
     "title": "工作区",

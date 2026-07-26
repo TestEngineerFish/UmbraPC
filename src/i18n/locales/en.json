@@ -20,7 +20,17 @@
     "groupCommon": "Everyday",
     "groupAuto": "Automation",
     "groupSecurity": "Security",
-    "count": "{{n}}"
+    "count": "{{n}}",
+    "hotkeyConflict": "This shortcut clashes with “{{owner}}” — only one of them will fire. Change one of the two.",
+    "permScreenNeed": "Screen Recording required",
+    "shotOcrTitle": "Translate & OCR",
+    "shotOcrHint": "OCR runs locally; whole-image translation needs a model key.",
+    "launcherPreview": "What it looks like",
+    "previewFolder": "Folder",
+    "phraseCount": "{{n}}",
+    "phraseListHint": "Click a row to edit · arrows reorder",
+    "moveUp": "Move up",
+    "moveDown": "Move down"
   },
   "workspaces": {
     "title": "Workspaces",

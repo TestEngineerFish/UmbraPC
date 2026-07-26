@@ -2,7 +2,8 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
-import { Card, Row, Toggle, btnGhost } from "../../components/ui";
+import { Toggle, RowsCard, SettingRow, RowHint, Panel, btnGhost, btnDanger, selectBox } from "../../components/ui";
+import { HotkeyButton, HotkeyConflictBanner, useHotkeyConflict } from "./hotkeys";
 import { clipApi, type ClipKeep } from "./bridges";
 
 // 保留时长候选（小时）。0 = 永久，对应勾选框不勾。
@@ -22,6 +23,7 @@ export function ClipboardTool() {
   const clip = legacy.getClipState();
   const [autoPaste, setAutoPaste] = useState(false);
   const [keep, setKeep] = useState<ClipKeep>({ text: 0, image: 0, files: 0 });
+  const conflict = useHotkeyConflict("clip", clip.shortcut);
 
   useEffect(() => {
     void api.getSettings().then((s) => {
@@ -38,64 +40,71 @@ export function ClipboardTool() {
   };
 
   return (
-    <Card title={t("settings.clipboard")}>
-      <Row label={t("settings.clipEnable")}>
-        <span className="flex-1 text-[12px] text-muted">{t("settings.clipEnableDesc", { status: clip.enabled ? t("common.enabled") : t("settings.clipHistoryKept") })}</span>
-        <Toggle on={clip.enabled} onClick={() => legacy.toggleClipEnabled()} />
-      </Row>
-      <Row label={t("settings.clipShortcut")}>
-        <button onClick={() => legacy.beginShortcutRecording("clip")} className={`flex-1 text-left border rounded-lg px-[11px] py-[7px] text-[13px] font-mono bg-bg text-text ${clip.recording ? "border-orange" : "border-border"}`}>
-          {clip.recording ? t("settings.pressShortcut") : clip.shortcut}
-        </button>
-        <button className={btnGhost} onClick={async () => { await api.setShortcut("Command+Shift+V"); await legacy.loadClipSettings(); }}>
-          {t("common.reset")}
-        </button>
-      </Row>
-      <Row label={t("settings.clipAutoPaste")}>
-        <span className="flex-1 text-[12px] text-muted">{t("settings.clipAutoPasteDesc")}</span>
-        <Toggle on={autoPaste} onClick={() => { const n = !autoPaste; setAutoPaste(n); void api.setAutoPaste(n); }} />
-      </Row>
+    <>
+      <RowsCard>
+        <SettingRow label={t("settings.clipEnable")}>
+          <RowHint>{t("settings.clipEnableDesc", { status: clip.enabled ? t("common.enabled") : t("settings.clipHistoryKept") })}</RowHint>
+          <Toggle on={clip.enabled} onClick={() => legacy.toggleClipEnabled()} />
+        </SettingRow>
+        <SettingRow label={t("settings.clipShortcut")}>
+          <div className="flex-1 min-w-0 flex items-center gap-[8px]">
+            <HotkeyButton recording={clip.recording} value={clip.shortcut} onClick={() => legacy.beginShortcutRecording("clip")} />
+            <button className={btnGhost} onClick={async () => { await api.setShortcut("Command+Shift+V"); await legacy.loadClipSettings(); }}>
+              {t("common.reset")}
+            </button>
+          </div>
+        </SettingRow>
+        <SettingRow label={t("settings.clipAutoPaste")}>
+          <RowHint>{t("settings.clipAutoPasteDesc")}</RowHint>
+          <Toggle on={autoPaste} onClick={() => { const n = !autoPaste; setAutoPaste(n); void api.setAutoPaste(n); }} />
+        </SettingRow>
+      </RowsCard>
+
+      {conflict ? <HotkeyConflictBanner owner={conflict} /> : null}
+
       {/* 分类保留时长：每类一个开关 + 一个时长下拉，关掉即永久保留（收藏项永远不过期）。 */}
-      <div className="pt-1 flex flex-col gap-[10px]">
-        <div className="text-[13px] text-muted">{t("settings.clipKeep")}</div>
-        {KEEP_ROWS.map((r) => {
-          const hours = keep[r.key];
-          return (
-            <div key={r.key} className="flex items-center gap-[14px] pl-[6px]">
-              <span className="w-[114px] text-[12.5px] shrink-0">{t(r.labelKey)}</span>
-              <Toggle on={hours > 0} onClick={() => patchKeep({ [r.key]: hours > 0 ? 0 : DEFAULT_KEEP_HOURS } as Partial<ClipKeep>)} />
-              <select
-                className="border border-border bg-bg text-text rounded-lg px-[9px] py-[6px] text-[12.5px] disabled:opacity-40"
-                disabled={hours <= 0}
-                value={hours > 0 ? hours : DEFAULT_KEEP_HOURS}
-                onChange={(e) => patchKeep({ [r.key]: Number(e.target.value) } as Partial<ClipKeep>)}
-              >
-                {KEEP_OPTIONS.map((h) => (
-                  <option key={h} value={h}>{t(`settings.clipKeep_${h}`)}</option>
-                ))}
-              </select>
-              <span className="text-[11.5px] text-muted">{hours > 0 ? "" : t("settings.clipKeepForever")}</span>
-            </div>
-          );
-        })}
-        <div className="text-[11.5px] text-muted pl-[6px]">{t("settings.clipKeepHint")}</div>
-      </div>
-      <Row label={t("settings.clipClear")}>
-        <span className="flex-1 text-[12px] text-muted">{t("settings.clipClearDesc")}</span>
-        <button className="px-[13px] py-[6px] border border-danger text-danger bg-transparent rounded-lg text-[12.5px]" onClick={() => legacy.clearClipHistory()}>
-          {t("settings.clipClearBtn")}
-        </button>
-      </Row>
-      {/* 收藏永不过期，也不会被「清空历史」带走，所以单给一个清空出口。 */}
-      <Row label={t("settings.clipClearFav")}>
-        <span className="flex-1 text-[12px] text-muted">{t("settings.clipClearFavDesc")}</span>
-        <button
-          className="px-[13px] py-[6px] border border-danger text-danger bg-transparent rounded-lg text-[12.5px]"
-          onClick={() => { if (confirm(t("settings.clipClearFavConfirm"))) void api.clearFavorites(); }}
-        >
-          {t("settings.clipClearFavBtn")}
-        </button>
-      </Row>
-    </Card>
+      <Panel title={t("settings.clipKeep")} hint={t("settings.clipKeepHint")}>
+        <div className="flex flex-col gap-[8px]">
+          {KEEP_ROWS.map((r) => {
+            const hours = keep[r.key];
+            return (
+              <div key={r.key} className="flex items-center gap-[12px] bg-bg border border-border-soft rounded-[9px] p-[8px_12px]">
+                <span className="w-[76px] flex-none whitespace-nowrap text-[12.5px]">{t(r.labelKey)}</span>
+                <Toggle on={hours > 0} onClick={() => patchKeep({ [r.key]: hours > 0 ? 0 : DEFAULT_KEEP_HOURS } as Partial<ClipKeep>)} />
+                {/* 关掉时下拉是禁用态，右边这句话补一个明确的「那到底留多久」 */}
+                <span className="flex-1 min-w-0 text-[11.5px] text-faint">{hours > 0 ? "" : t("settings.clipKeepForever")}</span>
+                <select
+                  className={selectBox}
+                  disabled={hours <= 0}
+                  value={hours > 0 ? hours : DEFAULT_KEEP_HOURS}
+                  onChange={(e) => patchKeep({ [r.key]: Number(e.target.value) } as Partial<ClipKeep>)}
+                >
+                  {KEEP_OPTIONS.map((h) => (
+                    <option key={h} value={h}>{t(`settings.clipKeep_${h}`)}</option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <RowsCard>
+        <SettingRow label={t("settings.clipClear")}>
+          <RowHint>{t("settings.clipClearDesc")}</RowHint>
+          <button className={btnDanger} onClick={() => legacy.clearClipHistory()}>{t("settings.clipClearBtn")}</button>
+        </SettingRow>
+        {/* 收藏永不过期，也不会被「清空历史」带走，所以单给一个清空出口。 */}
+        <SettingRow label={t("settings.clipClearFav")}>
+          <RowHint>{t("settings.clipClearFavDesc")}</RowHint>
+          <button
+            className={btnDanger}
+            onClick={() => { if (confirm(t("settings.clipClearFavConfirm"))) void api.clearFavorites(); }}
+          >
+            {t("settings.clipClearFavBtn")}
+          </button>
+        </SettingRow>
+      </RowsCard>
+    </>
   );
 }

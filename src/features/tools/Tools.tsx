@@ -28,12 +28,13 @@ const GROUPS: { key: GroupKey; labelKey: string }[] = [
 // 二级目录清单：labelKey 复用设置页原有词条，avail 决定是否显示。
 // icon 是线性描边图标（描边取 currentColor，选中/未选中不用各配一套颜色）。
 // full=true 的页自己铺满右侧（工作流编辑器、密码保险箱就是这种），不套「窄栏 + 标题头」的常规排版。
-const ITEMS: { key: ToolKey; group: GroupKey; labelKey: string; descKey: string; icon: ComponentType<Omit<SVGProps<SVGSVGElement>, "width" | "height"> & { size?: number }>; avail: boolean; full?: boolean }[] = [
+// wide=true 的页把内容栏从 740 放宽到 820：常用语是一张多列表格，740 下关键词和内容会挤在一起。
+const ITEMS: { key: ToolKey; group: GroupKey; labelKey: string; descKey: string; icon: ComponentType<Omit<SVGProps<SVGSVGElement>, "width" | "height"> & { size?: number }>; avail: boolean; full?: boolean; wide?: boolean }[] = [
   { key: "clipboard", group: "common", labelKey: "settings.clipboard", descKey: "tools.clipboardDesc", icon: IconClip, avail: hasClip },
   { key: "screenshot", group: "common", labelKey: "settings.screenshot", descKey: "tools.screenshotDesc", icon: IconShot, avail: hasShot },
   { key: "launcher", group: "common", labelKey: "settings.launcher", descKey: "tools.launcherDesc", icon: IconRocket, avail: hasLauncher },
   { key: "workflow", group: "auto", labelKey: "settings.launcherWorkflows", descKey: "tools.workflowDesc", icon: IconFlow, avail: hasLauncher, full: true },
-  { key: "phrases", group: "auto", labelKey: "settings.phrases", descKey: "tools.phrasesDesc", icon: IconPhrase, avail: hasLauncher },
+  { key: "phrases", group: "auto", labelKey: "settings.phrases", descKey: "tools.phrasesDesc", icon: IconPhrase, avail: hasLauncher, wide: true },
   { key: "vault", group: "security", labelKey: "settings.vault", descKey: "tools.vaultDesc", icon: IconLock, avail: hasVault, full: true },
 ];
 
@@ -101,14 +102,14 @@ export function Tools() {
         </div>
       ) : (
         <div id="scroll-main" className="flex-1 min-w-0 overflow-y-auto p-[22px_26px]">
-          <div className="max-w-[700px] flex flex-col gap-[16px]">
-            <div className="flex items-center gap-[12px]">
-              <span className="w-[40px] h-[40px] rounded-[11px] flex items-center justify-center shrink-0 bg-chip text-muted">
-                {HeadIcon ? <HeadIcon size={20} /> : null}
+          <div className={`${meta?.wide ? "max-w-[820px]" : "max-w-[740px]"} flex flex-col gap-[16px]`}>
+            <div className="flex items-start gap-[12px]">
+              <span className="w-[36px] h-[36px] rounded-[9px] flex items-center justify-center flex-none bg-orange-soft text-orange-text">
+                {HeadIcon ? <HeadIcon size={18} /> : null}
               </span>
               <div className="min-w-0">
-                <h1 className="m-0 text-[17px] font-semibold leading-tight">{t(meta?.labelKey || "nav.tools")}</h1>
-                <div className="text-[12px] text-muted mt-[3px]">{t(meta?.descKey || "")}</div>
+                <h1 className="m-0 text-[16px] font-semibold leading-tight">{t(meta?.labelKey || "nav.tools")}</h1>
+                <div className="text-[12.5px] text-muted mt-[2px]">{t(meta?.descKey || "")}</div>
               </div>
             </div>
             {active === "clipboard" ? <ClipboardTool /> : null}
