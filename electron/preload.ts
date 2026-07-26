@@ -82,6 +82,7 @@ contextBridge.exposeInMainWorld("umbraClip", {
   setFavorite: (id: number, favorite: boolean) => ipcRenderer.invoke("clip:setFavorite", id, favorite),
   remove: (id: number) => ipcRenderer.invoke("clip:remove", id),
   clear: () => ipcRenderer.invoke("clip:clear"),
+  clearFavorites: () => ipcRenderer.invoke("clip:clearFavorites"),
   readImageDataUrl: (id: number) => ipcRenderer.invoke("clip:readImageDataUrl", id),
   readPathThumbnail: (p: string) => ipcRenderer.invoke("clip:readPathThumbnail", p),
   getAppIcon: (p: string) => ipcRenderer.invoke("clip:getAppIcon", p),
@@ -116,10 +117,11 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   setShortcut: (acc: string) => ipcRenderer.invoke("launcher:setShortcut", acc),
   setFolders: (folders: unknown) => ipcRenderer.invoke("launcher:setFolders", folders),
   setScripts: (scripts: unknown) => ipcRenderer.invoke("launcher:setScripts", scripts),
-  setYoudao: (appKey: string, secret: string) => ipcRenderer.invoke("launcher:setYoudao", appKey, secret),
   getWorkflows: () => ipcRenderer.invoke("launcher:getWorkflows"),
   setWorkflows: (workflows: unknown) => ipcRenderer.invoke("launcher:setWorkflows", workflows),
   openWorkflowEditor: () => ipcRenderer.invoke("launcher:openWorkflowEditor"),
+  // 打开这条工作流自己的目录（随行脚本/可执行文件都放在里面）。
+  openWorkflowDir: (wfId: string) => ipcRenderer.invoke("launcher:openWorkflowDir", wfId),
   // 预制件（E3）：存起来的节点组，可在任意工作流里一键落地。
   getPrefabs: () => ipcRenderer.invoke("launcher:getPrefabs"),
   setPrefabs: (prefabs: unknown) => ipcRenderer.invoke("launcher:setPrefabs", prefabs),

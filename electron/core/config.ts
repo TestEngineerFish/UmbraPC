@@ -53,10 +53,8 @@ export interface UmbraConfig {
   launcherMaxResults: number;        // 结果列表最多显示几条（同时也是 Script Filter 单次取用上限）
   launcherFallbackAssistant: boolean; // 兜底搜索：搜不到任何结果时，追加一条「问秘书」可执行项
   launcherScriptsMigrated?: boolean; // 迁移标记：launcherScripts 已转成工作流（幂等）
-  launcherMigratedV2?: boolean;      // 迁移标记 V2：文件夹书签 + 有道 已转成工作流
+  launcherMigratedV2?: boolean;      // 迁移标记 V2：文件夹书签 已转成工作流
   launcherToolsSeeded?: boolean;     // 种子标记：内置工具(编解码/计算/换算)已作为默认工作流写入
-  youdaoAppKey: string;          // 有道翻译 appKey（Phase 2 用）
-  youdaoSecret: string;          // 有道翻译 secret（Phase 2 用）
   locale?: string;               // 界面语言（zh-CN | en）；缺省时由主进程按系统语言初始化
 }
 
@@ -101,7 +99,7 @@ export interface Phrase {
 export interface WorkflowNode {
   id: string;                        // 节点内唯一 id
   type: string;                      // "trigger.keyword" | "trigger.hotkey" | "trigger.always"
-                                     // | "input.scriptfilter" | "input.translate" | "input.codec"
+                                     // | "input.scriptfilter" | "input.codec"
                                      // | "input.calc" | "input.units"
                                      // | "utility.args" | "utility.conditional" | "utility.transform"
                                      // | "utility.replace" | "utility.delay"
@@ -227,8 +225,6 @@ function defaults(configDir: string): UmbraConfig {
     launcherMaxResults: Number(process.env.UMBRA_LAUNCHER_MAX_RESULTS || 12),
     launcherFallbackAssistant: envBool("UMBRA_LAUNCHER_FALLBACK_ASSISTANT", true),
     launcherScriptsMigrated: false,
-    youdaoAppKey: process.env.UMBRA_YOUDAO_APPKEY || "",
-    youdaoSecret: process.env.UMBRA_YOUDAO_SECRET || "",
   };
 }
 
@@ -249,6 +245,11 @@ export class ConfigStore {
   constructor(private configDir: string) {
     this.file = path.join(configDir, "umbra-config.json");
     this.cfg = defaults(configDir);
+  }
+
+  // 配置所在目录（userData）。工作流的独立工作目录等「配置旁边的文件」都从这里派生。
+  get dir(): string {
+    return this.configDir;
   }
 
   async load(): Promise<UmbraConfig> {

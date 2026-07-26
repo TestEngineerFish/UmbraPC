@@ -1,12 +1,12 @@
 // 工作流执行引擎（类 Alfred Workflow）。
 // 触发(Keyword/Hotkey) → 输入(Script Filter，跑脚本解析 Alfred JSON) → 修饰键分支 → 动作链(Action)。
 // 与内置 provider 结果并存：本引擎只产出/执行「工作流」结果，LauncherManager 负责合并与分发。
-import * as crypto from "node:crypto";
 import { ConfigStore, expandHome, httpBase, Workflow, WorkflowNode } from "../config";
 import { run } from "../shared/util";
 import { simulatePaste, simulateCopy } from "../clipboard/paste";
 import { readClipboardFiles } from "../clipboard/watcher";
 import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } from "./tools";
+import { ensureWorkflowDir, workflowEnv, resolveCwd } from "./workspace";
 import { TraceRecorder } from "./trace";
 import type { TraceRun } from "./trace";
 
@@ -194,7 +194,6 @@ export class WorkflowEngine {
     if (node.disabled) return null;
     switch (node.type) {
       case "input.scriptfilter": return this.runScriptFilter(wf, node, arg);
-      case "input.translate": return this.runTranslate(wf, node, arg);
       case "input.codec": return this.runCodec(wf, node, arg);
       case "input.calc": return this.runCompute(wf, node, arg, "calc");
       case "input.units": return this.runCompute(wf, node, arg, "units");
@@ -232,8 +231,10 @@ export class WorkflowEngine {
   private async runScriptFilter(wf: Workflow, node: WorkflowNode, arg: string): Promise<LauncherResult[]> {
     const vars = this.baseVars(wf);
     const script = this.subst(String(node.config.script || ""), arg, vars);
-    const cwd = node.config.cwd ? expandHome(String(node.config.cwd)) : undefined;
-    const env: Record<string, string> = {};
+    // cwd 缺省就是本工作流自己的目录 —— 脚本才能写 ./runtime/txiki ./index.js 这种相对路径。
+    const dir = await ensureWorkflowDir(this.cfg.dir, wf.id);
+    const cwd = resolveCwd(dir, String(node.config.cwd || ""), expandHome);
+    const env: Record<string, string> = { ...workflowEnv(dir, wf.id, wf.name) };
     for (const [k, v] of Object.entries(vars)) env[k] = String(v ?? "");
     env.query = arg;
     // 缓存键要带上脚本正文：改了脚本就该重跑，不能还吃旧缓存。
@@ -253,7 +254,7 @@ export class WorkflowEngine {
   // 顺带记调试轨迹，并按脚本声明的 cache 写入缓存。
   private async execScriptFilter(
     wf: Workflow, node: WorkflowNode, arg: string, script: string,
-    cwd: string | undefined, env: Record<string, string>, vars: Record<string, string>, key: string,
+    cwd: string, env: Record<string, string>, vars: Record<string, string>, key: string,
   ): Promise<string | LauncherResult[]> {
     // 调试轨迹：Script Filter 在「查询」阶段就跑脚本，单独记成一次运行（W8 调试抽屉）。
     const tr = this.trace.begin(wf.id, wf.name, "Script Filter 查询", arg);
@@ -322,37 +323,6 @@ export class WorkflowEngine {
     return items.slice(0, limit).map((it, i) => this.itemResult(wf, node.id, it, mods, {
       rank: i, noLearn: data.skipknowledge === true, baseVars: data.variables || {},
     }));
-  }
-
-  // 内置输入节点：有道翻译（读工作流变量 youdaoAppKey/youdaoSecret，回退到全局配置）。
-  private async runTranslate(wf: Workflow, node: WorkflowNode, arg: string): Promise<LauncherResult[]> {
-    const v = this.baseVars(wf);
-    const cfg = this.cfg.get();
-    const appKey = v.youdaoAppKey || cfg.youdaoAppKey;
-    const secret = v.youdaoSecret || cfg.youdaoSecret;
-    const text = (arg || "").trim();
-    if (!appKey || !secret) return [this.errResult(wf.name, "未配置有道 appKey/secret（在工作流变量里填）")];
-    if (!text) return [];
-    const q = text.replace(/([A-Z])/g, " $1").toLowerCase().trim();
-    const isZh = /^[一-龥]+$/.test(q);
-    const from = isZh ? "zh-CHS" : "auto";
-    const to = isZh ? "en" : "zh-CHS";
-    const salt = String(Math.floor(Math.random() * 1e5));
-    const sign = crypto.createHash("md5").update(appKey + q + salt + secret, "utf8").digest("hex");
-    const url = "https://openapi.youdao.com/api?" + new URLSearchParams({ q, from, to, appKey, salt, sign }).toString();
-    try {
-      const resp = await fetch(url);
-      const data = await resp.json() as { errorCode?: string; translation?: string[]; basic?: { explains?: string[] }; web?: { key: string; value: string[] }[] };
-      if (data.errorCode !== "0") return [this.errResult(wf.name, `有道错误码：${data.errorCode}`)];
-      const out: LauncherResult[] = [];
-      const push = (title: string, sub: string) => out.push(this.itemResult(wf, node.id, { title, subtitle: sub, arg: title }, []));
-      if (data.translation?.length) push(data.translation[0], `翻译：${text} · 回车复制`);
-      data.basic?.explains?.forEach((e) => push(e, "释义 · 回车复制"));
-      data.web?.slice(0, 2).forEach((w) => push(w.value.join(", "), `${w.key} · 回车复制`));
-      return out.length ? out : [this.errResult(wf.name, "没有更多释义")];
-    } catch (e) {
-      return [this.errResult(wf.name, `翻译请求失败：${String(e).slice(0, 40)}`)];
-    }
   }
 
   // Script Filter item → LauncherResult（缓存上下文）。
@@ -589,8 +559,11 @@ export class WorkflowEngine {
       }
       case "action.script": {
         const script = this.subst(String(node.config.script || ""), arg, vars);
-        const cwd = node.config.cwd ? expandHome(String(node.config.cwd)) : undefined;
-        const env: Record<string, string> = {};
+        // cwd 缺省 = 本工作流自己的目录；填了相对路径也按工作流目录解析。
+        // 这样脚本里就能直接写 ./runtime/txiki ./index.js，随行文件跟着工作流走。
+        const dir = await ensureWorkflowDir(this.cfg.dir, wf.id);
+        const cwd = resolveCwd(dir, String(node.config.cwd || ""), expandHome);
+        const env: Record<string, string> = { ...workflowEnv(dir, wf.id, wf.name) };
         for (const [k, v] of Object.entries(vars)) env[k] = String(v ?? "");
         env.query = arg;
         let err = "";
@@ -988,8 +961,8 @@ export function migrateScriptsToWorkflows(cfg: ConfigStore): boolean {
   return true;
 }
 
-// 迁移 V2：文件夹书签 → Keyword+Open File 工作流；有道密钥 → Keyword(fy)+有道翻译 工作流（幂等）。
-export function migrateFoldersAndYoudao(cfg: ConfigStore): boolean {
+// 迁移 V2：文件夹书签 → Keyword+Open File 工作流（幂等）。
+export function migrateFolders(cfg: ConfigStore): boolean {
   const c = cfg.get();
   if (c.launcherMigratedV2) return false;
   const wfs: Workflow[] = [...(c.launcherWorkflows || [])];
@@ -1005,18 +978,6 @@ export function migrateFoldersAndYoudao(cfg: ConfigStore): boolean {
       connections: [{ from: "n1", to: "n2", mod: "" }],
     });
   });
-  // 有道翻译（有密钥才建）
-  if (c.youdaoAppKey && c.youdaoSecret) {
-    wfs.push({
-      id: `youdao-${Date.now().toString(36)}`, name: "有道翻译", icon: "🌐", enabled: true,
-      variables: { youdaoAppKey: c.youdaoAppKey, youdaoSecret: c.youdaoSecret },
-      nodes: [
-        { id: "n1", type: "trigger.keyword", x: 60, y: 140, config: { keyword: "fy", arg: "required", title: "有道翻译" } },
-        { id: "n2", type: "input.translate", x: 340, y: 140, config: {} },
-      ],
-      connections: [{ from: "n1", to: "n2", mod: "" }],
-    });
-  }
   cfg.save({ launcherWorkflows: wfs, launcherMigratedV2: true });
   return true;
 }

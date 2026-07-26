@@ -43,6 +43,8 @@ interface LauncherAPI {
   // W10：把配置项里的密钥交给密码保险箱，拿回一条 vault://... 引用存进工作流。
   setWfSecret(ref: string, title: string, value: string): Promise<{ ok: boolean; ref?: string; error?: string }>;
   vaultUnlocked(): Promise<boolean>;
+  // 打开这条工作流自己的目录：脚本节点的默认 cwd 就是它，随行的可执行文件/资源都放在里面。
+  openWorkflowDir(wfId: string): Promise<{ ok: boolean; dir: string; error: string }>;
 }
 const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
 
@@ -63,7 +65,6 @@ const CATALOG: { cat: string; items: { type: string; label: string; emoji: strin
   ] },
   { cat: "输入 Inputs", items: [
     { type: "input.scriptfilter", label: "Script Filter", emoji: "🔎" },
-    { type: "input.translate", label: "有道翻译", emoji: "🌐" },
     { type: "input.codec", label: "编解码", emoji: "🔡" },
     { type: "input.calc", label: "计算器", emoji: "🔢" },
     { type: "input.units", label: "单位换算", emoji: "📐" },
@@ -295,7 +296,9 @@ function Field({ label, v, danger }: { label: string; v: string; danger?: boolea
   );
 }
 
-export function WorkflowEditor({ onClose }: { onClose: () => void }) {
+// embedded=true：嵌在主窗口「工具 → 工作流编排」右侧，占满父容器而不是整屏，
+// 右上角按钮从「完成」换成「独立窗口」（onPopout）——内嵌时没有窗口可关。
+export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () => void; embedded?: boolean; onPopout?: () => void }) {
   const [wfs, setWfs] = useState<WF[]>([]);
   const [curId, setCurId] = useState<string>("");
   const [editNode, setEditNode] = useState<string | null>(null);
@@ -334,6 +337,15 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
   const prefabsRef = useRef(prefabs); prefabsRef.current = prefabs;
 
   useEffect(() => { void api.getWorkflows().then((w) => { setWfs(w); setCurId(w[0]?.id || ""); }); }, []);
+  // 内嵌那份要防「同时开着独立窗口编辑」：所有改动都是即时落盘的，这里没有未保存状态，
+  // 所以主窗口重新拿到焦点时直接重拉一遍，免得内嵌这份停在旧数据上、下一笔编辑把别处的改动盖回去。
+  // 选中的工作流不动；撤销栈里的快照对应的是旧数据，一并丢掉。
+  useEffect(() => {
+    if (!embedded) return;
+    const refresh = () => { void api.getWorkflows().then((w) => { setWfs(w); undoRef.current = []; }); };
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [embedded]);
   // 预制件（E3）：全局的，和当前选哪条工作流无关，进来拉一次就够。
   useEffect(() => { void api.getPrefabs().then((p) => setPrefabs(Array.isArray(p) ? p : [])).catch(() => setPrefabs([])); }, []);
   const cur = wfs.find((w) => w.id === curId);
@@ -722,7 +734,7 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
   const inp = "bg-bg border border-border rounded-lg px-[10px] py-[6px] text-[13px] outline-none";
 
   return (
-    <div className="flex flex-col h-screen bg-bg text-text">
+    <div className={`flex flex-col ${embedded ? "h-full" : "h-screen"} bg-bg text-text`}>
       {/* 顶栏 */}
       <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-border bg-card">
         <span className="text-[14px] font-semibold shrink-0">工作流编排</span>
@@ -732,6 +744,9 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
           <input value={cur.desc || ""} onChange={(e) => updateCur((w) => ({ ...w, desc: e.target.value }))} className={`flex-1 ${inp} text-[12.5px]`} placeholder="描述（可选）" />
           <button className="text-[12px] text-muted border border-border rounded-lg px-[10px] py-[6px] shrink-0" title="配置项：给使用者填的表单（密钥进保险箱）" onClick={() => setShowCfg(true)}>配置</button>
           <button className="text-[12px] text-muted border border-border rounded-lg px-[10px] py-[6px] shrink-0" title="原始变量表（配置项最终也落在这里）" onClick={() => setShowVars(true)}>变量</button>
+          {/* 每条工作流一个独立目录：脚本节点默认就在这里跑，随行的 runtime/、index.js 之类放进去即可写相对路径。 */}
+          <button className="text-[12px] text-muted border border-border rounded-lg px-[10px] py-[6px] shrink-0" title="打开这条工作流自己的目录（脚本节点的默认运行目录）"
+            onClick={async () => { const r = await api.openWorkflowDir(cur.id); if (!r?.ok) setNote(`打开目录失败：${r?.error || "未知错误"}`); }}>目录</button>
           <label className="flex items-center gap-1.5 text-[12px] text-muted shrink-0"><input type="checkbox" checked={cur.enabled !== false} onChange={(e) => updateCur((w) => ({ ...w, enabled: e.target.checked }))} />启用</label>
         </>) : <span className="flex-1 text-[12.5px] text-muted">← 左侧新建或选择一个工作流</span>}
         {note ? <span className="text-[11.5px] text-orange shrink-0">{note}</span> : null}
@@ -754,7 +769,11 @@ export function WorkflowEditor({ onClose }: { onClose: () => void }) {
           <button className="w-[26px] h-[26px] border border-border rounded-lg" title="放大" onClick={() => zoomBy(1.1)}>＋</button>
           <button className="w-[26px] h-[26px] border border-border rounded-lg" title="复位" onClick={() => { setScale(1); setPan({ x: 0, y: 0 }); }}>⤢</button>
         </div>
-        <button className="text-[13px] px-[16px] py-[6px] bg-orange text-white rounded-lg font-semibold shrink-0" onClick={onClose}>完成</button>
+        {embedded ? (
+          <button className="text-[12px] border border-border text-muted rounded-lg px-[10px] py-[6px] shrink-0" title="在独立窗口里打开编辑器（画布更大）" onClick={() => onPopout?.()}>独立窗口 ⧉</button>
+        ) : (
+          <button className="text-[13px] px-[16px] py-[6px] bg-orange text-white rounded-lg font-semibold shrink-0" onClick={() => onClose?.()}>完成</button>
+        )}
       </div>
 
       <div className="flex flex-1 min-h-0">
@@ -932,7 +951,6 @@ function nodeSummary(n: WFNode): string {
     case "input.codec": return `编解码：${c.mode || "unicode"}`;
     case "input.calc": return "计算表达式";
     case "input.units": return "单位换算";
-    case "input.translate": return "有道翻译（密钥在变量）";
     case "action.script": return c.script ? c.script.slice(0, 40) : "未设脚本";
     case "action.openurl": return String(c.url || "{query}");
     case "action.openfile": return String(c.path || "{query}");
@@ -1118,9 +1136,6 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
           ) : null}
           {node.type === "input.calc" || node.type === "input.units" ? (
             <div className="text-[12px] text-muted">{node.type === "input.calc" ? "输入算式即时求值（如 3*4+2）。" : "输入换算（如 10km to mi、72f to c）。"}回车复制结果。</div>
-          ) : null}
-          {node.type === "input.translate" ? (
-            <div className="text-[12px] text-muted">有道翻译：输入词句返回译文/释义（回车复制）。密钥在顶栏「变量」里填 <code>youdaoAppKey</code> / <code>youdaoSecret</code>。</div>
           ) : null}
           {node.type === "action.script" ? (<>
             <div><span className={lab}>脚本（$1=上游 arg，变量注入 env）</span>

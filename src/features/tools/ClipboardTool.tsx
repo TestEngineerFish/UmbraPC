@@ -86,6 +86,16 @@ export function ClipboardTool() {
           {t("settings.clipClearBtn")}
         </button>
       </Row>
+      {/* 收藏永不过期，也不会被「清空历史」带走，所以单给一个清空出口。 */}
+      <Row label={t("settings.clipClearFav")}>
+        <span className="flex-1 text-[12px] text-muted">{t("settings.clipClearFavDesc")}</span>
+        <button
+          className="px-[13px] py-[6px] border border-danger text-danger bg-transparent rounded-lg text-[12.5px]"
+          onClick={() => { if (confirm(t("settings.clipClearFavConfirm"))) void api.clearFavorites(); }}
+        >
+          {t("settings.clipClearFavBtn")}
+        </button>
+      </Row>
     </Card>
   );
 }

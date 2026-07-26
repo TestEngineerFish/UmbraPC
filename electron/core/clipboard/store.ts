@@ -160,6 +160,21 @@ export class ClipStore {
     this.scheduleSave();
   }
 
+  // 只清空收藏（连带图像文件），非收藏的历史原样留着。
+  // 单列一个方法而不是给 clearNonFavorite 加参数：收藏是用户手动挑出来的，
+  // 误触代价比清历史大得多，调用点分开更不容易接错。返回删掉的条数。
+  clearFavorites(): number {
+    const keep: ClipItem[] = [];
+    let n = 0;
+    for (const it of this.items) {
+      if (!it.favorite) keep.push(it);
+      else { this.gcImage(it); n++; }
+    }
+    this.items = keep;
+    if (n) this.scheduleSave();
+    return n;
+  }
+
   // 按分类保留时长清理过期条目（连带图像文件）。收藏项永不过期，keep=0 表示该分类永久保留。
   // 判定基准是 lastUsedAt 而不是 createdAt：一条老内容只要还在被反复粘贴，就说明它还有用。
   // 返回删掉的条数，调用方据此决定要不要广播刷新。

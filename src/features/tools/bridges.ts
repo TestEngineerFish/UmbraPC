@@ -11,17 +11,18 @@ export interface Phrase { id: string; name: string; content: string; keyword?: s
 
 // 快捷入口主进程桥。
 export interface LauncherAPI {
-  getSettings(): Promise<{ enabled: boolean; shortcut: string; folders: LauncherFolder[]; scripts: LauncherScript[]; registered: boolean; youdaoConfigured: boolean }>;
+  getSettings(): Promise<{ enabled: boolean; shortcut: string; folders: LauncherFolder[]; scripts: LauncherScript[]; registered: boolean }>;
   setEnabled(enabled: boolean): Promise<void>;
   setShortcut(acc: string): Promise<{ ok: boolean }>;
   setFolders(folders: LauncherFolder[]): Promise<void>;
   setScripts(scripts: LauncherScript[]): Promise<void>;
-  setYoudao(appKey: string, secret: string): Promise<void>;
   pickPath(): Promise<string>;
   pickApp(): Promise<string>;
   getWorkflows(): Promise<WF[]>;
   setWorkflows(workflows: WF[]): Promise<void>;
   openWorkflowEditor(): Promise<void>;
+  // 打开这条工作流自己的目录（随行脚本/可执行文件放在里面），不存在会先建。
+  openWorkflowDir(wfId: string): Promise<{ ok: boolean; dir: string; error: string }>;
   getPhrases(): Promise<Phrase[]>;
   setPhrases(phrases: Phrase[]): Promise<void>;
 }
@@ -40,6 +41,8 @@ export interface ClipAPI {
   setAutoPaste(on: boolean): Promise<unknown>;
   setKeep(keep: ClipKeep): Promise<unknown>;
   setPhrasesShortcut(acc: string): Promise<{ ok: boolean }>;
+  // 只清收藏，返回删掉的条数（保留时长永远不碰收藏，所以单给一个出口）。
+  clearFavorites(): Promise<number>;
 }
 
 // 截图主进程桥（设置面用到的子集）。

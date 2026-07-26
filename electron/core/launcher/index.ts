@@ -9,8 +9,9 @@ import { ClipStore } from "../clipboard/store";
 import { writeToClipboard, simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
-import { WorkflowEngine, migrateScriptsToWorkflows, migrateFoldersAndYoudao, seedBuiltinTools, NO_BRANCH } from "./workflow";
+import { WorkflowEngine, migrateScriptsToWorkflows, migrateFolders, seedBuiltinTools, NO_BRANCH } from "./workflow";
 import type { TextViewPayload } from "./workflow";
+import { ensureWorkflowDir } from "./workspace";
 
 // ── 结果与动作类型 ──
 export interface LauncherAction {
@@ -91,7 +92,7 @@ export class LauncherManager {
       if (this.wfWin && !this.wfWin.isDestroyed()) this.wfWin.webContents.send("launcher:trace", r);
     });
     migrateScriptsToWorkflows(this.cfg);   // 一次性：旧脚本 → 工作流
-    migrateFoldersAndYoudao(this.cfg);     // 一次性：文件夹书签 + 有道 → 工作流
+    migrateFolders(this.cfg);              // 一次性：文件夹书签 → 工作流
     seedBuiltinTools(this.cfg);            // 一次性：编解码/计算/换算 → 默认工作流
     try { this.usage = JSON.parse(await fs.readFile(this.usageFile, "utf-8")); } catch { this.usage = {}; }
     // 预热：启动时就把浮层窗建好并加载渲染层（藏着），首次唤起即可秒开，避免忽快忽慢。
@@ -525,7 +526,6 @@ export class LauncherManager {
         folders: c.launcherFolders || [],
         scripts: c.launcherScripts || [],
         registered: globalShortcut.isRegistered(c.launcherShortcut || "Alt+Space"),
-        youdaoConfigured: !!(c.youdaoAppKey && c.youdaoSecret),
       };
     });
     ipcMain.handle("launcher:setEnabled", (_e, enabled: boolean) => this.setEnabled(enabled));
@@ -533,8 +533,6 @@ export class LauncherManager {
     ipcMain.handle("launcher:setFolders", (_e, folders: LauncherFolder[]) => this.setFolders(folders));
     ipcMain.handle("launcher:setScripts", (_e, scripts: LauncherScript[]) =>
       this.cfg.save({ launcherScripts: Array.isArray(scripts) ? scripts : [] }));
-    ipcMain.handle("launcher:setYoudao", (_e, appKey: string, secret: string) =>
-      this.cfg.save({ youdaoAppKey: String(appKey || ""), youdaoSecret: String(secret || "") }));
     // 工作流读写（画布编辑器用）。写入后重注册 Hotkey 触发。
     ipcMain.handle("launcher:getWorkflows", () => this.cfg.get().launcherWorkflows || []);
     ipcMain.handle("launcher:setWorkflows", async (_e, workflows: Workflow[]) => {
@@ -542,6 +540,14 @@ export class LauncherManager {
       this.reregister();  // 工作流里的 Hotkey 触发可能变化 → 重注册全局快捷键
     });
     ipcMain.handle("launcher:openWorkflowEditor", () => this.openWorkflowEditor());
+    // 打开这条工作流自己的目录（不存在就先建）。脚本节点的默认 cwd 就是这里，
+    // 用户把 runtime/、index.js 这类随行文件丢进去，脚本才能写相对路径。
+    ipcMain.handle("launcher:openWorkflowDir", async (_e, wfId: string) => {
+      const dir = await ensureWorkflowDir(this.cfg.dir, String(wfId || ""));
+      const { shell } = await import("electron");
+      const err = await shell.openPath(dir);
+      return { ok: !err, dir, error: err || "" };
+    });
     // 预制件读写（E3）：跨工作流复用的节点组，存在全局配置里而不是某条工作流里。
     ipcMain.handle("launcher:getPrefabs", () => this.cfg.get().launcherPrefabs || []);
     ipcMain.handle("launcher:setPrefabs", (_e, prefabs: WorkflowPrefab[]) =>

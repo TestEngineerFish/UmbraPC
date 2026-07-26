@@ -326,6 +326,13 @@ export class ClipboardManager {
       return true;
     });
 
+    // 只清收藏：保留时长永远不会碰收藏项，所以攒久了得有个地方能一次性倒掉。
+    ipcMain.handle("clip:clearFavorites", () => {
+      const n = this.store.clearFavorites();
+      if (n) this.broadcast("clipboard:history:changed");
+      return n;
+    });
+
     ipcMain.handle("clip:readImageDataUrl", (_e, id: number) => {
       const it = this.store.get(id);
       if (!it || it.type !== "image") return "";

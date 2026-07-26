@@ -107,7 +107,3 @@ export function base64Transform(s: string): { label: string; value: string }[] {
   return out;
 }
 
-// ── 有道翻译签名（md5(appKey+text+salt+secret)）；用 Node crypto，主进程调用。──
-export function youdaoSign(appKey: string, text: string, salt: string, secret: string, md5: (s: string) => string): string {
-  return md5(appKey + text + salt + secret);
-}
