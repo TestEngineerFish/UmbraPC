@@ -1,11 +1,16 @@
-// 任务页（React + Tailwind）。列表 + 刷新（轮询由 legacy setNav 驱动 → 触发 React 重渲染）+ 详情抽屉。
-// 支持「管理」模式：多选 / 全选 / 批量删除。
-import { useState } from "react";
+// 任务页（React + Tailwind）。结构对齐 ClaudeDesign 的任务稿：
+// 左边 452px 列表列（--rail 底：标题+计数+管理/刷新、搜索、筛选胶囊、任务卡），
+// 右边详情列（状态徽章+标题+统计条+总进度，下面「步骤」与「事件时间线」两栏）。
+// 原来的浮层抽屉撤了 —— 详情常驻右侧，切任务不再一层层盖。
+// 轮询由 legacy setNav 驱动（触发 React 重渲染），选中项仍走 legacy 的 detailId/detail。
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
 import { deleteJobs, getServerUrl } from "../../services/server";
 import type { Job, JobDetail, Subtask } from "../../services/server";
 import { ImageViewer } from "../../components/ImageViewer";
+import { btnGhost, btnDanger } from "../../components/ui";
+import { IconSearch, IconRefresh, IconCheck, IconX, IconClock, IconAlert, IconFolder } from "../../components/icons";
 
 // 全局图片预览：任意 Step 图片点击后打开（避免逐层透传 onClick）。
 let openPreview: (src: string, alt?: string) => void = () => {};
@@ -20,28 +25,35 @@ function stepShot(s: Subtask): string | null {
   return null;
 }
 
-type Kind = "ok" | "run" | "wait" | "fail" | "off";
-const STATUS_KEYS: Record<string, [string, Kind]> = {
-  awaiting_review: ["tasks.statusAwaitingReview", "wait"],
-  done: ["tasks.statusDone", "ok"],
-  running: ["tasks.statusRunning", "run"],
-  pending: ["tasks.statusPending", "wait"],
-  suspended: ["tasks.statusSuspended", "wait"],
-  failed: ["tasks.statusFailed", "fail"],
-  cancelled: ["tasks.statusCancelled", "off"],
+// ── 状态语义（徽章配色 + 图标 + 进度条颜色的唯一来源）──
+// 绿=已完成，橙=执行中，黄=待确认/已挂起，红=失败，灰=待执行/已取消。
+type Tone = "success" | "orange" | "warning" | "danger" | "neutral";
+const STATUS_META: Record<string, { key: string; tone: Tone }> = {
+  done: { key: "tasks.statusDone", tone: "success" },
+  running: { key: "tasks.statusRunning", tone: "orange" },
+  awaiting_review: { key: "tasks.statusAwaitingReview", tone: "warning" },
+  suspended: { key: "tasks.statusSuspended", tone: "warning" },
+  pending: { key: "tasks.statusPending", tone: "neutral" },
+  failed: { key: "tasks.statusFailed", tone: "danger" },
+  cancelled: { key: "tasks.statusCancelled", tone: "neutral" },
 };
-const KIND_CLS: Record<Kind, string> = {
-  ok: "bg-success-soft text-success",
-  run: "bg-orange-soft text-orange-text",
-  wait: "bg-warning-soft text-warning",
-  fail: "bg-danger-soft text-danger",
-  off: "bg-chip text-muted",
+// 徽章 / 图标块的底色与前景色。写成两张表而不是拼字符串，是因为同类工具类不能靠顺序覆盖。
+const TONE_SOFT: Record<Tone, string> = {
+  success: "bg-success-soft text-success", orange: "bg-orange-soft text-orange-text",
+  warning: "bg-warning-soft text-warning", danger: "bg-danger-soft text-danger", neutral: "bg-chip text-muted",
 };
-
-function Badge({ status }: { status: string }) {
-  const { t } = useTranslation();
-  const [key, kind] = STATUS_KEYS[status] || [status, "wait"];
-  return <span className={`px-[10px] py-[2px] rounded-full text-[11px] font-semibold shrink-0 ${KIND_CLS[kind]}`}>{t(key)}</span>;
+const TONE_BAR: Record<Tone, string> = {
+  success: "bg-success", orange: "bg-orange", warning: "bg-warning", danger: "bg-danger", neutral: "bg-muted",
+};
+const TONE_TEXT: Record<Tone, string> = {
+  success: "text-success", orange: "text-orange-text", warning: "text-warning", danger: "text-danger", neutral: "text-muted",
+};
+function StatusIcon({ status, size = 13 }: { status: string; size?: number }) {
+  if (status === "done") return <IconCheck size={size} />;
+  if (status === "failed") return <IconX size={size} />;
+  if (status === "running") return <IconRefresh size={size} />;
+  if (status === "awaiting_review" || status === "suspended") return <IconAlert size={size} />;
+  return <IconClock size={size} />;
 }
 
 // 代理任务干完一轮会停在 idle —— 对用户来说那不是「执行中」，是**待确认**。
@@ -49,9 +61,37 @@ function displayStatus(job: { status: string; kind?: string; agent_state?: strin
   if (job.kind === "agent" && job.agent_state === "idle" && job.status === "running") return "awaiting_review";
   return job.status;
 }
+const metaOf = (status: string) => STATUS_META[status] || { key: status, tone: "neutral" as Tone };
 
 function isImg(u: string) {
   return /\.(png|jpe?g|gif|bmp|webp)(\?|$)/i.test(u);
+}
+
+// 里程碑进度百分比。没有 steps_total 的旧 Job 行按状态兜底（完成=100，其余=0），不编假进度。
+function pctOf(job: Job): number {
+  if (job.steps_total) return Math.round(((job.steps_done || 0) / job.steps_total) * 100);
+  return job.status === "done" ? 100 : 0;
+}
+
+// 耗时：created_at → updated_at（执行中的算到现在）。Subtask 没存每步时间，所以只有整任务这一个量级。
+function durationOf(job: Job, t: (k: string, o?: Record<string, unknown>) => string): string {
+  const a = job.created_at ? Date.parse(job.created_at.replace(" ", "T")) : NaN;
+  if (Number.isNaN(a)) return "—";
+  const running = job.status === "running" || job.status === "pending";
+  const bRaw = running ? Date.now() : job.updated_at ? Date.parse(job.updated_at.replace(" ", "T")) : NaN;
+  if (Number.isNaN(bRaw) || bRaw < a) return "—";
+  const human = humanMs(bRaw - a);
+  if (job.status === "failed") return t("tasks.durInterrupted", { human });
+  if (running) return t("tasks.durRunning", { human });
+  return human;
+}
+// 毫秒 → 「6秒 / 4分08秒 / 1小时12分」。只给两个量级，够看了。
+function humanMs(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}秒`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}分${String(s % 60).padStart(2, "0")}秒`;
+  return `${Math.floor(m / 60)}小时${String(m % 60).padStart(2, "0")}分`;
 }
 
 export function Tasks() {
@@ -61,25 +101,56 @@ export function Tasks() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState("all");
   const [preview, setPreview] = useState<{ src: string; alt?: string } | null>(null);
   openPreview = (src, alt) => setPreview({ src, alt });
 
-  const ids = tasks.list.map((j) => j.id);
-  const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
+  // 搜索命中范围：短标题 + 详细描述 + 结果摘要（错误信息通常落在 result_summary 里）。
+  const kw = q.trim().toLowerCase();
+  const list = useMemo(() => tasks.list.filter((j) => {
+    if (filter !== "all" && displayStatus(j) !== filter) return false;
+    if (!kw) return true;
+    return `${j.name || ""} ${j.goal} ${j.result_summary || ""}`.toLowerCase().includes(kw);
+  }), [tasks.list, filter, kw]);
 
-  const toggle = (id: string) =>
-    setSelected((prev) => {
-      const n = new Set(prev);
-      if (n.has(id)) n.delete(id);
-      else n.add(id);
-      return n;
-    });
-  const toggleAll = () => setSelected(allSelected ? new Set() : new Set(ids));
-  const exitSelect = () => {
-    setSelectMode(false);
-    setSelected(new Set());
-    setConfirming(false);
-  };
+  // 筛选胶囊的计数按「显示状态」算，所以待确认那一档和徽章说的是同一件事。
+  // cancelled / suspended 没有单独的档，只出现在「全部」里。
+  const counts = useMemo(() => {
+    const c: Record<string, number> = { all: tasks.list.length };
+    for (const j of tasks.list) {
+      const s = displayStatus(j);
+      c[s] = (c[s] || 0) + 1;
+    }
+    return c;
+  }, [tasks.list]);
+  const FILTERS: { k: string; label: string }[] = [
+    { k: "all", label: t("tasks.filterAll") },
+    { k: "running", label: t("tasks.statusRunning") },
+    { k: "awaiting_review", label: t("tasks.statusAwaitingReview") },
+    { k: "pending", label: t("tasks.statusPending") },
+    { k: "done", label: t("tasks.statusDone") },
+    { k: "failed", label: t("tasks.statusFailed") },
+  ];
+
+  // 没有选中项时自动打开第一条：详情列常驻，空着一大片不如直接给内容。
+  // openedRef 防止拉取失败时每次重渲染都重发请求。
+  const openedRef = useRef(false);
+  useEffect(() => {
+    if (tasks.detailId || selectMode || !list.length) return;
+    if (openedRef.current) return;
+    openedRef.current = true;
+    void legacy.openJob(list[0].id);
+  }, [tasks.detailId, selectMode, list]);
+
+  const ids = list.map((j) => j.id);
+  const allSelected = ids.length > 0 && ids.every((id) => selected.has(id));
+  const toggle = (id: string) => setSelected((prev) => {
+    const n = new Set(prev);
+    if (n.has(id)) n.delete(id); else n.add(id);
+    return n;
+  });
+  const exitSelect = () => { setSelectMode(false); setSelected(new Set()); setConfirming(false); };
   const doDelete = async () => {
     if (!selected.size) return;
     setBusy(true);
@@ -89,139 +160,155 @@ export function Tasks() {
     legacy.manualRefresh();
   };
 
-  const btn = "px-3 py-1.5 border border-border bg-card text-text rounded-lg text-[12.5px] cursor-pointer";
   return (
-    // 外层不滚动、只做定位上下文；滚动放到内层——这样详情抽屉(absolute)不会跟着列表滚动、底部不再割裂。
-    <div className="h-full relative">
-      <div className="h-full overflow-y-auto p-[18px_22px]">
-      <div className="flex items-center justify-between mb-4">
-        <h1 className="m-0 text-[16px] font-semibold">{t("tasks.title")}</h1>
-        <div className="flex items-center gap-2">
-          {selectMode ? (
-            <>
-              <button onClick={toggleAll} className={btn}>
+    <div className="h-full flex min-h-0">
+      {/* ── 列表列 ── */}
+      <section className="w-[452px] flex-none border-r border-border bg-rail flex flex-col min-h-0">
+        <div className="flex-none flex flex-col gap-[11px] p-[14px_14px_11px] border-b border-border">
+          <div className="flex items-center gap-[9px]">
+            <span className="flex-none whitespace-nowrap text-[16px] font-semibold">{t("tasks.title")}</span>
+            <span className="flex-1 min-w-0 truncate text-[11.5px] text-faint">
+              {t("tasks.countLine", { n: tasks.list.length, running: counts.running || 0 })}
+            </span>
+            {selectMode ? (<>
+              <button className={btnGhost} onClick={() => setSelected(allSelected ? new Set() : new Set(ids))}>
                 {allSelected ? t("tasks.deselectAll") : t("tasks.selectAll")}
               </button>
-              <button
-                onClick={() => setConfirming(true)}
-                disabled={!selected.size || busy}
-                className={`px-3 py-1.5 rounded-lg text-[12.5px] font-semibold ${selected.size ? "bg-danger text-white cursor-pointer" : "bg-chip text-muted cursor-not-allowed"}`}
-              >
+              <button className={btnDanger} disabled={!selected.size || busy} onClick={() => setConfirming(true)}>
                 {t("tasks.deleteN", { count: selected.size })}
               </button>
-              <button onClick={exitSelect} className={btn}>{t("common.cancel")}</button>
-            </>
-          ) : (
-            <>
-              <button onClick={() => setSelectMode(true)} className={btn} disabled={!tasks.list.length}>
-                {t("tasks.manage")}
-              </button>
-              <button onClick={() => legacy.manualRefresh()} className={`flex items-center gap-1.5 ${btn}`}>
-                <span className={tasks.refreshing ? "inline-block animate-spin" : ""}>↻</span>
+              <button className={btnGhost} onClick={exitSelect}>{t("common.cancel")}</button>
+            </>) : (<>
+              <button className={btnGhost} disabled={!tasks.list.length} onClick={() => setSelectMode(true)}>{t("tasks.manage")}</button>
+              <button className={btnGhost} onClick={() => legacy.manualRefresh()}>
+                <span className={`flex ${tasks.refreshing ? "animate-spin" : ""}`}><IconRefresh size={12} /></span>
                 {tasks.refreshing ? t("common.refreshing") : t("common.refresh")}
               </button>
-            </>
-          )}
-        </div>
-      </div>
+            </>)}
+          </div>
 
-      {confirming ? (
-        <div className="mb-3 flex items-center justify-between gap-3 bg-danger-soft border border-danger rounded-lg px-[14px] py-[10px]">
-          <span className="text-[13px] text-danger">{t("tasks.confirmDelete", { count: selected.size })}</span>
-          <div className="flex gap-2 shrink-0">
-            <button onClick={doDelete} disabled={busy} className="px-3 py-1.5 rounded-lg text-[12.5px] font-semibold bg-danger text-white cursor-pointer">
-              {t("tasks.confirmDeleteBtn")}
-            </button>
-            <button onClick={() => setConfirming(false)} className={btn}>{t("common.cancel")}</button>
+          <div className="flex items-center gap-[7px] bg-card border border-border rounded-[8px] px-[9px] py-[5px]">
+            <span className="flex-none text-faint"><IconSearch size={12} /></span>
+            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("tasks.searchPlaceholder")}
+              className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
+          </div>
+
+          <div className="flex gap-[4px]">
+            {FILTERS.map((f) => {
+              const on = filter === f.k;
+              return (
+                <button key={f.k} onClick={() => setFilter(f.k)}
+                  className={`flex-none whitespace-nowrap flex items-center gap-[5px] px-[9px] py-[4px] rounded-full text-[11.5px] border ${
+                    on ? "border-orange bg-orange-soft text-orange-text font-semibold" : "border-border bg-transparent text-muted hover:border-orange"}`}>
+                  <span>{f.label}</span>
+                  <span className={`text-[10.5px] font-semibold ${on ? "text-orange-text" : "text-faint"}`}>{counts[f.k] || 0}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
-      ) : null}
 
-      <div className="flex flex-col gap-2.5">
-        {tasks.list.length ? (
-          tasks.list.map((j) => (
-            <TaskRow
-              key={j.id}
-              job={j}
-              active={j.id === tasks.detailId}
-              selectMode={selectMode}
-              checked={selected.has(j.id)}
-              onOpen={() => (selectMode ? toggle(j.id) : legacy.openJob(j.id))}
-            />
-          ))
+        {confirming ? (
+          <div className="flex-none m-[9px_9px_0] flex items-center gap-[10px] bg-danger-soft border border-danger rounded-[10px] px-[12px] py-[10px]">
+            <span className="flex-1 min-w-0 text-[12.5px]">{t("tasks.confirmDelete", { count: selected.size })}</span>
+            <button className={btnDanger} disabled={busy} onClick={doDelete}>{t("tasks.confirmDeleteBtn")}</button>
+            <button className={btnGhost} onClick={() => setConfirming(false)}>{t("common.cancel")}</button>
+          </div>
+        ) : null}
+
+        <div className="flex-1 overflow-y-auto p-[9px] flex flex-col gap-[7px]">
+          {list.map((j) => (
+            <TaskCard key={j.id} job={j} active={j.id === tasks.detailId && !selectMode}
+              selectMode={selectMode} checked={selected.has(j.id)}
+              onOpen={() => (selectMode ? toggle(j.id) : legacy.openJob(j.id))} />
+          ))}
+          {!list.length ? (
+            <div className="py-10 text-center text-[12.5px] text-muted">
+              {tasks.loading ? t("tasks.loading") : kw ? t("tasks.noMatch", { q: kw }) : filter !== "all" ? t("tasks.noneInFilter") : t("tasks.empty")}
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      {/* ── 详情列 ── */}
+      <main className="flex-1 min-w-0 flex flex-col min-h-0 bg-bg">
+        {tasks.detailId && tasks.detail && tasks.detail.job.id === tasks.detailId ? (
+          <Detail d={tasks.detail} />
         ) : (
-          <div className="text-muted p-10 text-center">{tasks.loading ? t("tasks.loading") : t("tasks.empty")}</div>
+          <div className="flex-1 flex items-center justify-center text-[12.5px] text-muted">
+            {tasks.detailId ? t("tasks.loadingDetail") : t("tasks.pickOne")}
+          </div>
         )}
-      </div>
+      </main>
 
-      </div>
-      {tasks.detailId && !selectMode ? <Drawer detailId={tasks.detailId} detail={tasks.detail} onClose={() => legacy.closeJob()} /> : null}
       <ImageViewer src={preview?.src ?? null} alt={preview?.alt} onClose={() => setPreview(null)} />
     </div>
   );
 }
 
-function TaskRow({
-  job,
-  active,
-  selectMode,
-  checked,
-  onOpen,
-}: {
-  job: Job;
-  active: boolean;
-  selectMode: boolean;
-  checked: boolean;
-  onOpen: () => void;
+// 列表里的一张任务卡。选中态用「橙描边 + 左侧 3px 橙条」，比只换描边更容易在一屏卡片里找到。
+function TaskCard({ job, active, selectMode, checked, onOpen }: {
+  job: Job; active: boolean; selectMode: boolean; checked: boolean; onOpen: () => void;
 }) {
   const { t } = useTranslation();
-  const failed = job.status === "failed";
-  const sub = job.result_summary ? job.result_summary.slice(0, 70) : job.channel ? t("tasks.fromChannel", { channel: job.channel }) : "";
-  const running = job.status === "running" || job.status === "pending";
-  // 进度条按真实里程碑进度（steps_done/steps_total，新任务模型的 /jobs 列表自带）；
-  // 旧 Job 行没有这两个字段 → 不显示进度条（之前写死 38% 宽度是假进度，误导）。
-  const pct = job.steps_total ? Math.round(((job.steps_done || 0) / job.steps_total) * 100) : null;
+  const st = displayStatus(job);
+  const m = metaOf(st);
+  const pct = pctOf(job);
+  const running = st === "running";
+  const total = job.steps_total || 0;
+  const done = job.steps_done || 0;
+  // 里程碑小格：步数多时格子变窄，免得把一行撑破。
+  const pipW = total > 6 ? "w-[4px]" : "w-[9px]";
+  const err = st === "failed" ? job.result_summary || "" : "";
+  const sub = job.name ? job.goal : job.channel ? t("tasks.fromChannel", { channel: job.channel }) : job.result_summary || "";
+
   return (
-    <div onClick={onOpen} className={`bg-card border rounded-xl p-[13px_16px] cursor-pointer ${(active && !selectMode) || checked ? "border-orange" : "border-border"}`}>
-      <div className="flex items-center gap-[14px]">
+    <div onClick={onOpen}
+      className={`bg-card border rounded-[11px] p-[11px_13px] cursor-pointer ${
+        active || checked ? "border-orange shadow-[inset_3px_0_0_var(--orange)]" : "border-border hover:border-orange"}`}>
+      <div className="flex items-start gap-[10px]">
         {selectMode ? (
-          <span className={`w-[18px] h-[18px] rounded-md border-2 flex items-center justify-center shrink-0 ${checked ? "bg-orange border-orange text-white" : "border-border"}`}>
-            {checked ? <span className="text-[11px] leading-none">✓</span> : null}
+          <span className={`w-4 h-4 flex-none mt-[2px] rounded-[5px] flex items-center justify-center border-[1.5px] ${
+            checked ? "bg-orange border-orange text-white" : "bg-transparent border-border"}`}>
+            {checked ? <IconCheck size={11} /> : null}
           </span>
         ) : null}
-        <div className="flex-1 min-w-0">
-          {/* 标题=短名称 name（没有则回退 goal）；有 name 时把详细描述 goal 放进副行 */}
-          <div className="font-medium truncate">{job.name || job.goal}</div>
-          <div className={`text-[11.5px] mt-0.5 truncate ${failed ? "text-danger" : "text-muted"}`}>{sub || (job.name ? job.goal : " ")}</div>
-        </div>
-        <Badge status={displayStatus(job)} />
-        <span title={job.updated_at || ""} className="text-[12px] text-muted whitespace-nowrap shrink-0">
-          {legacy.fmtListTime(job.updated_at)}
+        <span className={`w-6 h-6 flex-none rounded-[7px] flex items-center justify-center ${TONE_SOFT[m.tone]}`}>
+          <StatusIcon status={st} />
         </span>
-      </div>
-      {running && pct !== null ? (
-        <div className="h-[3px] rounded-full bg-track overflow-hidden mt-[9px]">
-          <div className="h-full bg-orange rounded-full" style={{ width: `${pct}%` }} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline gap-[8px]">
+            <span className="flex-1 min-w-0 text-[13px] font-medium leading-[1.45] line-clamp-2">{job.name || job.goal}</span>
+            <span className="flex-none whitespace-nowrap text-[10.5px] text-faint" title={job.updated_at || ""}>{legacy.fmtListTime(job.updated_at)}</span>
+          </div>
+          <div className="flex items-center gap-[8px] mt-[5px]">
+            <span className={`flex-none whitespace-nowrap px-[8px] py-px rounded-full text-[10.5px] font-semibold ${TONE_SOFT[m.tone]}`}>{t(m.key)}</span>
+            {total ? (
+              <span className="flex-none flex gap-[3px]">
+                {Array.from({ length: total }, (_, i) => (
+                  <span key={i} className={`${pipW} h-[3px] rounded-full flex-none ${i < done ? TONE_BAR[m.tone] : "bg-track"}`} />
+                ))}
+              </span>
+            ) : null}
+            <span className="flex-1 min-w-0 truncate text-[11px] text-muted">{sub}</span>
+          </div>
+          {err ? (
+            <div className="mt-[7px] bg-danger-soft rounded-[7px] px-[9px] py-[6px] flex gap-[7px] items-start">
+              <span className="flex-none mt-[2px] text-danger"><IconAlert size={12} /></span>
+              <span className="flex-1 min-w-0 text-[11.5px] text-danger leading-[1.55] line-clamp-2">{err}</span>
+            </div>
+          ) : null}
+          {running && total ? (
+            <div className="mt-[8px] flex items-center gap-[8px]">
+              <span className="flex-1 h-[4px] rounded-full bg-track overflow-hidden">
+                <span className="block h-full bg-orange rounded-full" style={{ width: `${pct}%` }} />
+              </span>
+              <span className="flex-none whitespace-nowrap text-[11px] font-semibold text-orange-text">{pct}%</span>
+            </div>
+          ) : null}
         </div>
-      ) : null}
-    </div>
-  );
-}
-
-function Drawer({ detailId, detail, onClose }: { detailId: string; detail: JobDetail | null; onClose: () => void }) {
-  const { t } = useTranslation();
-  const loading = !detail || detail.job.id !== detailId;
-  return (
-    <>
-      <div onClick={onClose} className="absolute inset-0 bg-black/30 z-30" />
-      <div className="absolute top-0 right-0 bottom-0 w-[420px] bg-card border-l border-border z-[31] flex flex-col">
-        {loading ? (
-          <div className="flex-1 flex items-center justify-center text-muted">{t("tasks.loadingDetail")}</div>
-        ) : (
-          <DrawerBody d={detail!} onClose={onClose} />
-        )}
       </div>
-    </>
+    </div>
   );
 }
 
@@ -241,151 +328,214 @@ function detailToText(d: JobDetail): string {
   return lines.join("\n");
 }
 
-function DrawerBody({ d, onClose }: { d: JobDetail; onClose: () => void }) {
+function Detail({ d }: { d: JobDetail }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
-  const subs = [...d.subtasks].sort((a, b) => a.seq - b.seq);
-  const doneN = subs.filter((s) => s.status === "done").length;
-  const pct = subs.length ? Math.round((doneN / subs.length) * 100) : d.job.status === "done" ? 100 : 0;
-  const barColor = d.job.status === "failed" ? "bg-danger" : d.job.status === "done" ? "bg-success" : "bg-orange";
-  return (
-    <>
-      <div className="flex items-start justify-between gap-2.5 p-[15px_20px] border-b border-border">
-        <div className="min-w-0">
-          <div className="font-semibold text-[15px]">{d.job.name || d.job.goal}</div>
-          {d.job.name ? <div className="text-[12px] text-muted mt-0.5">{d.job.goal}</div> : null}
-          <div className="mt-[5px]">
-            <Badge status={displayStatus(d.job)} />
+  const st = displayStatus(d.job);
+  const m = metaOf(st);
+  const subs = useMemo(() => [...d.subtasks].sort((a, b) => a.seq - b.seq), [d.subtasks]);
+  const total = d.job.steps_total || subs.length;
+  const done = d.job.steps_total ? (d.job.steps_done || 0) : subs.filter((s) => s.status === "done").length;
+  const pct = total ? Math.round((done / total) * 100) : pctOf(d.job);
+  const kind = [d.job.kind, d.job.channel].filter(Boolean).join(" · ");
+
+  // 统计条：里程碑与创建/更新时间是现成的；耗时由起止时间推。
+  // 「执行设备」设计稿里有，但 Job 行没有这个字段，所以这一格不出现（不摆破折号占位）。
+  const stats: { k: string; v: string }[] = [
+    { k: t("tasks.statMilestone"), v: total ? `${done} / ${total}` : "—" },
+    { k: t("tasks.statDuration"), v: durationOf(d.job, t) },
+    { k: t("tasks.statCreated"), v: legacy.fmtTime(d.job.created_at) },
+    { k: t("tasks.statUpdated"), v: legacy.fmtTime(d.job.updated_at) },
+  ];
+
+  return (<>
+    <div className="flex-none p-[15px_20px_13px] border-b border-border bg-card">
+      <div className="flex items-start gap-[12px]">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-[8px] mb-[5px]">
+            <span className={`flex-none whitespace-nowrap px-[9px] py-[2px] rounded-full text-[11px] font-semibold ${TONE_SOFT[m.tone]}`}>{t(m.key)}</span>
+            {kind ? <span className="flex-none whitespace-nowrap text-[11px] text-faint">{kind}</span> : null}
           </div>
+          <div className="text-[15.5px] font-semibold leading-[1.45]">{d.job.name || d.job.goal}</div>
+          {d.job.name ? <div className="text-[12px] text-muted mt-[4px] leading-[1.6]">{d.job.goal}</div> : null}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => {
-              navigator.clipboard.writeText(detailToText(d)).then(() => {
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              });
-            }}
-            className="px-[10px] py-[5px] border border-border bg-card text-text rounded-lg text-[12px] cursor-pointer"
-          >
-            {copied ? t("tasks.copied") : t("tasks.copyDetail")}
-          </button>
-          <button onClick={onClose} className="border-0 bg-transparent text-muted cursor-pointer text-[20px] leading-none">
-            ×
-          </button>
+        <div className="flex-none flex gap-[7px]">
+          <button className={btnGhost} onClick={() => {
+            navigator.clipboard.writeText(detailToText(d)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
+          }}>{copied ? t("tasks.copied") : t("tasks.copyDetail")}</button>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto p-[18px_20px] flex flex-col gap-5">
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[12px] text-muted">{t("tasks.progress")}</span>
-            <span className="text-[12px] text-orange-text font-semibold">{pct}%</span>
-          </div>
-          <div className="h-1.5 rounded-full bg-track overflow-hidden">
-            <div className={`h-full ${barColor}`} style={{ width: `${pct}%` }} />
-          </div>
-        </div>
 
-        <div>
-          <div className="text-[12px] text-muted font-semibold mb-2.5">{t("tasks.steps")}</div>
-          <div className="flex flex-col gap-[9px]">
-            {subs.length ? subs.map((s) => <Step key={s.seq} s={s} />) : <div className="text-[12.5px] text-muted">{t("tasks.noSteps")}</div>}
+      <div className="flex mt-[13px] border border-border rounded-[10px] overflow-hidden">
+        {stats.map((s, i) => (
+          <div key={s.k} className={`flex-1 min-w-0 flex flex-col gap-[2px] px-[12px] py-[8px] ${i < stats.length - 1 ? "border-r border-border" : ""}`}>
+            <div className="text-[10.5px] text-faint whitespace-nowrap">{s.k}</div>
+            <div className="text-[12.5px] font-medium truncate">{s.v}</div>
           </div>
-        </div>
+        ))}
+      </div>
 
-        <div>
-          <div className="text-[12px] text-muted font-semibold mb-2.5">{t("tasks.timeline")}</div>
-          <div className="flex flex-col border-l-2 border-border ml-1">
-            {d.events.length ? (
-              d.events.map((e, i) => (
-                <div key={i} className="relative pl-4 pb-[13px]">
-                  <span className="absolute -left-[6px] top-[3px] w-[9px] h-[9px] rounded-full bg-orange" />
-                  <span className="font-mono text-[11px] text-muted">{legacy.fmtTime(e.created_at, true)}</span>
-                  <div className="text-[12.5px]">{e.message || e.type}</div>
+      <div className="flex items-center gap-[10px] mt-[12px]">
+        <span className="flex-none whitespace-nowrap text-[11.5px] text-muted">{t("tasks.progress")}</span>
+        <span className="flex-1 h-[6px] rounded-full bg-track overflow-hidden">
+          <span className={`block h-full rounded-full ${TONE_BAR[m.tone]}`} style={{ width: `${pct}%` }} />
+        </span>
+        <span className={`flex-none w-[38px] text-right whitespace-nowrap text-[12.5px] font-semibold ${TONE_TEXT[m.tone]}`}>{pct}%</span>
+      </div>
+    </div>
+
+    <div className="flex-1 overflow-y-auto p-[16px_20px_28px]">
+      <div className="flex gap-[18px] items-start">
+        <div className="flex-1 min-w-0 flex flex-col gap-[16px]">
+          <div>
+            <SecLabel>{t("tasks.steps")}</SecLabel>
+            {subs.length ? (
+              <div className="flex flex-col">
+                {subs.map((s, i) => <Step key={s.seq} s={s} last={i === subs.length - 1} />)}
+              </div>
+            ) : <div className="text-[12.5px] text-muted">{t("tasks.noSteps")}</div>}
+          </div>
+
+          {/* 失败卡：设计稿画的模型 / HTTP / 错误码是结构化字段，服务端目前只回一串自由文本，
+              所以这里就把那串文本原样摊开，另给一个「前往能力设置」的出口（多半是 Key/额度问题）。 */}
+          {st === "failed" ? (
+            <div className="bg-card border border-danger rounded-[11px] overflow-hidden">
+              <div className="flex items-center gap-[8px] px-[13px] py-[10px] bg-danger-soft">
+                <span className="flex-none text-danger"><IconAlert size={14} /></span>
+                <span className="flex-1 min-w-0 truncate text-[12.5px] font-semibold text-danger">{t("tasks.statusFailed")}</span>
+                {total ? <span className="flex-none whitespace-nowrap text-[11px] text-danger">{done + 1} / {total}</span> : null}
+              </div>
+              <div className="px-[13px] py-[11px] flex flex-col gap-[9px]">
+                <div className="text-[12.5px] leading-[1.65] whitespace-pre-wrap break-all">
+                  {d.job.result_summary || subs.find((s) => s.error)?.error || t("tasks.statusFailed")}
                 </div>
-              ))
-            ) : (
-              <div className="text-[12.5px] text-muted pl-4">{t("tasks.noEvents")}</div>
-            )}
-          </div>
+                <div className="flex gap-[8px]">
+                  <button className={btnGhost} onClick={() => legacy.goNav("abilities")}>{t("tasks.goAbilities")}</button>
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <Results subs={subs} />
         </div>
 
-        <Results subs={subs} />
+        {/* 事件时间线：右侧 300px 常驻一列 */}
+        <div className="w-[300px] flex-none">
+          <div className="flex items-center gap-[8px] mb-[9px]">
+            <span className="flex-1 min-w-0 text-[11px] font-semibold tracking-[.06em] text-faint whitespace-nowrap">{t("tasks.timeline")}</span>
+            <span className="flex-none whitespace-nowrap text-[10.5px] text-faint">{t("tasks.eventCount", { n: d.events.length })}</span>
+          </div>
+          <div className="bg-card border border-border rounded-[11px] px-[13px] py-[12px] flex flex-col">
+            {d.events.length ? d.events.map((e, i) => {
+              // 事件着色只按能可靠判断的两类来：带 fail/error 的标红，其余走正文色。
+              const bad = /fail|error/i.test(e.type || "");
+              return (
+                <div key={i} className="flex gap-[9px]">
+                  <div className="flex flex-col items-center flex-none w-[9px]">
+                    <span className={`w-[9px] h-[9px] flex-none rounded-full mt-[4px] ${bad ? "bg-danger" : "bg-orange"}`} />
+                    {i < d.events.length - 1 ? <span className="flex-1 w-px bg-border min-h-[12px]" /> : null}
+                  </div>
+                  <div className="flex-1 min-w-0 pb-[11px]">
+                    <div className="text-[10.5px] text-faint font-mono">{legacy.fmtTime(e.created_at, true)}</div>
+                    <div className={`text-[12px] mt-[2px] leading-[1.55] ${bad ? "text-danger font-medium" : "text-text"}`}>{e.message || e.type}</div>
+                  </div>
+                </div>
+              );
+            }) : <div className="text-[12.5px] text-muted">{t("tasks.noEvents")}</div>}
+          </div>
+          <div className="text-[10.5px] text-faint mt-[9px] leading-[1.6]">{t("tasks.timelineFootnote")}</div>
+        </div>
       </div>
-    </>
-  );
+    </div>
+  </>);
 }
 
-function Step({ s }: { s: Subtask }) {
-  const icon =
-    s.status === "done" ? (
-      <span className="w-[18px] h-[18px] rounded-full bg-success text-white flex items-center justify-center text-[11px] shrink-0">✓</span>
-    ) : s.status === "failed" ? (
-      <span className="w-[18px] h-[18px] rounded-full bg-danger text-white flex items-center justify-center text-[11px] shrink-0">✕</span>
-    ) : s.status === "running" || s.status === "dispatched" ? (
-      <span className="w-[18px] h-[18px] rounded-full border-2 border-orange shrink-0" />
-    ) : (
-      <span className="w-[18px] h-[18px] rounded-full border-2 border-border shrink-0" />
-    );
+// 分区小标题：11px 600 + 字距，四处共用。
+function SecLabel({ children }: { children: React.ReactNode }) {
+  return <div className="text-[11px] font-semibold tracking-[.06em] text-faint mb-[9px]">{children}</div>;
+}
+
+// 步骤时间线的一行：左侧 20px 标记列（圆点 + 竖线），右侧标题 / 说明 / 截图。
+function Step({ s, last }: { s: Subtask; last: boolean }) {
+  const { t } = useTranslation();
+  const pale = s.status === "pending";
+  const m = metaOf(s.status === "dispatched" ? "running" : s.status);
   const title = s.title || `${s.provider || ""}.${s.skill || ""}`;
   const shot = stepShot(s);
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className={`flex items-center gap-[9px] text-[13px] ${s.status === "pending" ? "text-muted" : "text-text"}`}>
-        {icon}
-        <span className="truncate">{title}</span>
+    <div className="flex gap-[10px]">
+      <div className="flex flex-col items-center flex-none w-[20px]">
+        <span className={`w-[20px] h-[20px] flex-none rounded-full flex items-center justify-center ${
+          pale ? "bg-transparent border-[1.5px] border-border text-faint" : `${TONE_BAR[m.tone]} text-white`}`}>
+          {pale ? null : <StatusIcon status={s.status === "dispatched" ? "running" : s.status} size={12} />}
+        </span>
+        {!last ? <span className="flex-1 w-px min-h-[14px] bg-border" /> : null}
       </div>
-      {shot ? (
-        // 该步「完成后」状态截图：内联显示，点击打开预览器（放大/缩小/下载），不再弹下载框。
-        <img
-          src={shot}
-          alt={title}
-          title={title}
-          onClick={() => openPreview(shot, title)}
-          className="block max-w-full rounded-lg border border-border ml-[27px] cursor-zoom-in"
-        />
-      ) : null}
+      <div className="flex-1 min-w-0 pb-[14px]">
+        <div className="flex items-baseline gap-[8px]">
+          <span className={`flex-1 min-w-0 text-[12.5px] leading-[1.5] ${pale ? "text-faint font-normal" : "text-text font-medium"}`}>{title}</span>
+        </div>
+        {s.error ? <div className="text-[11.5px] text-danger mt-[3px] leading-[1.6] whitespace-pre-wrap break-all">{s.error}</div> : null}
+        {shot ? (
+          // 该步「完成后」状态截图：内联显示，点击打开预览器（放大/缩小/下载）。
+          <div className="mt-[8px] max-w-[330px] border border-border rounded-[9px] overflow-hidden">
+            <img src={shot} alt={title} title={`${title} · ${t("tasks.shotOpen")}`} onClick={() => openPreview(shot, title)}
+              className="block w-full cursor-zoom-in" />
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 }
 
+// 生成结果：从每步的 result_json 里挑出产物（下载链接 / 路径 / 变更文件）。
+// 设计稿的「大小」列服务端没回，所以不出现这一列。
 function Results({ subs }: { subs: Subtask[] }) {
   const { t } = useTranslation();
-  const items: React.ReactNode[] = [];
-  subs.forEach((s, i) => {
-    if (!s.result_json) return;
-    if (s.skill === "plan_step") return;  // 计划步骤的截图已在步骤下方内联显示，不再重复列在「生成结果」
+  const rows: { name: string; path: string; url?: string; ext: string }[] = [];
+  const notes: string[] = [];
+  for (const s of subs) {
+    if (!s.result_json || s.skill === "plan_step") continue; // 计划步骤的截图已在步骤下方内联显示
     let r: { url?: string; filename?: string; project_dir?: string; path?: string; changed_files?: string[] };
-    try {
-      r = JSON.parse(s.result_json);
-    } catch {
-      return;
+    try { r = JSON.parse(s.result_json); } catch { continue; }
+    if (!r || typeof r !== "object") continue;
+    const path = r.path || r.project_dir || "";
+    if (typeof r.url === "string" && r.url) {
+      const url = r.url.startsWith("http") ? r.url : getServerUrl() + r.url;
+      const name = r.filename || url.split("/").pop() || t("tasks.downloadResult");
+      rows.push({ name, path, url, ext: (name.split(".").pop() || "").toUpperCase().slice(0, 4) });
+    } else if (path) {
+      const name = path.split("/").filter(Boolean).pop() || path;
+      rows.push({ name, path, ext: (name.includes(".") ? name.split(".").pop()! : "DIR").toUpperCase().slice(0, 4) });
     }
-    if (!r || typeof r !== "object") return;
-    if (typeof r.url === "string") {
-      const url = r.url;
-      if (isImg(url)) items.push(<a key={`img${i}`} href={url} target="_blank" rel="noopener noreferrer"><img src={url} className="block max-w-full rounded-lg border border-border mb-1.5" /></a>);
-      items.push(
-        <div key={`u${i}`} className="flex items-center gap-2 text-[13px]">
-          <span className="text-muted">📄</span>
-          <a href={url} target="_blank" rel="noopener noreferrer" className="text-orange-text no-underline font-medium">
-            {r.filename || t("tasks.downloadResult")}
-          </a>
-        </div>,
-      );
-    }
-    if (typeof r.project_dir === "string") items.push(<div key={`pd${i}`} className="font-mono text-[11px] text-muted mt-[3px]">{r.project_dir}</div>);
-    if (typeof r.path === "string") items.push(<div key={`p${i}`} className="font-mono text-[11px] text-muted mt-[3px]">{r.path}</div>);
     if (Array.isArray(r.changed_files) && r.changed_files.length) {
-      const cf = r.changed_files;
-      items.push(<div key={`cf${i}`} className="text-[11.5px] text-muted mt-1">{t("tasks.changedFiles", { count: cf.length, files: cf.slice(0, 8).join("、") + (cf.length > 8 ? " …" : "") })}</div>);
+      notes.push(t("tasks.changedFiles", { count: r.changed_files.length, files: r.changed_files.slice(0, 8).join("、") + (r.changed_files.length > 8 ? " …" : "") }));
     }
-  });
-  if (!items.length) return null;
+  }
+  if (!rows.length && !notes.length) return null;
   return (
     <div>
-      <div className="text-[12px] text-muted font-semibold mb-2.5">{t("tasks.results")}</div>
-      <div className="flex flex-col gap-1">{items}</div>
+      <SecLabel>{t("tasks.results")}</SecLabel>
+      <div className="flex flex-col gap-[7px]">
+        {rows.map((r, i) => (
+          <div key={i} className="flex items-center gap-[10px] bg-card border border-border rounded-[10px] px-[12px] py-[9px]">
+            <span className="w-7 h-7 flex-none rounded-[7px] bg-chip text-muted flex items-center justify-center text-[10px] font-semibold">{r.ext}</span>
+            <div className="flex-1 min-w-0">
+              <div className="text-[12.5px] truncate">{r.name}</div>
+              {r.path ? <div className="text-[10.5px] text-faint font-mono truncate">{r.path}</div> : null}
+            </div>
+            {r.url && isImg(r.url) ? (
+              <button className="w-[26px] h-[26px] flex-none flex items-center justify-center border border-border bg-transparent text-muted rounded-[7px] hover:border-orange hover:text-orange-text"
+                title={t("tasks.shotOpen")} onClick={() => openPreview(r.url!, r.name)}><IconSearch size={13} /></button>
+            ) : null}
+            {r.url ? (
+              <a href={r.url} target="_blank" rel="noopener noreferrer" title={t("tasks.downloadResult")}
+                className="w-[26px] h-[26px] flex-none flex items-center justify-center border border-border text-muted rounded-[7px] hover:border-orange hover:text-orange-text"><IconFolder size={13} /></a>
+            ) : null}
+          </div>
+        ))}
+        {notes.map((n, i) => <div key={`n${i}`} className="text-[11.5px] text-muted leading-[1.6]">{n}</div>)}
+      </div>
     </div>
   );
 }
