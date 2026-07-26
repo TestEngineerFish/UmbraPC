@@ -10,6 +10,7 @@ import { WorkflowTool } from "./WorkflowTool";
 import { PhrasesTool } from "./PhrasesTool";
 import { VaultTool } from "./VaultTool";
 import { hasClip, hasShot, hasLauncher, hasVault } from "./bridges";
+import * as legacy from "../../app/shell";
 import { IconClip, IconShot, IconRocket, IconFlow, IconPhrase, IconLock } from "../../components/icons";
 
 // 二级页标识。
@@ -38,10 +39,24 @@ const ITEMS: { key: ToolKey; group: GroupKey; labelKey: string; descKey: string;
   { key: "vault", group: "security", labelKey: "settings.vault", descKey: "tools.vaultDesc", icon: IconLock, avail: hasVault, full: true },
 ];
 
+// 别处（设置页的快捷键总览）要求「跳到某个工具的详情页」时，先把目标记在这里再切一级导航。
+// 用模块级变量而不是 props/context：Tools 是路由式挂载的，切页时组件重建，
+// 值取一次就清掉——否则下次手点进「工具」还会被弹回上次跳转的那一页。
+let pendingTool: ToolKey | null = null;
+export function gotoTool(key: string): void {
+  pendingTool = key as ToolKey;
+  legacy.goNav("tools");
+}
+function takePendingTool(): ToolKey | null {
+  const k = pendingTool;
+  pendingTool = null;
+  return k;
+}
+
 export function Tools() {
   const { t } = useTranslation();
   const items = ITEMS.filter((i) => i.avail);
-  const [cur, setCur] = useState<ToolKey>(items[0]?.key || "clipboard");
+  const [cur, setCur] = useState<ToolKey>(() => takePendingTool() || items[0]?.key || "clipboard");
   const active = items.some((i) => i.key === cur) ? cur : items[0]?.key;
   const meta = items.find((i) => i.key === active);
   const HeadIcon = meta?.icon;

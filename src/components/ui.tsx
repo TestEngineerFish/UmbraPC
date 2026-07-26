@@ -2,29 +2,6 @@
 // 抽出来是因为「工具」模块从设置页拆分后，两边需要完全一致的视觉与交互。
 import type React from "react";
 
-// 一张设置卡：标题 + 可选副标题 + 纵向排列的若干行。
-export function Card({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
-  return (
-    <section className="bg-card border border-border rounded-xl p-[16px_18px]">
-      <div className="font-semibold mb-[14px]">
-        {title}
-        {sub ? <span className="text-[12px] text-muted font-normal ml-1.5">{sub}</span> : null}
-      </div>
-      <div className="flex flex-col gap-[13px]">{children}</div>
-    </section>
-  );
-}
-
-// 一行设置项：左侧固定宽度标签 + 右侧内容。
-export function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-[14px]">
-      <label className="w-[120px] text-[13px] text-muted shrink-0">{label}</label>
-      {children}
-    </div>
-  );
-}
-
 // 开关按钮：on 时滑块靠右并变橙色。
 export function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   return (
@@ -34,14 +11,6 @@ export function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   );
 }
 
-// 连接状态小圆点：在线绿 / 连接中黄 / 离线红。
-export function StatusDot({ kind }: { kind: "online" | "connecting" | "offline" }) {
-  const color = kind === "online" ? "bg-success" : kind === "connecting" ? "bg-warning" : "bg-danger";
-  return <span className={`w-2 h-2 rounded-full ${color}`} />;
-}
-
-// 通用输入框类名（占满剩余宽度）。
-export const input = "flex-1 border border-border bg-bg text-text rounded-lg px-[11px] py-[7px] text-[13px] outline-none";
 // 以下三个按钮类名统一带 flex-none + whitespace-nowrap：中文按钮文字只有三四个字时，
 // 在 flex 行里默认可收缩，宽度刚好等于内容就会从中间断成两行。
 // 通用次要按钮类名（悬停转橙描边）。
@@ -80,7 +49,8 @@ export function SettingRow({ label, children }: { label: string; children: React
 }
 
 // 行内的灰色说明文字（占满标签与右侧操作之间的空档）。
-export function RowHint({ children }: { children: React.ReactNode }) {
+// children 可省：没有说明文字时它就只当撑开的空档用，把右侧的控件顶到行尾。
+export function RowHint({ children }: { children?: React.ReactNode }) {
   return <div className="flex-1 min-w-0 text-[12.5px] text-muted">{children}</div>;
 }
 
@@ -124,6 +94,34 @@ export function Pill({ tone = "neutral", dot, mono, children }: { tone?: PillTon
       {dot ? <span className={`w-[6px] h-[6px] rounded-full flex-none ${dotSkin[tone]}`} /> : null}
       {children}
     </span>
+  );
+}
+
+// 分段选择器（连体单选按钮）：设置页的权限档位、编码权限档位都是这个形状。
+// 两处注意：① 分隔线只能加在「除最后一项」上，border-r 和无 border-r 属同类工具类、
+// 靠 className 顺序覆盖不了；② 中文档位名一律 flex-none + nowrap，否则「直接执行」会被压断。
+// tone 决定选中态的底色：accent=橙（正向档位），danger=红（拒绝这类），neutral=卡片底（默认档位）。
+export function Segmented<T extends string>({ value, options, onChange }: {
+  value: T;
+  options: { v: T; label: string; tone?: "accent" | "danger" | "neutral" }[];
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex-none flex border border-border rounded-[8px] overflow-hidden">
+      {options.map((o, i) => {
+        const on = value === o.v;
+        const skin = !on ? "bg-transparent text-text hover:bg-hover"
+          : o.tone === "danger" ? "bg-danger text-white font-semibold"
+          : o.tone === "neutral" ? "bg-chip text-text font-semibold"
+          : "bg-orange text-white font-semibold";
+        return (
+          <button key={o.v} onClick={() => onChange(o.v)}
+            className={`flex-none whitespace-nowrap px-[12px] py-[6px] text-[12.5px] cursor-pointer ${i < options.length - 1 ? "border-r border-border" : ""} ${skin}`}>
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

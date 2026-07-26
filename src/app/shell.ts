@@ -114,8 +114,9 @@ const SVG = {
 
 function navItem(key: Nav, label: string, svg: string): string {
   const active = state.nav === key;
-  const style = `display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;font-size:13.5px;cursor:pointer;border:none;width:100%;text-align:left;font-family:inherit;white-space:nowrap;background:${active ? "var(--orange)" : "transparent"};color:${active ? "#fff" : "rgba(255,255,255,.72)"};font-weight:${active ? 600 : 500};`;
-  return `<button data-act="nav-${key}" style="${style}">${svg}<span>${label}</span></button>`;
+  const style = `display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;font-size:13px;cursor:pointer;border:none;width:100%;text-align:left;font-family:inherit;white-space:nowrap;background:${active ? "var(--orange)" : "transparent"};color:${active ? "#fff" : "rgba(255,255,255,.7)"};font-weight:${active ? 600 : 500};`;
+  // 图标套一层 17px 定宽的 flex 壳：各图标的实际墨迹宽度不一样，不套壳文字起点会参差。
+  return `<button data-act="nav-${key}" style="${style}"><span style="display:flex;width:17px;justify-content:center;flex:none;">${svg}</span><span>${label}</span></button>`;
 }
 
 
@@ -130,7 +131,7 @@ function titlebar(): string {
       <span style="width:12px;height:12px;border-radius:999px;background:#FEBC2E;"></span>
       <span style="width:12px;height:12px;border-radius:999px;background:#28C840;"></span>
     </div>
-    <span style="font-weight:600;font-size:13px;letter-spacing:.2px;">Umbra</span>
+    <span style="font-weight:600;font-size:13px;">Umbra</span>
     <div style="flex:1;"></div>
     <button data-act="theme" title="${t("conn.toggleTheme")}" style="-webkit-app-region:no-drag;display:flex;align-items:center;justify-content:center;width:28px;height:24px;border:1px solid var(--border);background:var(--card);border-radius:7px;color:var(--muted);cursor:pointer;">${themeIcon}</button>
     ${connBadge()}
@@ -143,7 +144,7 @@ function connBadge(): string {
   const soft = s === "online" ? "var(--success-soft)" : s === "connecting" ? "var(--warning-soft)" : "var(--danger-soft)";
   const label = s === "online" ? t("conn.onlineWithServer", { server: chat.serverLabel() }) : s === "connecting" ? t("conn.connecting") : t("conn.offline");
   return `<div style="display:flex;align-items:center;gap:7px;padding:3px 10px;border:1px solid var(--border);border-radius:999px;background:var(--card);">
-      <span style="width:8px;height:8px;border-radius:999px;background:${color};box-shadow:0 0 0 3px ${soft};"></span>
+      <span style="width:7px;height:7px;border-radius:999px;background:${color};box-shadow:0 0 0 3px ${soft};"></span>
       <span style="font-size:11.5px;color:var(--muted);">${label}</span>
     </div>`;
 }
@@ -166,10 +167,10 @@ function tokenPlaceholder(): string {
 
 function sidebar(): string {
   return `
-  <nav style="width:180px;flex:none;background:var(--nav);display:flex;flex-direction:column;padding:14px 10px;gap:3px;">
+  <nav style="width:176px;flex:none;background:var(--nav);display:flex;flex-direction:column;padding:14px 10px;gap:2px;">
     <div style="display:flex;align-items:center;gap:9px;padding:4px 6px 14px;">
-      <span style="width:26px;height:26px;border-radius:7px;background:var(--orange);color:#fff;font-weight:700;font-size:15px;display:flex;align-items:center;justify-content:center;">U</span>
-      <span style="color:#fff;font-weight:600;font-size:14.5px;">Umbra</span>
+      <span style="width:25px;height:25px;border-radius:7px;background:var(--orange);color:#fff;font-weight:700;font-size:14px;display:flex;align-items:center;justify-content:center;flex:none;">U</span>
+      <span style="color:#fff;font-weight:600;font-size:14px;">Umbra</span>
     </div>
     ${navItem("chat", t("nav.chat"), SVG.chat)}
     ${navItem("tasks", t("nav.tasks"), SVG.tasks)}
@@ -182,8 +183,8 @@ function sidebar(): string {
     ${navItem("settings", t("nav.settings"), SVG.settings)}
     <div style="flex:1;"></div>
     <div style="border-top:1px solid rgba(255,255,255,.08);padding:12px 6px 2px;">
-      <div style="color:rgba(255,255,255,.9);font-size:12px;font-weight:500;">MacBook-Pro-2.local</div>
-      <div style="color:rgba(255,255,255,.42);font-size:11px;margin-top:2px;">macOS · ${t("sidebar.thisDevice")}</div>
+      <div style="color:rgba(255,255,255,.88);font-size:12px;font-weight:500;">MacBook-Pro-2.local</div>
+      <div style="color:rgba(255,255,255,.4);font-size:11px;margin-top:2px;">macOS · ${t("sidebar.thisDevice")}</div>
     </div>
   </nav>`;
 }
@@ -527,6 +528,12 @@ function setNav(nav: Nav): void {
     loadShotSettings();
   }
   bridgeNav(nav); // 同步给 React（会触发重渲染）
+}
+
+// 供 React 侧主动切页用（设置页的快捷键总览要跳到「工具」那一级导航）。
+// 走同一个 setNav，所以任务/灵感轮询的启停、以及同步给 React 的那一步都不会漏。
+export function goNav(nav: Nav): void {
+  setNav(nav);
 }
 
 // 只处理仍由 legacy HTML 承载的 chrome：侧边栏 nav 与标题栏 theme（其余页面已 React 化，各自处理事件）。
