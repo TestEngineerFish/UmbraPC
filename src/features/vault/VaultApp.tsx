@@ -1,6 +1,7 @@
-// 密码保险箱 界面（独立窗口）。视觉按 ClaudeDesign 稿；数据/IPC 走真实后端。
+// 密码保险箱 界面。视觉按 ClaudeDesign 稿；数据/IPC 走真实后端。
 // 初始化/解锁 → 身份切换 / 可编辑类型(右键菜单) / 列表搜索 / 模块化控件详情(查看/编辑) / 附件 / 密码生成器 / 深浅色切换。
-import { CSSProperties, useCallback, useEffect, useRef, useState } from "react";
+// 两种承载方式：独立窗口（vault-entry）与嵌在主窗口「工具 → 密码保险箱」右侧（embedded）。
+import { CSSProperties, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 interface VaultInfo { id: string; name: string; owner: string; icon: string; order: number }
 interface VType { id: string; name: string; icon: string; order: number }
@@ -77,7 +78,12 @@ const CSS = `
 .v-scale:hover{transform:scale(1.2)}
 `;
 
-export function VaultApp() {
+// 嵌入模式开关：嵌在主窗口右侧时为 true。深浅色跟随主窗口（不再自己切），
+// 所以各处右上角的「☀️/🌙」按钮在嵌入时直接不渲染。用 context 传，免得从
+// VaultApp 一路把 prop 串到 Setup / Unlock / Center / Main。
+const EmbedCtx = createContext(false);
+
+export function VaultApp({ embedded = false }: { embedded?: boolean }) {
   const [theme, setTheme] = useState(() => (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
   const [ready, setReady] = useState(false);
   const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "", syncConfigured: false, syncRev: 0 });
@@ -97,16 +103,21 @@ export function VaultApp() {
   const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
 
   return (
-    <div className="v-root" data-theme={theme} style={{ height: "100vh", background: "var(--bg)", color: "var(--text)", fontSize: 14, fontFamily: '-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif' }}>
-      <style>{CSS}</style>
-      {!ready ? null : !st.exists ? <Setup onDone={refresh} theme={theme} onTheme={toggleTheme} />
-        : !st.unlocked ? <Unlock onDone={refresh} st={st} theme={theme} onTheme={toggleTheme} />
-          : <Main onLock={async () => { await api.lock(); await refresh(); }} st={st} onStatus={refresh} theme={theme} onTheme={toggleTheme} />}
-    </div>
+    // 嵌入时不自己声明 data-theme（继承主窗口的），高度也从整屏改成填满父容器。
+    <EmbedCtx.Provider value={embedded}>
+      <div className="v-root" data-theme={embedded ? undefined : theme} style={{ height: embedded ? "100%" : "100vh", background: "var(--bg)", color: "var(--text)", fontSize: 14, fontFamily: '-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif' }}>
+        <style>{CSS}</style>
+        {!ready ? null : !st.exists ? <Setup onDone={refresh} theme={theme} onTheme={toggleTheme} />
+          : !st.unlocked ? <Unlock onDone={refresh} st={st} theme={theme} onTheme={toggleTheme} />
+            : <Main onLock={async () => { await api.lock(); await refresh(); }} st={st} onStatus={refresh} theme={theme} onTheme={toggleTheme} />}
+      </div>
+    </EmbedCtx.Provider>
   );
 }
 
+// 深浅色切换按钮；嵌入主窗口时主题由主窗口统一控制，这里不渲染。
 function ThemeBtn({ theme, onTheme, style }: { theme: string; onTheme: () => void; style?: CSSProperties }) {
+  if (useContext(EmbedCtx)) return null;
   return <button className="v-ho" onClick={onTheme} title="切换深浅色" style={{ border: "1px solid var(--border)", background: "var(--bg)", borderRadius: 8, width: 28, height: 24, fontSize: 13, cursor: "pointer", color: "var(--text)", ...style }}>{theme === "dark" ? "☀️" : "🌙"}</button>;
 }
 

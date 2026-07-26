@@ -22,7 +22,7 @@ const ITEMS: { key: ToolKey; labelKey: string; descKey: string; emoji: string; a
   { key: "launcher", labelKey: "settings.launcher", descKey: "tools.launcherDesc", emoji: "🚀", accent: "#E8590C", avail: hasLauncher },
   { key: "workflow", labelKey: "settings.launcherWorkflows", descKey: "tools.workflowDesc", emoji: "🧩", accent: "#27AE60", avail: hasLauncher, full: true },
   { key: "phrases", labelKey: "settings.phrases", descKey: "tools.phrasesDesc", emoji: "💬", accent: "#0E9AA7", avail: hasLauncher },
-  { key: "vault", labelKey: "settings.vault", descKey: "tools.vaultDesc", emoji: "🔐", accent: "#B7791F", avail: hasVault },
+  { key: "vault", labelKey: "settings.vault", descKey: "tools.vaultDesc", emoji: "🔐", accent: "#B7791F", avail: hasVault, full: true },
 ];
 
 export function Tools() {
@@ -64,10 +64,11 @@ export function Tools() {
         })}
       </nav>
 
-      {/* 铺满型的二级页（工作流编辑器）自己管布局：不加内边距、不加标题头，直接给满整块 */}
+      {/* 铺满型的二级页（工作流编辑器、密码保险箱）自己管布局：不加内边距、不加标题头，直接给满整块 */}
       {meta?.full ? (
         <div className="flex-1 min-w-0 min-h-0">
           {active === "workflow" ? <WorkflowTool /> : null}
+          {active === "vault" ? <VaultTool /> : null}
         </div>
       ) : (
         <div id="scroll-main" className="flex-1 min-w-0 overflow-y-auto p-[22px_26px]">
@@ -88,7 +89,6 @@ export function Tools() {
             {active === "screenshot" ? <ScreenshotTool /> : null}
             {active === "launcher" ? <LauncherTool /> : null}
             {active === "phrases" ? <PhrasesTool /> : null}
-            {active === "vault" ? <VaultTool /> : null}
           </div>
         </div>
       )}
