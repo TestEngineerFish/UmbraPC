@@ -56,6 +56,9 @@ export interface UmbraConfig {
   launcherMigratedV2?: boolean;      // 迁移标记 V2：文件夹书签 已转成工作流
   launcherToolsSeeded?: boolean;     // 种子标记：内置工具(编解码/计算/换算)已作为默认工作流写入
   locale?: string;               // 界面语言（zh-CN | en）；缺省时由主进程按系统语言初始化
+  // ── 外观 / 常驻 ──
+  // 菜单栏（macOS 状态栏）图标。关掉之后关窗就是真退出 —— 否则应用会变成既没窗口也没入口的幽灵。
+  trayEnabled: boolean;
 }
 
 // 剪贴板历史的分类保留时长（单位：小时）。
@@ -225,6 +228,7 @@ function defaults(configDir: string): UmbraConfig {
     launcherWorkflows: [],
     launcherPrefabs: [],
     launcherMaxResults: Number(process.env.UMBRA_LAUNCHER_MAX_RESULTS || 12),
+    trayEnabled: envBool("UMBRA_TRAY_ENABLED", true),
     launcherFallbackAssistant: envBool("UMBRA_LAUNCHER_FALLBACK_ASSISTANT", true),
     launcherScriptsMigrated: false,
   };

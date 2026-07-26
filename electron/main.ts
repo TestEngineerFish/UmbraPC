@@ -43,6 +43,12 @@ const PROVIDERS_TEMPLATE = JSON.stringify(
   2,
 );
 
+// 开机自启只在 macOS / Windows 上有实现；Linux 下 Electron 的 setLoginItemSettings 是空操作，
+// 摆一个点了没反应的开关比不摆更糟，所以这里报不支持、界面上整行不出现。
+function loginItemSupported(): boolean {
+  return process.platform === "darwin" || process.platform === "win32";
+}
+
 let store: ConfigStore;
 let executor: TaskExecutor;
 let clipboard: ClipboardManager;
@@ -121,11 +127,15 @@ function createWindow(): void {
   // 关窗默认只隐藏（macOS），应用继续后台跑（设备引擎/托盘/⌥Space 都还在）；
   // Alfred 式 Dock 策略：窗口收起时 Dock 图标一并隐藏，showMainWindow 唤起时再恢复——
   // 保证「窗口可见 ⇔ Dock 图标可见」的确定性行为。只有显式退出（quitting=true）才真正销毁。
+  // 关掉了菜单栏图标就不能再「只隐藏」——那样应用既没窗口也没入口，成了只能强杀的幽灵。
+  // 所以没有托盘时关窗就是真退出。
   win.on("close", (e) => {
-    if (process.platform === "darwin" && !quitting) {
+    if (process.platform === "darwin" && !quitting && tray) {
       e.preventDefault();
       win.hide();
       app.dock?.hide();
+    } else if (!tray) {
+      quitting = true;
     }
   });
   win.on("closed", () => {
@@ -147,6 +157,13 @@ function showMainWindow(): void {
   } else {
     createWindow();
   }
+}
+
+// 销毁菜单栏图标（设置里关掉「菜单栏图标」时调用）。
+function destroyTray(): void {
+  if (!tray) return;
+  tray.destroy();
+  tray = null;
 }
 
 // 菜单栏（状态栏）托盘图标：关窗后仍可从这里再次唤起。
@@ -188,6 +205,14 @@ function loadRenderer(win: BrowserWindow): void {
 // 返回给界面的配置：隐藏 token 明文，仅暴露是否已设置。
 function publicConfig(c: UmbraConfig) {
   return {
+    // openAtLogin 现场读系统设置而不是存在自己的配置里：用户可能在系统「登录项」里直接删掉，
+    // 存一份就会和系统对不上。Linux 上 Electron 不支持，直接报 false 并在界面上藏掉这一行。
+    openAtLogin: loginItemSupported() ? app.getLoginItemSettings().openAtLogin : false,
+    loginItemSupported: loginItemSupported(),
+    trayEnabled: c.trayEnabled !== false,
+    // 配置目录与日志目录：设置页「关于」里给一个「打开」按钮，排查问题时不用现问路径。
+    userDataDir: app.getPath("userData"),
+    logsDir: logsDir(),
     serverUrl: c.serverUrl,
     deviceId: c.deviceId,
     deviceName: c.deviceName,
@@ -223,6 +248,10 @@ function registerIpc(): void {
     // 重建能力注册表，让新配置（如电脑动作授权策略）对后续任务立即生效，无需重连。
     await executor.refreshRegistry().catch(() => undefined);
     const cfg = store.get();
+    // 菜单栏图标即时生效：开就建、关就销毁。别等重启，用户点了开关就该看到状态栏的变化。
+    if (patch.trayEnabled !== undefined) {
+      if (cfg.trayEnabled !== false) createTray(); else destroyTray();
+    }
     const nextLocale = resolveLocale(cfg.locale);
     if (patch.locale && nextLocale !== prevLocale) {
       setMainLocale(nextLocale);
@@ -253,11 +282,19 @@ function registerIpc(): void {
 
   // macOS 权限：读取真实授权状态。
   ipcMain.handle("umbra:getPermissions", () => {
-    if (process.platform !== "darwin") return { accessibility: true, screen: "granted" };
+    if (process.platform !== "darwin") return { accessibility: true, screen: "granted", microphone: "granted" };
     return {
       accessibility: systemPreferences.isTrustedAccessibilityClient(false),
       screen: systemPreferences.getMediaAccessStatus("screen"),
+      microphone: systemPreferences.getMediaAccessStatus("microphone"),
     };
+  });
+  // 开机自启：系统设置才是唯一真相，所以只写不读（读走 getConfig → publicConfig）。
+  // openAsHidden 让它登录后静默启动，不弹窗糊在用户脸上。
+  ipcMain.handle("umbra:setLoginItem", (_e, on: boolean) => {
+    if (!loginItemSupported()) return false;
+    app.setLoginItemSettings({ openAtLogin: Boolean(on), openAsHidden: true });
+    return app.getLoginItemSettings().openAtLogin;
   });
   // computer-use 紧急停止（请求中止 operate 循环）。
   ipcMain.handle("umbra:computerStop", () => {
@@ -330,6 +367,7 @@ function registerIpc(): void {
     const urls: Record<string, string> = {
       screen: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
       accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+      microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
     };
     return shell.openExternal(urls[target] || urls.screen);
   });
@@ -350,7 +388,7 @@ app.whenReady().then(async () => {
   executor = new TaskExecutor(store);
   registerIpc();
   createWindow();
-  createTray(); // 菜单栏常驻图标：关窗后仍可唤起
+  if (store.get().trayEnabled !== false) createTray(); // 菜单栏常驻图标：关窗后仍可唤起
   pruneLogs();
   appendLog(`Umbra 启动 v${app.getVersion()} (${process.platform})`);
 

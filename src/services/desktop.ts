@@ -19,6 +19,13 @@ interface PublicConfig {
   computerSkillPolicy: Record<string, "allow" | "deny">;
   disabledProviders: string[];
   locale: string;
+  // 开机自启：现场读系统设置（不落配置文件），Linux 下不支持 → loginItemSupported=false。
+  openAtLogin: boolean;
+  loginItemSupported: boolean;
+  trayEnabled: boolean;
+  // 配置目录与日志目录（设置页「关于」里给「打开」按钮用）。
+  userDataDir: string;
+  logsDir: string;
 }
 
 // providers.json 里的一条自定义程序。
@@ -41,8 +48,9 @@ interface UmbraBridge {
   cancelTask(taskId: string): Promise<boolean>;
   onTaskProgress(cb: (p: { taskId: string; message: string; extra: Record<string, unknown> }) => void): () => void;
   onConfirmRequest(cb: (c: { taskId: string; summary: string; detail: Record<string, unknown> }) => void): () => void;
-  getPermissions(): Promise<{ accessibility: boolean; screen: string }>;
+  getPermissions(): Promise<{ accessibility: boolean; screen: string; microphone: string }>;
   openPrivacy(target: string): Promise<unknown>;
+  setLoginItem(on: boolean): Promise<boolean>;
   openPath(path: string): Promise<string>;
   computerStop(): Promise<unknown>;
   pauseShortcuts(): Promise<void>;
@@ -61,6 +69,7 @@ interface UmbraBridge {
 export interface Permissions {
   accessibility: boolean;
   screen: string;
+  microphone: string;
 }
 declare global {
   interface Window {
@@ -69,7 +78,7 @@ declare global {
 }
 
 let config: PublicConfig | null = null;
-let perms: Permissions = { accessibility: false, screen: "not-determined" };
+let perms: Permissions = { accessibility: false, screen: "not-determined", microphone: "not-determined" };
 let customProviders: CustomProviderCfg[] = [];
 
 export const isDesktop = (): boolean => !!window.umbra?.isDesktop;
@@ -114,6 +123,20 @@ export function openPrivacy(target: string): void {
   if (isDesktop()) window.umbra!.openPrivacy(target);
 }
 
+// 在系统文件管理器里打开一个目录/文件。返回 "" 表示成功，非空是错误信息。
+export async function openPath(p: string): Promise<string> {
+  if (!isDesktop() || !p) return "";
+  return await window.umbra!.openPath(p);
+}
+
+// 开机自启：写进系统的「登录项」。返回写完后的实际状态（系统可能拒绝）。
+export async function setLoginItem(on: boolean): Promise<boolean> {
+  if (!isDesktop()) return false;
+  const v = await window.umbra!.setLoginItem(on);
+  await refreshConfig();
+  return v;
+}
+
 // computer-use 紧急停止。
 export function computerStop(): void {
   if (isDesktop()) window.umbra!.computerStop();
@@ -150,9 +173,21 @@ export async function initDesktop(onUpdate: (kind: string) => void): Promise<voi
   transport.start(onUpdate);
 }
 
+// 只重读一遍主进程的公开配置，不做任何重连。开机自启这类「写完要回读实际状态」的场景用。
+export async function refreshConfig(): Promise<void> {
+  if (!isDesktop()) return;
+  config = await window.umbra!.getConfig();
+}
+
+// 纯外观类配置：改了它们没有任何理由去断开设备连接。
+const COSMETIC_KEYS = new Set(["trayEnabled"]);
+
 // 配置变更：存到主进程（token/devicename），刷新本地缓存，重连聊天与设备传输层。
+// 只改外观类字段时不重连 —— 点一下「菜单栏图标」把设备连接踹掉是没道理的。
 export async function pushConfig(patch: Record<string, unknown>): Promise<void> {
   if (!isDesktop()) return;
   config = await window.umbra!.setConfig(patch);
+  const keys = Object.keys(patch);
+  if (keys.length && keys.every((k) => COSMETIC_KEYS.has(k))) return;
   transport.reconnect();
 }

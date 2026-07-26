@@ -26,6 +26,8 @@ contextBridge.exposeInMainWorld("umbra", {
   // macOS 权限
   getPermissions: () => ipcRenderer.invoke("umbra:getPermissions"),
   openPrivacy: (target: string) => ipcRenderer.invoke("umbra:openPrivacy", target),
+  // 开机自启：只写；当前状态从 getConfig().openAtLogin 读（系统设置才是唯一真相）。
+  setLoginItem: (on: boolean) => ipcRenderer.invoke("umbra:setLoginItem", on),
   openPath: (path: string) => ipcRenderer.invoke("umbra:openPath", path),
   // computer-use 紧急停止
   computerStop: () => ipcRenderer.invoke("umbra:computerStop"),

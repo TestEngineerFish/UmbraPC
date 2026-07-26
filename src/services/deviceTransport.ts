@@ -27,6 +27,10 @@ export interface DeviceState {
   serverUrl: string;
   providers: ProviderManifest[];
   recentTasks: TaskLog[];
+  // 下面三个给设置页的「设备与引擎」用。0 = 还没有数据。
+  registeredAt: number;      // 本次注册成功的时刻（时间戳）→ 算「已注册多久」
+  lastHeartbeatAt: number;   // 最近一次收到 heartbeat_ack 的时刻 → 算「心跳 N 秒前」
+  latencyMs: number;         // 最近一次心跳的往返耗时
 }
 
 let ws: WebSocket | null = null;
@@ -41,6 +45,13 @@ let backoff = 2000;
 let registeredThisSession = false;
 let reconnectTimer: number | undefined;
 let heartbeatTimer: number | undefined;
+// 心跳往返统计：发出去时记时刻，收到 heartbeat_ack 时算差值。
+// 这是全应用唯一有真实往返数据的地方（聊天那条 WS 没有 ping/pong 协议），
+// 所以设置页的延迟/心跳都读这里。
+let heartbeatSentAt = 0;
+let lastHeartbeatAt = 0;
+let latencyMs = 0;
+let registeredAt = 0;
 const pendingResults = new Map<string, unknown>();
 let notify: (kind: string) => void = () => {};
 
@@ -60,7 +71,11 @@ function setStatus(s: DeviceState["status"]): void {
 }
 
 export function getState(): DeviceState {
-  return { status, deviceId, deviceName, serverUrl: getServerUrl(), providers, recentTasks: recentTasks.slice(0, 20) };
+  return {
+    status, deviceId, deviceName, serverUrl: getServerUrl(), providers,
+    recentTasks: recentTasks.slice(0, 20),
+    registeredAt, lastHeartbeatAt, latencyMs,
+  };
 }
 export function getLogs(): string[] {
   return logs;
@@ -101,6 +116,11 @@ export function reconnect(): void {
 function connect(): void {
   setStatus("connecting");
   registeredThisSession = false;
+  // 断了就把注册时刻与心跳统计清零：留着旧值会让界面显示「已注册 3 小时」而其实刚断线。
+  registeredAt = 0;
+  lastHeartbeatAt = 0;
+  latencyMs = 0;
+  heartbeatSentAt = 0;
   log(`连接服务端 ${wsUrl()} …`);
   let sock: WebSocket;
   try {
@@ -178,6 +198,7 @@ function onMessage(raw: string): void {
   switch (msg.type) {
     case "registered":
       registeredThisSession = true;
+      registeredAt = Date.now();
       backoff = 2000;
       log(`✓ 已注册为 ${deviceName}（${deviceId}）`);
       setStatus("online");
@@ -195,6 +216,11 @@ function onMessage(raw: string): void {
       window.umbra!.cancelTask(msg.task_id || "").catch((e) => log(`取消任务异常：${String(e)}`));
       break;
     case "heartbeat_ack":
+      // 一来一回算延迟。heartbeatSentAt 为 0 说明这条 ack 没有对应的发送记录（重连边界），跳过统计。
+      lastHeartbeatAt = Date.now();
+      if (heartbeatSentAt) latencyMs = lastHeartbeatAt - heartbeatSentAt;
+      heartbeatSentAt = 0;
+      notify("state");
       break;
     case "error":
       log(`服务端错误：${msg.message}`);
@@ -207,6 +233,7 @@ function onMessage(raw: string): void {
 function startHeartbeat(): void {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   heartbeatTimer = window.setInterval(() => {
+    heartbeatSentAt = Date.now();
     sendJson({ type: "heartbeat" });
     if (pendingResults.size > 0) flushPending();
   }, 30000);

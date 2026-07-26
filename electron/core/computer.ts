@@ -183,6 +183,21 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
     return { key: keys };
   }
 
+  if (skill === "drag") {
+    // 按下 → 移动 → 松开。nut-js 的 drag 吃一条路径（Point 数组），两点即「从 A 拖到 B」。
+    // 坐标与 click 一致：给 x/y 是物理像素；给 nx/ny 是 0–1000 的归一化坐标（跨分辨率复用同一套脚本）。
+    const sz = await screen.width().then(async (w: number) => ({ w, h: await screen.height() }));
+    const norm = params.nx !== undefined || params.ny !== undefined;
+    const fx = norm ? Math.round((Number(params.nx) / 1000) * sz.w) : Number(params.x);
+    const fy = norm ? Math.round((Number(params.ny) / 1000) * sz.h) : Number(params.y);
+    const tx = norm ? Math.round((Number(params.tnx) / 1000) * sz.w) : Number(params.tx);
+    const ty = norm ? Math.round((Number(params.tny) / 1000) * sz.h) : Number(params.ty);
+    if ([fx, fy, tx, ty].some((v) => Number.isNaN(v))) throw new Error("drag 需要 x,y,tx,ty 或 nx,ny,tnx,tny(0-1000)");
+    await mouse.setPosition(new Point(fx, fy));
+    await mouse.drag([new Point(fx, fy), new Point(tx, ty)]);
+    await report(mt("electron.dragged", { fx, fy, tx, ty }, getMainLocale()), {});
+    return { dragged: [fx, fy, tx, ty] };
+  }
   if (skill === "scroll") {
     const amount = Number(params.amount ?? 5);
     const dir = String(params.direction || "down").toLowerCase();
@@ -205,6 +220,7 @@ const SKILLS: Manifest["skills"] = {
   type: { description: "向当前焦点输入文本", params: { text: "要输入的文本" } },
   key: { description: "按下（组合）键", params: { keys: "按键数组，如 [cmd, a]" } },
   scroll: { description: "滚动", params: { direction: "up/down/left/right", amount: "档数，默认 5" } },
+  drag: { description: "从一点拖到另一点（拖拽）", params: { x: "起点横坐标", y: "起点纵坐标", tx: "终点横坐标", ty: "终点纵坐标" } },
 };
 
 // 注册 computer Provider（仅在总开关打开时；默认关 → 不注册 → AI 不可见不可用）。

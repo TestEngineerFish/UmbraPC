@@ -72,9 +72,21 @@ function Banner({ tone, children }: { tone: "danger" | "warning"; children: Reac
   );
 }
 
+// 把毫秒差说成人话（分 / 小时 / 天）。只给一个量级，设置页不需要「3 小时 12 分」这种精度。
+function humanDur(ms: number, t: (k: string, o?: Record<string, unknown>) => string): string {
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return t("settings.durJust");
+  if (min < 60) return t("settings.durMin", { n: min });
+  const h = Math.floor(min / 60);
+  if (h < 24) return t("settings.durHour", { n: h });
+  return t("settings.durDay", { n: Math.floor(h / 24) });
+}
+
 export function Settings() {
   const { t, i18n } = useTranslation();
   const [sec, setSec] = useState<SecKey>("general");
+  // 写完主进程配置后回读，需要显式触发一次重渲染（config 是模块级缓存，不是 state）。
+  const [, bump] = useState(0);
   const [server, setServer] = useState(getServerUrl());
   const [token, setToken] = useState("");
   const [device, setDevice] = useState(getDeviceName());
@@ -184,6 +196,19 @@ export function Settings() {
                   { v: "system" as const, label: t("settings.appearanceSystem") },
                 ]} />
               </SettingRow>
+              {/* 开机自启读的是系统「登录项」的真实状态；Linux 上 Electron 不支持，整行不出现。 */}
+              {isDesk && cfg?.loginItemSupported ? (
+                <SettingRow label={t("settings.bootLaunch")}>
+                  <RowHint>{t("settings.bootLaunchHint")}</RowHint>
+                  <Toggle on={!!cfg.openAtLogin} onClick={() => { void desktop.setLoginItem(!cfg.openAtLogin).then(() => bump((n) => n + 1)); }} />
+                </SettingRow>
+              ) : null}
+              {isDesk ? (
+                <SettingRow label={t("settings.tray")}>
+                  <RowHint>{t("settings.trayHint")}</RowHint>
+                  <Toggle on={cfg?.trayEnabled !== false} onClick={() => { void desktop.pushConfig({ trayEnabled: cfg?.trayEnabled === false }).then(() => bump((n) => n + 1)); }} />
+                </SettingRow>
+              ) : null}
             </RowsCard>
           ) : null}
 
@@ -217,7 +242,18 @@ export function Settings() {
             {isDesk ? (
               <RowsCard>
                 <SettingRow label={t("settings.engineStatus")}>
-                  <div className="flex-1 min-w-0"><Pill tone={connTone(engStatus)} dot>{engLabel}</Pill></div>
+                  <div className="flex-1 min-w-0 flex items-center gap-[10px]">
+                    <Pill tone={connTone(engStatus)} dot>{engLabel}</Pill>
+                    {/* 延迟与心跳来自设备 WebSocket 的 heartbeat / heartbeat_ack 往返 ——
+                        全应用只有这一处有真实往返数据（聊天那条 WS 没有 ping/pong 协议）。 */}
+                    {engStatus === "online" ? (
+                      <span className="flex-none whitespace-nowrap text-[11.5px] text-faint">
+                        {ds?.registeredAt ? `${t("settings.registeredFor", { human: humanDur(Date.now() - ds.registeredAt, t) })} · ` : ""}
+                        {ds?.latencyMs ? `${t("settings.latency", { ms: ds.latencyMs })} · ` : ""}
+                        {ds?.lastHeartbeatAt ? t("settings.heartbeatAgo", { sec: Math.round((Date.now() - ds.lastHeartbeatAt) / 1000) }) : t("settings.heartbeatNone")}
+                      </span>
+                    ) : null}
+                  </div>
                   <button className={btnGhost} onClick={() => legacy.goNav("logs")}>{t("settings.goLogs")}</button>
                 </SettingRow>
                 <SettingRow label={t("settings.availablePrograms")}>
@@ -245,6 +281,7 @@ export function Settings() {
             <RowsCard>
               <PermRow title={t("settings.accessibility")} desc={t("settings.accessibilityDesc")} granted={perms.accessibility} onGrant={() => desktop.openPrivacy("accessibility")} />
               <PermRow title={t("settings.screenCapture")} desc={t("settings.screenCaptureDesc")} granted={perms.screen === "granted"} onGrant={() => desktop.openPrivacy("screen")} />
+              <PermRow title={t("settings.microphone")} desc={t("settings.microphoneDesc")} granted={perms.microphone === "granted"} onGrant={() => desktop.openPrivacy("microphone")} />
               <SettingRow label={t("settings.computerUse")}>
                 <RowHint>{t("settings.computerUseDesc")}</RowHint>
                 <Toggle on={cuOn} onClick={() => legacy.toggleComputerUse()} />
@@ -310,6 +347,8 @@ export function Settings() {
                 ["type", t("settings.skillType")],
                 ["key", t("settings.skillKey")],
                 ["scroll", t("settings.skillScroll")],
+                ["drag", t("settings.skillDrag")],
+                ["screenshot", t("settings.skillScreenshot")],
               ] as const).map(([key, label]) => {
                 const cur = (skillPolicy[key] || "ask") as "ask" | "allow" | "deny";
                 const set = (v: "ask" | "allow" | "deny") => {
@@ -360,6 +399,18 @@ export function Settings() {
               </div>
               <button className={btnGhost}>{t("settings.checkUpdate")}</button>
             </section>
+          ) : null}
+          {sec === "about" && isDesk ? (
+            <RowsCard>
+              <SettingRow label={t("settings.configDir")}>
+                <div className="flex-1 min-w-0 font-mono text-[11.5px] text-muted truncate">{cfg?.userDataDir || ""}</div>
+                <button className={btnGhost} onClick={() => desktop.openPath(cfg?.userDataDir || "")}>{t("settings.openDir")}</button>
+              </SettingRow>
+              <SettingRow label={t("settings.logsDir")}>
+                <div className="flex-1 min-w-0 font-mono text-[11.5px] text-muted truncate">{cfg?.logsDir || ""}</div>
+                <button className={btnGhost} onClick={() => desktop.openPath(cfg?.logsDir || "")}>{t("settings.openDir")}</button>
+              </SettingRow>
+            </RowsCard>
           ) : null}
         </div>
       </main>
