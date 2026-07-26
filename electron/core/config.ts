@@ -34,6 +34,8 @@ export interface UmbraConfig {
   clipboardEnabled: boolean;     // 后台监听剪贴板开关
   clipboardShortcut: string;     // 唤起面板的全局快捷键（Electron Accelerator）
   clipboardAutoPaste: boolean;   // 选中历史后自动粘贴到前台应用（默认关，只复制）
+  clipboardKeep: ClipKeep;       // 分类保留时长（小时，0=永久不过期）；收藏项一律不过期
+  phrasesShortcut: string;       // 直接打开「常用语」分类的全局快捷键（与剪贴板共用同一个面板）
   // ── 截图 ──
   screenshotEnabled: boolean;    // 截图功能开关（关则不注册快捷键）
   screenshotShortcut: string;    // 截图全局快捷键
@@ -56,6 +58,15 @@ export interface UmbraConfig {
   youdaoAppKey: string;          // 有道翻译 appKey（Phase 2 用）
   youdaoSecret: string;          // 有道翻译 secret（Phase 2 用）
   locale?: string;               // 界面语言（zh-CN | en）；缺省时由主进程按系统语言初始化
+}
+
+// 剪贴板历史的分类保留时长（单位：小时）。
+// 0 = 永久保留（对应界面上那个分类的勾选框没勾）。参考 Alfred 的 Keep Plain Text / Images / File Lists。
+// 过期判定用 lastUsedAt（最近一次复制/粘贴的时间），所以一直在用的条目不会被清掉。
+export interface ClipKeep {
+  text: number;
+  image: number;
+  files: number;
 }
 
 // 文件夹书签：在快捷入口里用 app（缺省则系统默认）打开 path。
@@ -198,6 +209,10 @@ function defaults(configDir: string): UmbraConfig {
     clipboardEnabled: envBool("UMBRA_CLIPBOARD_ENABLED", true),
     clipboardShortcut: process.env.UMBRA_CLIPBOARD_SHORTCUT || "Command+Shift+V",
     clipboardAutoPaste: envBool("UMBRA_CLIPBOARD_AUTOPASTE", false),
+    // 默认全部永久保留：现有行为只有「非收藏 100 条」的容量上限，不主动按时间删东西；
+    // 要不要过期交给用户在工具页自己勾。
+    clipboardKeep: { text: 0, image: 0, files: 0 },
+    phrasesShortcut: process.env.UMBRA_PHRASES_SHORTCUT || "Command+Alt+V",
     screenshotEnabled: envBool("UMBRA_SCREENSHOT_ENABLED", true),
     screenshotShortcut: process.env.UMBRA_SCREENSHOT_SHORTCUT || "Command+Control+A",
     glmApiKey: process.env.UMBRA_GLM_API_KEY || "",

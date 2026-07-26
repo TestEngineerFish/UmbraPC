@@ -26,11 +26,20 @@ export interface LauncherAPI {
   setPhrases(phrases: Phrase[]): Promise<void>;
 }
 
+// 剪贴板历史分类保留时长（小时，0=永久保留）。
+export interface ClipKeep {
+  text: number;
+  image: number;
+  files: number;
+}
+
 // 剪贴板历史主进程桥（设置面用到的子集）。
 export interface ClipAPI {
-  getSettings(): Promise<{ autoPaste?: boolean }>;
+  getSettings(): Promise<{ autoPaste?: boolean; keep?: ClipKeep; phrasesShortcut?: string }>;
   setShortcut(acc: string): Promise<unknown>;
   setAutoPaste(on: boolean): Promise<unknown>;
+  setKeep(keep: ClipKeep): Promise<unknown>;
+  setPhrasesShortcut(acc: string): Promise<{ ok: boolean }>;
 }
 
 // 截图主进程桥（设置面用到的子集）。

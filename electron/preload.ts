@@ -90,13 +90,16 @@ contextBridge.exposeInMainWorld("umbraClip", {
   setEnabled: (enabled: boolean) => ipcRenderer.invoke("clip:setEnabled", enabled),
   setShortcut: (acc: string) => ipcRenderer.invoke("clip:setShortcut", acc),
   setAutoPaste: (on: boolean) => ipcRenderer.invoke("clip:setAutoPaste", on),
+  setKeep: (keep: unknown) => ipcRenderer.invoke("clip:setKeep", keep),
+  setPhrasesShortcut: (acc: string) => ipcRenderer.invoke("clip:setPhrasesShortcut", acc),
   onHistoryChanged: (cb: () => void) => {
     const l = () => cb();
     ipcRenderer.on("clipboard:history:changed", l);
     return () => ipcRenderer.removeListener("clipboard:history:changed", l);
   },
-  onPanelShown: (cb: () => void) => {
-    const l = () => cb();
+  // 参数是本次唤起要停留的分类（剪贴板快捷键 → all，常用语快捷键 → phrase）。
+  onPanelShown: (cb: (category: string) => void) => {
+    const l = (_e: unknown, category: string) => cb(category || "all");
     ipcRenderer.on("clipboard:panel:shown", l);
     return () => ipcRenderer.removeListener("clipboard:panel:shown", l);
   },

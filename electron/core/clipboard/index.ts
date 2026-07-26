@@ -1,12 +1,14 @@
 // 剪贴板历史编排：面板窗口 + 采集器 + 全局快捷键 + IPC。
 import * as path from "node:path";
-import { ClipStore, ClipCategory } from "./store";
+import { ClipStore, ClipCategory, ClipItem } from "./store";
 import { ClipWatcher } from "./watcher";
 import { writeToClipboard, simulatePaste } from "./paste";
 import { getAppIcon } from "./source-app";
-import { ConfigStore } from "../config";
+import { ConfigStore, ClipKeep } from "../config";
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|bmp|webp)$/i;
+// 过期清理的巡检间隔：保留时长最细一档是 24 小时，半小时扫一次足够，也不会白烧 CPU。
+const GC_INTERVAL_MS = 30 * 60 * 1000;
 
 interface ManagerOpts {
   preloadPath: string;
@@ -21,6 +23,13 @@ export class ClipboardManager {
   // 打开面板前 Umbra 自身是否已在前台。false=用户在别的应用里（如 Finder/Chrome），
   // 关闭面板时需把焦点还给那个应用，而不是让 Umbra 主窗口抢到前台。
   private appWasActive = false;
+  // 面板当前显示的分类：不同快捷键唤起同一个面板，只是默认落在不同分类上。
+  private panelCategory: ClipCategory = "all";
+  // 常用语没有数字 id，面板复用的是剪贴板那套按 id 操作的协议，
+  // 所以给每条常用语分配一个稳定的负数「伪 id」（负数不会和真实历史条目撞）。
+  private phrasePseudoId = new Map<string, number>();
+  private phraseSeq = 0;
+  private gcTimer: NodeJS.Timeout | null = null;
 
   // reregister：截图与剪贴板共用 globalShortcut，改快捷键时由 main.ts 统一清理后各自重注册。
   constructor(private cfg: ConfigStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
@@ -30,9 +39,24 @@ export class ClipboardManager {
 
   async init(): Promise<void> {
     await this.store.load();
+    this.runGc();                                          // 启动即清一次（机器关机期间过期的那批）
+    this.gcTimer = setInterval(() => this.runGc(), GC_INTERVAL_MS);
     if (this.cfg.get().clipboardEnabled) this.watcher.start();
     this.registerIpc();
     // 全局快捷键由 main.ts 统一注册（与截图共用 globalShortcut）。
+  }
+
+  // 退出时停掉巡检定时器。
+  dispose(): void {
+    if (this.gcTimer) clearInterval(this.gcTimer);
+    this.gcTimer = null;
+  }
+
+  // 执行一次过期清理；真删了东西才广播，避免无谓刷新。
+  private runGc(): void {
+    const keep = this.cfg.get().clipboardKeep;
+    if (!keep) return;
+    if (this.store.gcExpired(keep)) this.broadcast("clipboard:history:changed");
   }
 
   // 共享剪贴板存储给快捷入口 Launcher（同一实例，避免两份读写同一文件冲突）。
@@ -87,12 +111,17 @@ export class ClipboardManager {
     }
   }
 
-  async togglePanel(): Promise<void> {
-    if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) {
+  // category 决定面板打开时默认停在哪个分类（剪贴板快捷键 → all，常用语快捷键 → phrase）。
+  // 面板已经开着时：按的是同一把快捷键就收起；按的是另一把则原地切分类，不用先关再开。
+  async togglePanel(category: ClipCategory = "all"): Promise<void> {
+    const visible = !!this.panel && !this.panel.isDestroyed() && this.panel.isVisible();
+    if (visible && this.panelCategory === category) {
       await this.hidePanel(true);
-    } else {
-      await this.showPanel();
+      return;
     }
+    this.panelCategory = category;
+    if (visible) this.panel!.webContents.send("clipboard:panel:shown", category);
+    else await this.showPanel();
   }
 
   private async showPanel(): Promise<void> {
@@ -113,7 +142,7 @@ export class ClipboardManager {
     }
     win.show();
     win.focus();
-    win.webContents.send("clipboard:panel:shown");
+    win.webContents.send("clipboard:panel:shown", this.panelCategory);
   }
 
   // returnFocus=true 且打开面板前不在 Umbra 里时，隐藏整个 app，把焦点还给原应用
@@ -127,15 +156,20 @@ export class ClipboardManager {
   }
 
   // ── 全局快捷键 ──（只注册自身，不 unregisterAll；清理由 main.ts 统一做）
+  // 两把键指向同一个面板：clipboardShortcut 落在「全部」，phrasesShortcut 落在「常用语」。
   async registerShortcut(): Promise<void> {
     const { globalShortcut } = await import("electron");
-    const acc = this.cfg.get().clipboardShortcut || "Alt+V";
-    try {
-      const ok = globalShortcut.register(acc, () => this.togglePanel());
-      if (!ok) console.warn(`[clipboard] 快捷键注册失败（可能被占用）：${acc}`);
-    } catch (e) {
-      console.warn(`[clipboard] 快捷键注册异常：${acc}`, e);
-    }
+    const bind = (acc: string, category: ClipCategory) => {
+      if (!acc) return;
+      try {
+        const ok = globalShortcut.register(acc, () => this.togglePanel(category));
+        if (!ok) console.warn(`[clipboard] 快捷键注册失败（可能被占用）：${acc}`);
+      } catch (e) {
+        console.warn(`[clipboard] 快捷键注册异常：${acc}`, e);
+      }
+    };
+    bind(this.cfg.get().clipboardShortcut || "Alt+V", "all");
+    bind(this.cfg.get().phrasesShortcut || "", "phrase");
   }
 
   // ── 采集开关 / 快捷键 / 清空（供设置页调用）──
@@ -150,6 +184,68 @@ export class ClipboardManager {
     const { globalShortcut } = await import("electron");
     return { ok: globalShortcut.isRegistered(acc) };
   }
+  // 常用语快捷键：同样打开剪贴板面板，只是默认停在「常用语」分类。
+  async setPhrasesShortcut(acc: string): Promise<{ ok: boolean }> {
+    await this.cfg.save({ phrasesShortcut: acc });
+    this.reregister();
+    const { globalShortcut } = await import("electron");
+    return { ok: !acc || globalShortcut.isRegistered(acc) };
+  }
+  // 改保留时长后立刻按新规则清一遍，用户能马上看到效果。
+  async setKeep(keep: ClipKeep): Promise<void> {
+    await this.cfg.save({
+      clipboardKeep: {
+        text: Number(keep?.text) || 0,
+        image: Number(keep?.image) || 0,
+        files: Number(keep?.files) || 0,
+      },
+    });
+    this.runGc();
+  }
+
+  // ── 常用语（虚拟分类）──
+  // 常用语存在 config.phrases 里，不进剪贴板历史；这里把它包装成 ClipItem 交给同一个面板渲染。
+  private phraseItems(keyword = ""): ClipItem[] {
+    const kw = keyword.trim().toLowerCase();
+    const list = this.cfg.get().phrases || [];
+    const now = Date.now();
+    return list
+      .filter((p) => {
+        if (!kw) return true;
+        return [p.name, p.content, p.keyword || ""].some((s) => (s || "").toLowerCase().includes(kw));
+      })
+      .map((p) => {
+        let id = this.phrasePseudoId.get(p.id);
+        if (id === undefined) {
+          id = -++this.phraseSeq;
+          this.phrasePseudoId.set(p.id, id);
+        }
+        return {
+          id,
+          type: "text" as const,
+          content: p.content,
+          preview: p.name || p.content.slice(0, 200),
+          hash: `phrase:${p.id}`,
+          favorite: false,
+          size: p.content.length,
+          // 借 sourceApp 这一栏显示关键词，列表第二行就能看到怎么直达。
+          sourceApp: p.keyword ? `⌨ ${p.keyword}` : undefined,
+          lastUsedAt: now,
+          createdAt: now,
+        };
+      });
+  }
+
+  // 伪 id → 常用语正文；不是常用语则返回 null。
+  private phraseTextById(id: number): string | null {
+    if (id >= 0) return null;
+    for (const [pid, pseudo] of this.phrasePseudoId) {
+      if (pseudo !== id) continue;
+      const p = (this.cfg.get().phrases || []).find((x) => x.id === pid);
+      return p ? p.content : null;
+    }
+    return null;
+  }
 
   // 广播历史变更给所有窗口（面板 + 主窗口）。
   private async broadcast(channel: string, payload?: unknown): Promise<void> {
@@ -162,9 +258,18 @@ export class ClipboardManager {
   private async registerIpc(): Promise<void> {
     const { ipcMain, nativeImage } = await import("electron");
 
-    ipcMain.handle("clip:list", (_e, category: ClipCategory, keyword: string) => this.store.list(category, keyword));
+    ipcMain.handle("clip:list", (_e, category: ClipCategory, keyword: string) =>
+      category === "phrase" ? this.phraseItems(keyword) : this.store.list(category, keyword),
+    );
 
     ipcMain.handle("clip:copy", async (_e, id: number) => {
+      // 常用语：直接写文本进剪贴板（会正常进历史，和手动复制一次是一样的）。
+      const phrase = this.phraseTextById(id);
+      if (phrase !== null) {
+        const { clipboard } = await import("electron");
+        clipboard.writeText(phrase);
+        return true;
+      }
       const it = this.store.get(id);
       if (!it) return false;
       this.watcher.noteWriteBack(it.hash);
@@ -179,6 +284,16 @@ export class ClipboardManager {
     });
 
     ipcMain.handle("clip:paste", async (_e, id: number) => {
+      // 常用语：写文本 → 收起面板还焦点 → 模拟粘贴（自动粘贴关掉时就只复制）。
+      const phrase = this.phraseTextById(id);
+      if (phrase !== null) {
+        const { clipboard } = await import("electron");
+        clipboard.writeText(phrase);
+        await this.hidePanel(true);
+        if (!this.cfg.get().clipboardAutoPaste) return false;
+        await new Promise((r) => setTimeout(r, 180));
+        return await simulatePaste();
+      }
       const it = this.store.get(id);
       if (!it) return false;
       this.watcher.noteWriteBack(it.hash);
@@ -234,9 +349,17 @@ export class ClipboardManager {
     });
 
     // 设置页
-    ipcMain.handle("clip:getSettings", () => ({ enabled: this.cfg.get().clipboardEnabled, shortcut: this.cfg.get().clipboardShortcut, autoPaste: this.cfg.get().clipboardAutoPaste }));
+    ipcMain.handle("clip:getSettings", () => ({
+      enabled: this.cfg.get().clipboardEnabled,
+      shortcut: this.cfg.get().clipboardShortcut,
+      autoPaste: this.cfg.get().clipboardAutoPaste,
+      keep: this.cfg.get().clipboardKeep,
+      phrasesShortcut: this.cfg.get().phrasesShortcut,
+    }));
     ipcMain.handle("clip:setEnabled", (_e, enabled: boolean) => this.setEnabled(!!enabled));
     ipcMain.handle("clip:setShortcut", (_e, acc: string) => this.setShortcut(acc));
     ipcMain.handle("clip:setAutoPaste", (_e, on: boolean) => this.cfg.save({ clipboardAutoPaste: !!on }));
+    ipcMain.handle("clip:setKeep", (_e, keep: ClipKeep) => this.setKeep(keep));
+    ipcMain.handle("clip:setPhrasesShortcut", (_e, acc: string) => this.setPhrasesShortcut(acc));
   }
 }

@@ -1,4 +1,5 @@
-// 工具 → 快捷入口：开关、唤起快捷键、工作流入口（打开编排编辑器）。
+// 工具 → 快捷入口：开关、唤起快捷键。
+// 工作流编排已拆成同级的独立二级页（WorkflowTool），这里不再挂它的入口。
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card, Row, Toggle, toAccelerator } from "../../components/ui";
@@ -10,14 +11,9 @@ export function LauncherTool() {
   const [enabled, setEnabled] = useState(true);
   const [shortcut, setShortcut] = useState("Alt+Space");
   const [recording, setRecording] = useState(false);
-  const [wfCount, setWfCount] = useState(0);
 
   useEffect(() => {
     void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); });
-    const refreshWf = () => void api.getWorkflows().then((w) => setWfCount(w.length));
-    refreshWf();
-    window.addEventListener("focus", refreshWf);  // 从编辑器窗口切回时刷新计数
-    return () => window.removeEventListener("focus", refreshWf);
   }, []);
 
   // 录制快捷键：按下组合键即保存；Esc 取消。
@@ -51,14 +47,6 @@ export function LauncherTool() {
           {t("common.reset")}
         </button>
       </Row>
-      <div className="pt-2">
-        <div className="flex items-center gap-2 mb-1.5">
-          <div className="text-[12.5px] font-semibold flex-1">{t("settings.launcherWorkflows")}</div>
-          <span className="text-[11.5px] text-muted">{t("settings.launcherWorkflowsCount", { count: wfCount })}</span>
-          <button className="px-[12px] py-[6px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => void api.openWorkflowEditor()}>{t("settings.launcherWorkflowsOpen")}</button>
-        </div>
-        <div className="text-[11px] text-muted">{t("settings.launcherWorkflowsHint")}</div>
-      </div>
     </Card>
   );
 }

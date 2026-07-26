@@ -1261,8 +1261,17 @@ function PrefabNamer({ init, count, onOk, onClose }: { init: string; count: numb
 
 function VarsEditor({ vars, onSave, onClose }: { vars: Record<string, string>; onSave: (v: Record<string, string>) => void; onClose: () => void }) {
   const [rows, setRows] = useState<{ k: string; v: string }[]>(Object.entries(vars).map(([k, v]) => ({ k, v })));
+  // 手动「临时显形」的行下标：只影响当前这次弹框，关掉再打开又变回密文。
+  const [shown, setShown] = useState<Set<number>>(new Set());
   const inp = "bg-bg border border-border rounded-lg px-[9px] py-[6px] text-[12.5px] outline-none font-mono";
   const secret = (k: string) => /key|secret|token|pass/i.test(k);
+  const toggleShow = (i: number) =>
+    setShown((s) => {
+      const n = new Set(s);
+      if (n.has(i)) n.delete(i);
+      else n.add(i);
+      return n;
+    });
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
       <div className="w-[460px] bg-card border border-border rounded-2xl p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
@@ -1272,8 +1281,16 @@ function VarsEditor({ vars, onSave, onClose }: { vars: Record<string, string>; o
           {rows.map((r, i) => (
             <div key={i} className="flex items-center gap-2">
               <input className={`${inp} w-[130px]`} value={r.k} placeholder="名称" onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))} />
-              <input className={`${inp} flex-1`} type={secret(r.k) ? "password" : "text"} value={r.v} placeholder="值" onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))} />
-              <button className="text-danger text-[12px]" onClick={() => setRows(rows.filter((_, j) => j !== i))}>✕</button>
+              <input className={`${inp} flex-1`} type={secret(r.k) && !shown.has(i) ? "password" : "text"} value={r.v} placeholder="值" onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))} />
+              {/* 只有被判定为密钥的行才需要显隐切换；其余行本来就是明文 */}
+              {secret(r.k) ? (
+                <button className="text-muted text-[13px] leading-none w-[20px]" title={shown.has(i) ? "隐藏" : "显示"} onClick={() => toggleShow(i)}>
+                  {shown.has(i) ? "🙈" : "👁"}
+                </button>
+              ) : (
+                <span className="w-[20px]" />
+              )}
+              <button className="text-danger text-[12px]" onClick={() => { setRows(rows.filter((_, j) => j !== i)); setShown(new Set()); }}>✕</button>
             </div>
           ))}
         </div>

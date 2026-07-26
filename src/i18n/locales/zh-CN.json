@@ -15,7 +15,8 @@
     "screenshotDesc": "框选截图，支持贴图钉在桌面、OCR 取字和整图翻译。",
     "launcherDesc": "一个快捷键唤起搜索框，直达应用、文件夹、脚本与工作流。",
     "phrasesDesc": "把常写的话存成短语，在快捷入口里一键粘贴。",
-    "vaultDesc": "本地加密保存账号密码，主密码解锁后才可读取。"
+    "vaultDesc": "本地加密保存账号密码，主密码解锁后才可读取。",
+    "workflowDesc": "把触发、脚本、动作串成一张图，做成自己的自动化流程。"
   },
   "workspaces": {
     "title": "工作区",
@@ -208,7 +209,19 @@
     "vaultDesc": "零知识加密的账号密码 / 证件 / 重要文件管理（独立窗口，主密码解锁）",
     "vaultOpen": "打开保险箱",
     "vaultOpenLabel": "保险箱",
-    "vaultShortcut": "唤起快捷键"
+    "vaultShortcut": "唤起快捷键",
+    "clipKeep": "保留时长",
+    "clipKeepText": "纯文本",
+    "clipKeepImage": "图片",
+    "clipKeepFiles": "文件列表",
+    "clipKeep_24": "24 小时",
+    "clipKeep_168": "7 天",
+    "clipKeep_720": "1 个月",
+    "clipKeep_2160": "3 个月",
+    "clipKeepForever": "永久保留",
+    "clipKeepHint": "超过时长的记录会自动清掉（按最近一次使用的时间算）；收藏的条目永不过期。",
+    "phrasesShortcut": "常用语快捷键",
+    "phrasesShortcutHint": "按下后打开剪贴板面板并直接停在「常用语」分类，回车即粘贴。"
   },
   "logs": {
     "title": "日志",
@@ -406,7 +419,9 @@
     "path": "路径",
     "opFailed": "操作失败",
     "charCount": "{{count}} 字符",
-    "fileCount": "{{count}} 个文件"
+    "fileCount": "{{count}} 个文件",
+    "phrase": "常用语",
+    "searchPhrasePh": "搜索常用语…"
   },
   "screenshot": {
     "toolSelect": "选择 / 框选（可多选、拖动、⌥拖动复制）",

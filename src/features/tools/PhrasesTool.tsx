@@ -1,8 +1,12 @@
-// 工具 → 常用语：维护可在快捷入口里直接粘贴的短语列表（支持关键字直达、上下调序）。
+// 工具 → 常用语：维护可在快捷入口里直接粘贴的短语列表（支持关键字直达、上下调序），
+// 外加一把独立的全局快捷键 —— 按下后打开的是剪贴板面板的「常用语」分类（同一个弹框，默认列表不同）。
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Card } from "../../components/ui";
-import { launcherApi, type Phrase } from "./bridges";
+import { Card, Row, btnGhost, toAccelerator } from "../../components/ui";
+import { launcherApi, clipApi, hasClip, type Phrase } from "./bridges";
+
+// 常用语快捷键的出厂值（⌘⌥V，和剪贴板的 ⌘⇧V 同族好记）。
+const DEFAULT_PHRASES_SHORTCUT = "Command+Alt+V";
 
 export function PhrasesTool() {
   const { t } = useTranslation();
@@ -10,8 +14,29 @@ export function PhrasesTool() {
   const [phrases, setPhrases] = useState<Phrase[]>([]);
   const [draft, setDraft] = useState<{ name: string; keyword: string; content: string }>({ name: "", keyword: "", content: "" });
   const [editId, setEditId] = useState<string | null>(null);
+  const [shortcut, setShortcut] = useState(DEFAULT_PHRASES_SHORTCUT);
+  const [recording, setRecording] = useState(false);
 
   useEffect(() => { void api.getPhrases().then((p) => setPhrases(p || [])); }, []);
+  useEffect(() => {
+    if (!hasClip) return;
+    void clipApi().getSettings().then((s) => { if (s.phrasesShortcut) setShortcut(s.phrasesShortcut); });
+  }, []);
+
+  // 录制快捷键：按下组合键即保存；Esc 取消。
+  useEffect(() => {
+    if (!recording) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault(); e.stopPropagation();
+      if (e.key === "Escape") { setRecording(false); return; }
+      const acc = toAccelerator(e);
+      if (!acc) return;
+      setShortcut(acc); void clipApi().setPhrasesShortcut(acc); setRecording(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [recording]);
+
   const save = (list: Phrase[]) => { setPhrases(list); void api.setPhrases(list); };
 
   const add = () => {
@@ -29,6 +54,23 @@ export function PhrasesTool() {
 
   return (
     <Card title={t("settings.phrases")} sub={t("settings.phrasesSub")}>
+      {/* 常用语快捷键：唤起的是剪贴板面板，只是默认停在「常用语」分类 */}
+      {hasClip ? (
+        <>
+          <Row label={t("settings.phrasesShortcut")}>
+            <button
+              onClick={() => setRecording(true)}
+              className={`flex-1 text-left border rounded-lg px-[11px] py-[7px] text-[13px] font-mono bg-bg text-text ${recording ? "border-orange" : "border-border"}`}
+            >
+              {recording ? t("settings.pressShortcut") : shortcut || t("common.none")}
+            </button>
+            <button className={btnGhost} onClick={() => { setShortcut(DEFAULT_PHRASES_SHORTCUT); void clipApi().setPhrasesShortcut(DEFAULT_PHRASES_SHORTCUT); }}>
+              {t("common.reset")}
+            </button>
+          </Row>
+          <div className="text-[11.5px] text-muted -mt-[6px]">{t("settings.phrasesShortcutHint")}</div>
+        </>
+      ) : null}
       <div className="flex flex-col gap-1.5">
         {phrases.length ? phrases.map((p, i) => (
           <div key={p.id} className="flex items-center gap-2 bg-bg border border-border rounded-lg px-[10px] py-[7px]">

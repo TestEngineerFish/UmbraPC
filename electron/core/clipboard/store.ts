@@ -26,7 +26,16 @@ export const NON_FAV_LIMIT = 100;
 export const FAV_LIMIT = 100;
 export const FAV_LIMIT_MSG = () => mt("electron.favLimit", undefined, getMainLocale());
 
-export type ClipCategory = "all" | "text" | "image" | "files" | "favorite";
+// "phrase" 是「常用语」虚拟分类：数据不在本 Store 里（存在 config.phrases），
+// 由 ClipboardManager 在 IPC 层拦截并合成条目，这里只是让类型一致、list() 直接返回空。
+export type ClipCategory = "all" | "text" | "image" | "files" | "favorite" | "phrase";
+
+// 分类保留时长（小时，0=永久）。与 config.ClipKeep 同构，Store 层不依赖 config 模块。
+export interface KeepHours {
+  text: number;
+  image: number;
+  files: number;
+}
 
 // 图像 PNG 落盘目录 + 历史 JSON 文件都放在 userData/clipboard 下。
 export class ClipStore {
@@ -82,6 +91,7 @@ export class ClipStore {
 
   // 查询：分类 + 关键词（匹配 preview / 文本 content），排序 favorite DESC, lastUsedAt DESC。
   list(category: ClipCategory = "all", keyword = ""): ClipItem[] {
+    if (category === "phrase") return [];
     const kw = keyword.trim().toLowerCase();
     let arr = this.items.slice();
     if (category === "favorite") arr = arr.filter((it) => it.favorite);
@@ -148,6 +158,27 @@ export class ClipStore {
     }
     this.items = keep;
     this.scheduleSave();
+  }
+
+  // 按分类保留时长清理过期条目（连带图像文件）。收藏项永不过期，keep=0 表示该分类永久保留。
+  // 判定基准是 lastUsedAt 而不是 createdAt：一条老内容只要还在被反复粘贴，就说明它还有用。
+  // 返回删掉的条数，调用方据此决定要不要广播刷新。
+  gcExpired(keep: KeepHours): number {
+    const now = Date.now();
+    const expired = this.items.filter((it) => {
+      if (it.favorite) return false;
+      const hours = keep[it.type] || 0;
+      return hours > 0 && now - it.lastUsedAt > hours * 3600_000;
+    });
+    for (const it of expired) {
+      const idx = this.items.findIndex((x) => x.id === it.id);
+      if (idx >= 0) {
+        this.items.splice(idx, 1);
+        this.gcImage(it);
+      }
+    }
+    if (expired.length) this.scheduleSave();
+    return expired.length;
   }
 
   // 非收藏超过上限时，按 lastUsedAt 升序删掉最旧的（连带图像）。

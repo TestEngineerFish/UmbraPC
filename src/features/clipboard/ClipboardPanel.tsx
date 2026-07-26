@@ -17,7 +17,9 @@ interface ClipItem {
   lastUsedAt: number;
   createdAt: number;
 }
-type Category = "all" | "text" | "image" | "files" | "favorite";
+// "phrase" 是常用语：数据来自设置里的常用语列表，不在剪贴板历史里，
+// 但复用同一个面板 —— 只是由另一把全局快捷键唤起时默认停在这个分类。
+type Category = "all" | "text" | "image" | "files" | "favorite" | "phrase";
 interface ClipAPI {
   list(category: Category, keyword: string): Promise<ClipItem[]>;
   copy(id: number): Promise<boolean>;
@@ -30,7 +32,7 @@ interface ClipAPI {
   getAppIcon(p: string): Promise<string>;
   hidePanel(): Promise<boolean>;
   onHistoryChanged(cb: () => void): () => void;
-  onPanelShown(cb: () => void): () => void;
+  onPanelShown(cb: (category: Category) => void): () => void;
 }
 const api = (window as unknown as { umbraClip: ClipAPI }).umbraClip;
 
@@ -76,7 +78,7 @@ html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,
 .fileline .p{color:var(--muted);font-size:10.5px;word-break:break-all;}
 `;
 
-const CATS: Category[] = ["all", "text", "image", "files", "favorite"];
+const CATS: Category[] = ["all", "text", "image", "files", "favorite", "phrase"];
 
 function colorOf(text: string): string | null {
   const t = (text || "").trim();
@@ -186,9 +188,10 @@ export function Panel() {
   // 历史变更 / 面板弹出
   useEffect(() => {
     const off1 = api.onHistoryChanged(() => load(st.current.items[st.current.selected]?.id));
-    const off2 = api.onPanelShown(() => {
+    // 每次唤起都按主进程给的分类重置（不同快捷键 → 不同默认列表）。
+    const off2 = api.onPanelShown((cat) => {
       setKeyword("");
-      setCategory("all");
+      setCategory(cat || "all");
       setSelected(0);
       setTimeout(() => searchRef.current?.focus(), 0);
     });
@@ -211,7 +214,7 @@ export function Panel() {
       <style>{CSS}</style>
       <div className="wrap">
         <div className="search">
-          <input ref={searchRef} type="text" placeholder={t("clipboard.searchPh")} spellCheck={false} value={keyword} onChange={(e) => { setKeyword(e.target.value); setSelected(0); }} />
+          <input ref={searchRef} type="text" placeholder={t(category === "phrase" ? "clipboard.searchPhrasePh" : "clipboard.searchPh")} spellCheck={false} value={keyword} onChange={(e) => { setKeyword(e.target.value); setSelected(0); }} />
         </div>
         <div className="tabs">
           {CATS.map((c) => (
@@ -388,6 +391,8 @@ function Preview({ item, appIcon }: { item?: ClipItem; appIcon?: string }) {
 function Menu({ menu, onClose }: { menu: { x: number; y: number; item: ClipItem }; onClose: () => void }) {
   const { t } = useTranslation();
   const it = menu.item;
+  // 负数 id = 常用语（虚拟条目）：它不在历史里，收藏/删除都无从谈起，只留「复制」。
+  const isPhrase = it.id < 0;
   const act = async (a: string) => {
     onClose();
     if (a === "copy") await api.copy(it.id);
@@ -402,8 +407,8 @@ function Menu({ menu, onClose }: { menu: { x: number; y: number; item: ClipItem 
   return (
     <div className="menu" style={{ left: Math.min(menu.x, window.innerWidth - 150), top: Math.min(menu.y, window.innerHeight - 120) }} onClick={(e) => e.stopPropagation()}>
       <button onClick={() => act("copy")}>{t("clipboard.copy")}</button>
-      <button onClick={() => act("fav")}>{it.favorite ? t("clipboard.unfavorite") : t("clipboard.favoriteItem")}</button>
-      <button className="del" onClick={() => act("del")}>{t("clipboard.remove")}</button>
+      {isPhrase ? null : <button onClick={() => act("fav")}>{it.favorite ? t("clipboard.unfavorite") : t("clipboard.favoriteItem")}</button>}
+      {isPhrase ? null : <button className="del" onClick={() => act("del")}>{t("clipboard.remove")}</button>}
     </div>
   );
 }

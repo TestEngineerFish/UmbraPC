@@ -449,6 +449,7 @@ app.on("before-quit", () => {
 
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
+  clipboard?.dispose();   // 停掉剪贴板历史的过期巡检定时器
   // 带走还在跑的引擎进程（claude/codex）：否则会留下孤儿进程，
   // 下次同一工作区的任务会被永久堵在队列里。
   killAllAgentChildren();

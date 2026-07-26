@@ -15,7 +15,8 @@
     "screenshotDesc": "Region capture with pin-to-desktop, OCR and whole-image translation.",
     "launcherDesc": "One shortcut opens a search box for apps, folders, scripts and workflows.",
     "phrasesDesc": "Save the things you type often and paste them from the launcher.",
-    "vaultDesc": "Credentials encrypted on this device, readable only after unlocking."
+    "vaultDesc": "Credentials encrypted on this device, readable only after unlocking.",
+    "workflowDesc": "Wire triggers, scripts and actions into a graph — your own automations."
   },
   "workspaces": {
     "title": "Workspaces",
@@ -208,7 +209,19 @@
     "vaultDesc": "Zero-knowledge encrypted passwords / IDs / important files (separate window, master password)",
     "vaultOpen": "Open vault",
     "vaultOpenLabel": "Vault",
-    "vaultShortcut": "Global shortcut"
+    "vaultShortcut": "Global shortcut",
+    "clipKeep": "Keep history",
+    "clipKeepText": "Plain text",
+    "clipKeepImage": "Images",
+    "clipKeepFiles": "File lists",
+    "clipKeep_24": "24 hours",
+    "clipKeep_168": "7 days",
+    "clipKeep_720": "1 month",
+    "clipKeep_2160": "3 months",
+    "clipKeepForever": "Forever",
+    "clipKeepHint": "Entries older than this are removed automatically (counted from last use). Favourites never expire.",
+    "phrasesShortcut": "Snippets shortcut",
+    "phrasesShortcutHint": "Opens the clipboard panel on the Snippets tab; press Enter to paste."
   },
   "logs": {
     "title": "Logs",
@@ -406,7 +419,9 @@
     "path": "Path",
     "opFailed": "Operation failed",
     "charCount": "{{count}} chars",
-    "fileCount": "{{count}} files"
+    "fileCount": "{{count}} files",
+    "phrase": "Snippets",
+    "searchPhrasePh": "Search snippets…"
   },
   "screenshot": {
     "toolSelect": "Select (marquee, multi-select, ⌥drag to duplicate)",

@@ -5,18 +5,20 @@ import { useTranslation } from "react-i18next";
 import { ClipboardTool } from "./ClipboardTool";
 import { ScreenshotTool } from "./ScreenshotTool";
 import { LauncherTool } from "./LauncherTool";
+import { WorkflowTool } from "./WorkflowTool";
 import { PhrasesTool } from "./PhrasesTool";
 import { VaultTool } from "./VaultTool";
 import { hasClip, hasShot, hasLauncher, hasVault } from "./bridges";
 
 // 二级页标识。
-type ToolKey = "clipboard" | "screenshot" | "launcher" | "phrases" | "vault";
+type ToolKey = "clipboard" | "screenshot" | "launcher" | "workflow" | "phrases" | "vault";
 
 // 二级目录清单：labelKey 复用设置页原有词条，avail 决定是否显示。
 const ITEMS: { key: ToolKey; labelKey: string; descKey: string; avail: boolean }[] = [
   { key: "clipboard", labelKey: "settings.clipboard", descKey: "tools.clipboardDesc", avail: hasClip },
   { key: "screenshot", labelKey: "settings.screenshot", descKey: "tools.screenshotDesc", avail: hasShot },
   { key: "launcher", labelKey: "settings.launcher", descKey: "tools.launcherDesc", avail: hasLauncher },
+  { key: "workflow", labelKey: "settings.launcherWorkflows", descKey: "tools.workflowDesc", avail: hasLauncher },
   { key: "phrases", labelKey: "settings.phrases", descKey: "tools.phrasesDesc", avail: hasLauncher },
   { key: "vault", labelKey: "settings.vault", descKey: "tools.vaultDesc", avail: hasVault },
 ];
@@ -57,6 +59,7 @@ export function Tools() {
           {active === "clipboard" ? <ClipboardTool /> : null}
           {active === "screenshot" ? <ScreenshotTool /> : null}
           {active === "launcher" ? <LauncherTool /> : null}
+          {active === "workflow" ? <WorkflowTool /> : null}
           {active === "phrases" ? <PhrasesTool /> : null}
           {active === "vault" ? <VaultTool /> : null}
         </div>
