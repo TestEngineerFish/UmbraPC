@@ -12,9 +12,19 @@ import { t } from "../i18n";
 
 export type Nav = "chat" | "tasks" | "workspaces" | "inspiration" | "abilities" | "realtime" | "tools" | "logs" | "settings";
 
+// 深浅色开关的持久化 key。标题栏那颗按钮是全软件唯一的主题入口，
+// 独立窗口（保险箱 vault.html / 工作流 workflow.html）与主窗口同源共享 localStorage，
+// 靠这个 key + storage 事件跟随主窗口，因此它们内部不再各挂一个切换按钮。
+const LS_DARK = "umbra.dark";
+
+// 读取已持久化的深浅色。隐私模式 / storage 被禁时按浅色兜底，不让它抛出打断启动。
+function readDark(): boolean {
+  try { return localStorage.getItem(LS_DARK) === "1"; } catch { return false; }
+}
+
 const state = {
   nav: "chat" as Nav,
-  dark: false,
+  dark: readDark(),
   cu: false,
   codingMode: 1,
   tasks: {
@@ -62,8 +72,11 @@ export function setBridge(rerender: () => void, nav: (n: Nav) => void): void {
   bridgeRerender = rerender;
   bridgeNav = nav;
 }
+// 切换深浅色。写 localStorage 是为了让独立窗口跟随（storage 事件只在别的窗口触发，正合适），
+// 顺带做到重启后保留上次选择。
 export function toggleTheme(): void {
   state.dark = !state.dark;
+  try { localStorage.setItem(LS_DARK, state.dark ? "1" : "0"); } catch { /* 写不进去只影响持久化，当前窗口照常切 */ }
   bridgeRerender();
 }
 export function mountChat(el: HTMLElement): void {
@@ -523,7 +536,7 @@ function onClick(e: MouseEvent): void {
   const act = target.dataset.act!;
   if (act === "noop") { e.preventDefault(); return; }
   if (act.startsWith("nav-")) { setNav(act.slice(4) as Nav); return; }
-  if (act === "theme") { state.dark = !state.dark; render(); }
+  if (act === "theme") { toggleTheme(); }
 }
 
 function onKeydown(e: KeyboardEvent): void {

@@ -4,13 +4,13 @@
 // 两种承载方式：独立窗口（vault-entry）与嵌在主窗口「工具 → 密码保险箱」右侧（embedded）。
 // 样式统一走 Tailwind + CSS 变量（vault-entry 已引入 index.css，独立窗口里同样生效）；
 // inline style 只留给真正动态的值：右键菜单坐标、monogram 尺寸、强度条百分比、动画延迟。
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComponentType, CSSProperties, ReactNode, SVGProps } from "react";
 import { Pill, btnGhost, btnPrimary, selectBox } from "../../components/ui";
 import {
   IconAlert, IconCheck, IconChevronDown, IconChevronRight, IconCloud, IconCopy, IconDice, IconDots,
   IconDownload, IconExternal, IconEye, IconEyeOff, IconFile, IconFolder, IconGrid, IconImage, IconKey,
-  IconLock, IconMoon, IconPencil, IconPlus, IconRefresh, IconSearch, IconStar, IconSun, IconTag,
+  IconLock, IconPencil, IconPlus, IconRefresh, IconSearch, IconStar, IconTag,
   IconText, IconTouchId, IconTrash, IconUp, IconDown, IconUser, IconX,
 } from "../../components/icons";
 
@@ -188,13 +188,19 @@ function ConfirmModal({ title, desc, okLabel, onOk, onClose }: { title: string; 
   );
 }
 
-// 嵌入模式开关：嵌在主窗口右侧时为 true。深浅色跟随主窗口（不再自己切），
-// 所以各处右上角的深浅色按钮在嵌入时直接不渲染。用 context 传，免得从
-// VaultApp 一路把 prop 串到 Setup / Unlock / Center / Main。
-const EmbedCtx = createContext(false);
+// 深浅色跟随主窗口：全软件只有标题栏那一个主题入口，它把开关写在这个 localStorage key 上
+// （见 app/shell.ts 的同名常量）。独立窗口（vault.html）与主窗口同源，读同一个 key 即可；
+// storage 事件只在「别的窗口写入」时触发，正好用来实时跟随主窗口的切换。
+// 这里刻意不 import shell.ts —— 那会把 chat / services 整条依赖拉进保险箱这个入口的 bundle。
+const LS_DARK = "umbra.dark";
+
+// 读取已持久化的深浅色。storage 被禁时按浅色兜底，不让它抛出打断渲染。
+function readDark(): boolean {
+  try { return localStorage.getItem(LS_DARK) === "1"; } catch { return false; }
+}
 
 export function VaultApp({ embedded = false }: { embedded?: boolean }) {
-  const [theme, setTheme] = useState(() => (window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+  const [dark, setDark] = useState(readDark);
   const [ready, setReady] = useState(false);
   const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "", syncConfigured: false, syncRev: 0 });
   useEffect(() => { void api.status().then((s) => { setSt(s); setReady(true); }); }, []);
@@ -210,48 +216,40 @@ export function VaultApp({ embedded = false }: { embedded?: boolean }) {
     } catch (e) { api.httpResult(msg.id, false, null, String(e)); }
   }), []);
   const refresh = useCallback(async () => setSt(await api.status()), []);
-  const toggleTheme = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  // 独立窗口时跟随主窗口的主题：storage 事件负责实时跟随，focus 兜底一次
+  // （窗口被隐藏期间浏览器可能压掉事件）。嵌入主窗口时整棵树继承外层的 data-theme，什么都不用做。
+  useEffect(() => {
+    if (embedded) return;
+    const sync = () => setDark(readDark());
+    const onStorage = (e: StorageEvent) => { if (e.key === null || e.key === LS_DARK) sync(); };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", sync);
+    return () => { window.removeEventListener("storage", onStorage); window.removeEventListener("focus", sync); };
+  }, [embedded]);
 
   return (
     // 嵌入时不自己声明 data-theme（继承主窗口的），高度也从整屏改成填满父容器。
-    <EmbedCtx.Provider value={embedded}>
-      <div
-        className="v-root bg-bg text-text text-[14px]"
-        data-theme={embedded ? undefined : theme}
-        style={{ height: embedded ? "100%" : "100vh" }}
-      >
-        <style>{CSS}</style>
-        {!ready ? null : !st.exists ? <Setup onDone={refresh} theme={theme} onTheme={toggleTheme} />
-          : !st.unlocked ? <Unlock onDone={refresh} st={st} theme={theme} onTheme={toggleTheme} />
-            : <Main onLock={async () => { await api.lock(); await refresh(); }} st={st} onStatus={refresh} theme={theme} onTheme={toggleTheme} />}
-      </div>
-    </EmbedCtx.Provider>
-  );
-}
-
-// 深浅色切换按钮；嵌入主窗口时主题由主窗口统一控制，这里不渲染。
-function ThemeBtn({ theme, onTheme, className = "" }: { theme: string; onTheme: () => void; className?: string }) {
-  if (useContext(EmbedCtx)) return null;
-  return (
-    <button
-      onClick={onTheme}
-      title="切换深浅色"
-      className={`w-[30px] h-[28px] flex-none inline-flex items-center justify-center border border-border bg-bg text-text rounded-[8px] cursor-pointer hover:border-orange hover:text-orange-text ${className}`}
+    <div
+      className="v-root bg-bg text-text text-[14px]"
+      data-theme={embedded ? undefined : dark ? "dark" : "light"}
+      style={{ height: embedded ? "100%" : "100vh" }}
     >
-      {theme === "dark" ? <IconSun size={14} /> : <IconMoon size={14} />}
-    </button>
+      <style>{CSS}</style>
+      {!ready ? null : !st.exists ? <Setup onDone={refresh} />
+        : !st.unlocked ? <Unlock onDone={refresh} st={st} />
+          : <Main onLock={async () => { await api.lock(); await refresh(); }} st={st} onStatus={refresh} />}
+    </div>
   );
 }
 
 // 未解锁的三个态（创建 / Secret Key / 解锁）共用的居中壳：
-// 顶部一层极淡的橙色光晕把视线压到中间那一列，右上角挂深浅色切换。
-function Center({ children, theme, onTheme }: { children: ReactNode; theme: string; onTheme: () => void }) {
+// 顶部一层极淡的橙色光晕把视线压到中间那一列。
+function Center({ children }: { children: ReactNode }) {
   return (
     <div
       className="h-full flex items-center justify-center relative"
       style={{ background: "radial-gradient(90% 70% at 50% 8%, color-mix(in srgb, var(--orange-soft) 60%, var(--bg)) 0%, var(--bg) 60%)" }}
     >
-      <ThemeBtn theme={theme} onTheme={onTheme} className="absolute top-[14px] right-[14px]" />
       {children}
     </div>
   );
@@ -260,7 +258,7 @@ function Center({ children, theme, onTheme }: { children: ReactNode; theme: stri
 // 首次初始化：先创建主密码，成功后立刻展示 Secret Key（只显示这一次）。
 // Touch ID 开关放在创建这一步：enableQuickUnlock 需要已解锁态，而 setup 成功后正好就是解锁态，
 // 所以这里先用本地 wantBio 记住意愿，创建成功后再补一次调用。
-function Setup({ onDone, theme, onTheme }: { onDone: () => Promise<void>; theme: string; onTheme: () => void }) {
+function Setup({ onDone }: { onDone: () => Promise<void> }) {
   const [p1, setP1] = useState("");
   const [p2, setP2] = useState("");
   const [err, setErr] = useState("");
@@ -294,7 +292,7 @@ function Setup({ onDone, theme, onTheme }: { onDone: () => Promise<void>; theme:
   };
 
   if (sk) return (
-    <Center theme={theme} onTheme={onTheme}>
+    <Center>
       <div className="w-[460px] flex flex-col gap-[14px]">
         <div className="flex flex-col items-center gap-[12px]">
           <span className="w-[52px] h-[52px] rounded-[15px] flex-none inline-flex items-center justify-center bg-orange-soft text-orange-text"><IconKey size={24} /></span>
@@ -323,7 +321,7 @@ function Setup({ onDone, theme, onTheme }: { onDone: () => Promise<void>; theme:
 
   const s = pwStrength(p1);
   return (
-    <Center theme={theme} onTheme={onTheme}>
+    <Center>
       <div className="w-[430px] flex flex-col gap-[14px]">
         <div className="flex flex-col items-center gap-[12px]">
           <span className="w-[52px] h-[52px] rounded-[15px] flex-none inline-flex items-center justify-center bg-orange-soft text-orange-text"><IconLock size={24} /></span>
@@ -385,7 +383,7 @@ function Setup({ onDone, theme, onTheme }: { onDone: () => Promise<void>; theme:
 }
 
 // 解锁态。支持三条路：Touch ID（进入即自动尝试一次）、主密码、换新设备时的主密码 + Secret Key。
-function Unlock({ onDone, st, theme, onTheme }: { onDone: () => Promise<void>; st: VStatus; theme: string; onTheme: () => void }) {
+function Unlock({ onDone, st }: { onDone: () => Promise<void>; st: VStatus }) {
   const [mp, setMp] = useState("");
   const [sk, setSk] = useState("");
   const [useSk, setUseSk] = useState(false);
@@ -405,7 +403,7 @@ function Unlock({ onDone, st, theme, onTheme }: { onDone: () => Promise<void>; s
   useEffect(() => { if (canBio) void touchId(); /* 进入即尝试 Touch ID */ }, []); // eslint-disable-line
 
   return (
-    <Center theme={theme} onTheme={onTheme}>
+    <Center>
       <div className="w-[380px] flex flex-col gap-[14px]">
         <div className="flex flex-col items-center gap-[13px]">
           <span
@@ -455,7 +453,7 @@ function Unlock({ onDone, st, theme, onTheme }: { onDone: () => Promise<void>; s
 }
 
 // 解锁后的主界面：顶栏 + 三栏（分组 196 / 列表 302 / 详情自适应）。
-function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => Promise<void>; st: VStatus; onStatus: () => Promise<void>; theme: string; onTheme: () => void }) {
+function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStatus; onStatus: () => Promise<void> }) {
   const [vaults, setVaults] = useState<VaultInfo[]>([]);
   const [vid, setVid] = useState("");
   const [types, setTypes] = useState<VType[]>([]);
@@ -471,6 +469,9 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => Promise<
   const [imp, setImp] = useState({ open: false, mp: "", sk: "", err: "" });
   const [ctx, setCtx] = useState<{ open: boolean; x: number; y: number; itemId?: string }>({ open: false, x: 0, y: 0 });
   const [tctx, setTctx] = useState<{ open: boolean; x: number; y: number; typeId?: string }>({ open: false, x: 0, y: 0 });
+  // 记录右键菜单里的「移动到…」是否已展开。默认收起，点一下才列出分组，
+  // 免得分组一多菜单就被撑得老长。
+  const [moveOpen, setMoveOpen] = useState(false);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [selecting, setSelecting] = useState(false);
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -488,7 +489,8 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => Promise<
   }, []);
   useEffect(() => { if (vid) void loadVault(vid); setSelecting(false); setChecked(new Set()); }, [vid, loadVault]);
   const refresh = useCallback(async () => { if (vid) await loadVault(vid); }, [vid, loadVault]);
-  const closeMenus = () => { setIdOpen(false); setGearOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
+  // 关菜单时把「移动到…」也收回去，下次右键重新从收起态开始。
+  const closeMenus = () => { setIdOpen(false); setGearOpen(false); setMoveOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
 
   const doExport = async (plain: boolean) => {
     setGearOpen(false);
@@ -586,7 +588,15 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => Promise<
   const ctxItem = items.find((i) => i.id === ctx.itemId);
   const tctxType = types.find((t) => t.id === tctx.typeId);
   // 右键菜单跟随鼠标坐标，是这个文件里少数必须用 inline style 的地方。
-  const at = (x: number, y: number): CSSProperties => ({ position: "fixed", left: x, top: y });
+  // 右键菜单定位：贴着鼠标，但不许越出窗口。点在下半屏时改成用 bottom 定位、向上生长，
+  // 否则「移动到…」一展开就会被窗口底边切掉，露不出滚动条也就没法翻。
+  const at = (x: number, y: number): CSSProperties => {
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const left = Math.max(8, Math.min(x, vw - 212));
+    return y > vh / 2
+      ? { position: "fixed", left, bottom: Math.max(8, vh - y) }
+      : { position: "fixed", left, top: y };
+  };
 
   return (
     <div className="h-full flex flex-col relative overflow-hidden">
@@ -668,7 +678,6 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => Promise<
             </div>
           ) : null}
         </div>
-        <ThemeBtn theme={theme} onTheme={onTheme} />
       </header>
 
       <div className="flex-1 min-h-0 flex">
@@ -821,14 +830,28 @@ function Main({ onLock, st, onStatus, theme, onTheme }: { onLock: () => Promise<
 
       {/* 记录右键菜单 */}
       {ctx.open && ctxItem ? (
-        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow)] w-[200px]" style={{ ...at(ctx.x, ctx.y), animation: "vPop .14s ease" }}>
+        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow)] w-[200px] max-h-[calc(100vh-16px)] overflow-y-auto" style={{ ...at(ctx.x, ctx.y), animation: "vPop .14s ease" }}>
           <MenuItem icon={<IconPencil size={14} />} label="编辑记录" onClick={() => { setSelId(ctxItem.id); setAutoEditId(ctxItem.id); closeMenus(); }} />
           <MenuItem icon={<IconStar size={14} />} label={ctxItem.favorite ? "取消收藏" : "加入收藏"} onClick={async () => { closeMenus(); await toggleFav(ctxItem); }} />
           <div className="h-px bg-border-soft my-[5px]" />
-          <div className={`${vGroupHead} flex items-center gap-[4px]`}>移动到<IconChevronRight size={11} /></div>
-          {types.map((t) => (
-            <MenuItem key={t.id} icon={<Mono text={t.name} size={18} radius={5} font={10} plain />} label={t.name} hint={t.id === ctxItem.typeId ? "当前" : undefined} onClick={() => void doMove(ctxItem.id, t.id)} />
-          ))}
+          {/* 「移动到…」默认收起，点开才列分组；分组多了列表自己滚，不撑爆菜单 */}
+          <MenuItem
+            icon={<IconFolder size={14} />}
+            label="移动到…"
+            trail={moveOpen ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+            onClick={() => setMoveOpen((v) => !v)}
+          />
+          {moveOpen ? (
+            types.length ? (
+              <div className="max-h-[176px] overflow-y-auto">
+                {types.map((t) => (
+                  <MenuItem key={t.id} icon={<Mono text={t.name} size={18} radius={5} font={10} plain />} label={t.name} hint={t.id === ctxItem.typeId ? "当前" : undefined} onClick={() => void doMove(ctxItem.id, t.id)} />
+                ))}
+              </div>
+            ) : (
+              <div className="px-[10px] py-[6px] text-[11.5px] text-faint">还没有分组，先在左栏新建一个</div>
+            )
+          ) : null}
           <div className="h-px bg-border-soft my-[5px]" />
           <MenuItem icon={<IconTrash size={14} />} label="删除记录" danger onClick={() => askDelete(ctxItem.id)} />
         </div>
@@ -910,7 +933,8 @@ function NavRow({ label, Icon, mono, count, active, onClick, onContextMenu }: {
 }
 
 // 菜单/下拉里的一行。danger 用红字 + 红底悬停，不做红色实心（实心只留给确认弹窗的最终按钮）。
-function MenuItem({ icon, label, hint, danger, onClick }: { icon?: ReactNode; label: string; hint?: string; danger?: boolean; onClick: () => void }) {
+// hint 是右侧的一小段说明文字，trail 是右侧的节点（折叠箭头这种），两者可同时出现。
+function MenuItem({ icon, label, hint, trail, danger, onClick }: { icon?: ReactNode; label: string; hint?: string; trail?: ReactNode; danger?: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -919,6 +943,7 @@ function MenuItem({ icon, label, hint, danger, onClick }: { icon?: ReactNode; la
       {icon ? <span className="flex-none inline-flex items-center">{icon}</span> : null}
       <span className="flex-1 min-w-0 truncate">{label}</span>
       {hint ? <span className="flex-none whitespace-nowrap text-[11px] text-faint">{hint}</span> : null}
+      {trail ? <span className="flex-none inline-flex items-center text-faint">{trail}</span> : null}
     </button>
   );
 }
