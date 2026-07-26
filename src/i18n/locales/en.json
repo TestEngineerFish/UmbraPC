@@ -16,7 +16,11 @@
     "launcherDesc": "One shortcut opens a search box for apps, folders, scripts and workflows.",
     "phrasesDesc": "Save the things you type often and paste them from the launcher.",
     "vaultDesc": "Credentials encrypted on this device, readable only after unlocking.",
-    "workflowDesc": "Wire triggers, scripts and actions into a graph — your own automations."
+    "workflowDesc": "Wire triggers, scripts and actions into a graph — your own automations.",
+    "groupCommon": "Everyday",
+    "groupAuto": "Automation",
+    "groupSecurity": "Security",
+    "count": "{{n}}"
   },
   "workspaces": {
     "title": "Workspaces",

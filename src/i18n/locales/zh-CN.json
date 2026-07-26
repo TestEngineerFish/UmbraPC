@@ -16,7 +16,11 @@
     "launcherDesc": "一个快捷键唤起搜索框，直达应用、文件夹、脚本与工作流。",
     "phrasesDesc": "把常写的话存成短语，在快捷入口里一键粘贴。",
     "vaultDesc": "本地加密保存账号密码，主密码解锁后才可读取。",
-    "workflowDesc": "把触发、脚本、动作串成一张图，做成自己的自动化流程。"
+    "workflowDesc": "把触发、脚本、动作串成一张图，做成自己的自动化流程。",
+    "groupCommon": "常用",
+    "groupAuto": "自动化",
+    "groupSecurity": "安全",
+    "count": "{{n}} 个"
   },
   "workspaces": {
     "title": "工作区",
