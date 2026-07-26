@@ -291,46 +291,80 @@ const clone = <T,>(w: T): T => JSON.parse(JSON.stringify(w));
 // ── 右键菜单（多级子菜单）──
 // count：分类行右侧的「已实现/总数」；keyHint：动作行右侧的快捷键；title：面板顶部的分区小标题。
 interface MenuItem { label?: string; icon?: ReactNode; count?: string; keyHint?: string; onClick?: () => void; sub?: MenuItem[]; danger?: boolean; sep?: boolean }
+// 菜单面板宽度（用来判断子菜单往右还是往左展开），和 min-w 保持一致。
+const MENU_W = 224;
+// 面板的落点。left 必给；top / bottom 二选一（点在下半屏时用 bottom 向上生长）；
+// maxH 是这块面板自己的高度上限，超了它自己滚。
+interface MenuAt { left: number; top?: number; bottom?: number; maxH: number }
+
 // dark=true 用画布那套硬编码深色（菜单开在深色画布上，跟着主题变会和画布打架）；
 // 否则走主题变量，给顶栏「⋯」这种开在浅色区域的菜单用。
-function MenuList({ items, onClose, dark, title }: { items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string }) {
-  const [open, setOpen] = useState<number | null>(null);
+//
+// 关于定位：每一级面板都是 position:fixed，坐标由调用方（根级）或父级行的 getBoundingClientRect（子级）算出来。
+// 曾经的做法是给菜单套一个带 overflow-y-auto 的外层、子菜单用 absolute left-full 挂在行上，
+// 结果二级菜单被那个滚动容器裁掉了（横竖都被切，还多出一条横向滚动条）。
+// fixed 不受祖先 overflow 裁剪（祖先里没有 transform / filter，不会成为 fixed 的包含块），
+// 所以每级都 fixed 之后，每级面板都能独立带上自己的 max-height + 滚动，且不裁下一级。
+function MenuList({ items, onClose, dark, title, at }: {
+  items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string; at: MenuAt;
+}) {
+  const [open, setOpen] = useState<{ i: number; at: MenuAt } | null>(null);
   const panel = dark
-    ? "bg-[rgba(31,28,24,.98)] border border-[#3A342B] rounded-[10px] p-1 shadow-[0_10px_30px_rgba(0,0,0,.45)] min-w-[208px]"
-    : "bg-card border border-border rounded-[10px] p-1 shadow-2xl min-w-[208px]";
+    ? "bg-[rgba(31,28,24,.98)] border border-[#3A342B] rounded-[10px] p-1 shadow-[0_10px_30px_rgba(0,0,0,.45)] min-w-[208px] overflow-y-auto"
+    : "bg-card border border-border rounded-[10px] p-1 shadow-2xl min-w-[208px] overflow-y-auto";
   const row = "w-full flex items-center gap-[9px] px-[9px] py-[5px] rounded-md text-[12px] text-left bg-transparent";
   const rowTone = dark ? "text-[#D8D3CA] hover:bg-[rgba(232,89,12,.16)] hover:text-[#F0A878]" : "text-text hover:bg-orange-soft hover:text-orange-text";
   const iconTone = dark ? "text-[#8A837A]" : "text-muted";
   const dimTone = dark ? "text-[#6E675E]" : "text-faint";
+
+  // 悬停到带子菜单的行上：按这一行的实际位置算子菜单落点。
+  // 右边放得下就贴右侧，放不下翻到左侧；纵向与行顶齐平，并留出至少 140px 的可视高度。
+  const enter = (i: number, hasSub: boolean, e: React.MouseEvent<HTMLDivElement>) => {
+    if (!hasSub) { setOpen(null); return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    const left = r.right + MENU_W + 8 <= window.innerWidth ? r.right + 2 : Math.max(8, r.left - MENU_W - 2);
+    const top = Math.max(8, Math.min(r.top - 5, window.innerHeight - 148));
+    setOpen({ i, at: { left, top, maxH: window.innerHeight - top - 8 } });
+  };
+
   return (
-    <div className={panel}>
-      {title ? <div className={`px-[9px] pt-[5px] pb-[3px] text-[10px] tracking-[.06em] ${dimTone}`}>{title}</div> : null}
-      {items.map((it, i) => it.sep ? <div key={i} className={`h-px my-1 mx-1.5 ${dark ? "bg-[#332E26]" : "bg-border-soft"}`} /> : (
-        <div key={i} className="relative" onMouseEnter={() => setOpen(it.sub ? i : null)}>
-          <button className={`${row} ${it.danger ? "text-danger hover:bg-danger-soft" : rowTone}`}
-            onClick={() => { if (it.sub) return; it.onClick?.(); onClose(); }}>
-            <span className={`w-4 flex-none flex justify-center ${it.danger ? "" : iconTone}`}>{it.icon}</span>
-            <span className="flex-1 whitespace-nowrap">{it.label}</span>
-            {it.count ? <span className={`flex-none text-[10px] tabular-nums ${dimTone}`}>{it.count}</span> : null}
-            {it.keyHint ? <span className={`flex-none font-mono text-[10px] ${dimTone}`}>{it.keyHint}</span> : null}
-            {it.sub ? <span className={`flex-none ${dimTone}`}><IconChevronRight size={10} /></span> : null}
-          </button>
-          {it.sub && open === i ? <div className="absolute left-full top-0 -mt-1 ml-0.5"><MenuList items={it.sub} onClose={onClose} dark={dark} /></div> : null}
-        </div>
-      ))}
-    </div>
+    <>
+      {/* 本级面板滚动时关掉子菜单：子菜单是 fixed 的，跟不了父级的滚动，留着会脱锚。 */}
+      <div className={panel} onScroll={() => setOpen(null)}
+        style={{ position: "fixed", left: at.left, top: at.top, bottom: at.bottom, maxHeight: at.maxH }}>
+        {title ? <div className={`px-[9px] pt-[5px] pb-[3px] text-[10px] tracking-[.06em] ${dimTone}`}>{title}</div> : null}
+        {items.map((it, i) => it.sep ? <div key={i} className={`h-px my-1 mx-1.5 ${dark ? "bg-[#332E26]" : "bg-border-soft"}`} /> : (
+          <div key={i} onMouseEnter={(e) => enter(i, !!it.sub, e)}>
+            <button className={`${row} ${it.danger ? "text-danger hover:bg-danger-soft" : rowTone}`}
+              onClick={() => { if (it.sub) return; it.onClick?.(); onClose(); }}>
+              <span className={`w-4 flex-none flex justify-center ${it.danger ? "" : iconTone}`}>{it.icon}</span>
+              <span className="flex-1 whitespace-nowrap">{it.label}</span>
+              {it.count ? <span className={`flex-none text-[10px] tabular-nums ${dimTone}`}>{it.count}</span> : null}
+              {it.keyHint ? <span className={`flex-none font-mono text-[10px] ${dimTone}`}>{it.keyHint}</span> : null}
+              {it.sub ? <span className={`flex-none ${dimTone}`}><IconChevronRight size={10} /></span> : null}
+            </button>
+          </div>
+        ))}
+      </div>
+      {/* 子菜单画在本级面板外面（同为 fixed），所以不会被本级的滚动容器裁掉。 */}
+      {open && items[open.i]?.sub ? <MenuList items={items[open.i].sub!} onClose={onClose} dark={dark} at={open.at} /> : null}
+    </>
   );
 }
-// 定位沿用保险箱那次的做法：点在下半屏就改用 bottom 向上生长，免得菜单被窗口底边切掉；
-// 水平方向按视口宽度夹一下，右键点在最右边时菜单也不会溢出去。
+// 根级落点：水平按视口宽度夹住（右键点在最右边时菜单不溢出）；
+// 点在下半屏时用 bottom 贴住点击位置向上生长，免得被窗口底边切掉。
 function ContextMenu({ x, y, items, onClose, dark, title }: { x: number; y: number; items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string }) {
+  const left = Math.max(8, Math.min(x, window.innerWidth - MENU_W - 8));
   const upward = y > window.innerHeight / 2;
-  const left = Math.max(8, Math.min(x, window.innerWidth - 232));
+  const at: MenuAt = upward
+    ? { left, bottom: window.innerHeight - y, maxH: y - 8 }
+    : { left, top: y, maxH: window.innerHeight - y - 8 };
   return (
-    <div className="fixed inset-0 z-[70]" onMouseDown={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
-      <div className="absolute max-h-[calc(100vh-16px)] overflow-y-auto"
-        style={upward ? { left, bottom: window.innerHeight - y } : { left, top: y }}
-        onMouseDown={(e) => e.stopPropagation()}><MenuList items={items} onClose={onClose} dark={dark} title={title} /></div>
+    <div className="fixed inset-0 z-[70]" onMouseDown={onClose} onWheel={(e) => e.stopPropagation()}
+      onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
+      <div onMouseDown={(e) => e.stopPropagation()}>
+        <MenuList items={items} onClose={onClose} dark={dark} title={title} at={at} />
+      </div>
     </div>
   );
 }
@@ -1061,15 +1095,23 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     ] });
   };
 
-  // 顶栏「⋯」菜单：低频操作都收在这里（变量表、工作流目录、导入导出、启用停用、复位视图）。
+  // 打开当前工作流自己的目录：脚本节点默认就在这里跑，随行的 runtime/、index.js 之类放进去即可写相对路径。
+  // 顶栏直接给了按钮（高频），所以「⋯」菜单里不再重复放一份。
+  const openWfDir = () => {
+    if (!curIdRef.current) return;
+    void (async () => {
+      const rr = await api.openWorkflowDir(curIdRef.current);
+      if (!rr?.ok) setNote(`打开目录失败：${rr?.error || "未知错误"}`);
+    })();
+  };
+
+  // 顶栏「⋯」菜单：低频操作都收在这里（变量表、导入导出、启用停用、复位视图）。
   // 菜单往按钮左下角贴（按钮本身在最右边，直接按 x=rect.left 会把菜单甩出窗口）。
   const openMoreMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
     const r = e.currentTarget.getBoundingClientRect();
     const items: MenuItem[] = [];
     if (cur) {
       items.push({ label: "变量表…", icon: <IconTag size={14} />, onClick: () => setShowVars(true) });
-      // 每条工作流一个独立目录：脚本节点默认就在这里跑，随行的 runtime/、index.js 之类放进去即可写相对路径。
-      items.push({ label: "打开工作流目录", icon: <IconFolder size={14} />, onClick: () => { void (async () => { const rr = await api.openWorkflowDir(cur.id); if (!rr?.ok) setNote(`打开目录失败：${rr?.error || "未知错误"}`); })(); } });
       items.push({ sep: true });
     }
     // 导入导出（W9）：走浏览器的文件选择/下载，不额外开主进程通道。
@@ -1117,6 +1159,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
         <div className="flex-none flex items-center bg-bg border border-border rounded-lg overflow-hidden">
           <button className={`${TB} border-r border-border ${hist.u ? "text-muted hover:bg-hover" : "text-faint"}`} disabled={!hist.u} title="撤销 ⌘Z" onClick={() => { if (hist.u) undo(); }}><IconUndo size={15} /></button>
           <button className={`${TB} border-r border-border ${hist.r ? "text-muted hover:bg-hover" : "text-faint"}`} disabled={!hist.r} title="重做 ⇧⌘Z" onClick={() => { if (hist.r) redo(); }}><IconRedo size={15} /></button>
+          <button className={`${TB} border-r border-border ${cur ? "text-muted hover:bg-hover" : "text-faint"}`} disabled={!cur} title="打开这条工作流的目录（脚本节点默认就在这里跑）" onClick={openWfDir}><IconFolder size={15} /></button>
           <button className={`${TB} border-r border-border ${drawer ? "bg-orange-soft text-orange-text" : "text-muted hover:bg-hover"}`} title="调试：最近若干次执行的逐节点轨迹" onClick={() => setDrawer((v) => !v)}><IconBug size={15} /></button>
           <button className={`${TB} border-r border-border ${lib ? "bg-orange-soft text-orange-text" : "text-muted hover:bg-hover"}`} title="对象库（右侧面板）" onClick={() => setLib((v) => !v)}><IconPanel size={15} /></button>
           <button className={`${TB} text-muted hover:bg-hover`} title="更多" onClick={openMoreMenu}><IconDots size={15} /></button>
@@ -1151,7 +1194,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
               return (
                 <div key={w.id} onClick={() => { setCurId(w.id); setSelNode(null); setSelConn(null); setSelSet([]); }}
                   className={`group flex items-center gap-[9px] px-2 py-[7px] rounded-lg cursor-pointer text-[12.5px] ${sel ? "bg-orange-soft text-orange-text font-semibold" : "hover:bg-hover"}`}>
-                  <span className={`w-6 h-6 flex-none rounded-md flex items-center justify-center text-[13px] ${sel ? "bg-orange-soft text-orange-text" : "bg-chip text-muted"}`}>
+                  <span className={`w-6 h-6 flex-none rounded-md flex items-center justify-center text-[13px] ${sel ? "bg-orange-soft text-orange-text" : "text-muted"}`}>
                     {w.icon || <IconFlow size={13} />}
                   </span>
                   <span className="flex-1 min-w-0">
@@ -1268,7 +1311,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           ) : null}
           {/* 缩放胶囊：只跟画布有关，所以贴在画布右上角而不是顶栏。左右两个步进 + 中间百分比（点=复位）+ 适应画布。 */}
           {cur ? (
-            <div className="absolute right-4 top-[14px] flex items-center overflow-hidden" style={CV_FLOAT} onMouseDown={(e) => e.stopPropagation()}>
+            <div className="absolute right-4 top-[14px] flex items-center overflow-hidden" style={CV_FLOAT} onMouseDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
               <button className={ZB} style={{ color: CV.dim }} title="缩小" onClick={() => zoomBy(0.9)}><IconMinus size={13} /></button>
               <span className="flex-none px-1 min-w-[42px] text-center text-[11.5px] tabular-nums" style={{ color: CV.dim }}>{Math.round(scale * 100)}%</span>
               <button className={ZB} style={{ color: CV.dim }} title="放大" onClick={() => zoomBy(1.1)}><IconPlus size={13} /></button>
@@ -1280,7 +1323,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           {/* 画布底部一条：左边是「当前选了什么 · 一共多少」，右边是四个高频快捷键 + 全部快捷键入口。
               原来那一长串提示文字撤了 —— 一行塞十几条谁也不会读，进弹窗看反而清楚。 */}
           {cur ? (
-            <div className="absolute left-4 right-4 bottom-[14px] flex items-center gap-[10px]" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="absolute left-4 right-4 bottom-[14px] flex items-center gap-[10px]" onMouseDown={(e) => e.stopPropagation()} onWheel={(e) => e.stopPropagation()}>
               <div className="flex items-center gap-2 min-w-0 flex-[0_1_auto] overflow-hidden px-[11px] py-[6px]" style={CV_FLOAT}>
                 <span className="w-1.5 h-1.5 flex-none rounded-full" style={{ background: selSet.length || selNode ? CV.orange : CV.port }} />
                 <span className="text-[11.5px] whitespace-nowrap overflow-hidden text-ellipsis" style={{ color: CV.dim }}>
@@ -1302,7 +1345,9 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           ) : null}
           {/* 全部快捷键：和底部那条同一份数据（CANVAS_KEYS），不会两处各说一套。 */}
           {showKeys ? (
-            <div className="absolute inset-0 z-[40] bg-black/50 flex items-center justify-center" onMouseDown={(e) => { e.stopPropagation(); setShowKeys(false); }}>
+            <div className="absolute inset-0 z-[40] bg-black/50 flex items-center justify-center"
+              onMouseDown={(e) => { e.stopPropagation(); setShowKeys(false); }}
+              onWheel={(e) => e.stopPropagation()} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}>
               <div className="w-[420px] max-h-[calc(100%-32px)] flex flex-col rounded-xl overflow-hidden"
                 style={{ background: CV.node, border: `1px solid ${CV.nodeBorder}` }} onMouseDown={(e) => e.stopPropagation()}>
                 <div className="flex-none flex items-center gap-2 px-4 py-[13px]" style={{ borderBottom: `1px solid ${CV.nodeLine}` }}>

@@ -71,9 +71,9 @@ export function Tools() {
     <div className="h-full flex min-h-0">
       {/* 二级目录：常驻左侧。底色用 --rail 比主内容区略沉一点，和深色的一级侧边栏区分开 */}
       <nav className="w-[190px] shrink-0 border-r border-border bg-rail flex flex-col min-h-0">
-        <div className="flex items-baseline justify-between p-[14px_14px_10px]">
-          <span className="text-[14px] font-semibold">{t("nav.tools")}</span>
-          <span className="text-[11px] text-faint">{t("tools.count", { n: items.length })}</span>
+        <div className="flex items-center justify-between gap-2 p-[14px_14px_10px]">
+          <span className="flex-none whitespace-nowrap text-[14px] font-semibold">{t("nav.tools")}</span>
+          <span className="flex-none whitespace-nowrap text-[11px] text-faint">{t("tools.count", { n: items.length })}</span>
         </div>
         <div className="flex-1 overflow-y-auto p-[0_8px_12px]">
           {GROUPS.map((g) => {
@@ -93,7 +93,7 @@ export function Tools() {
                         title={t(i.descKey)}
                         className={`w-full text-left flex items-center gap-[9px] p-[6px_8px] rounded-[8px] text-[12.5px] cursor-pointer transition-colors ${on ? "bg-orange-soft text-orange-text font-semibold" : "text-text hover:bg-hover"}`}
                       >
-                        <span className={`w-[22px] h-[22px] rounded-[6px] flex items-center justify-center shrink-0 ${on ? "bg-orange text-white" : "bg-chip text-muted"}`}>
+                        <span className={`w-[22px] h-[22px] rounded-[6px] flex items-center justify-center flex-none ${on ? "bg-orange text-white" : "text-muted"}`}>
                           <Icon size={14} />
                         </span>
                         <span className="truncate flex-1 min-w-0">{t(i.labelKey)}</span>
