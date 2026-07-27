@@ -233,7 +233,7 @@ export function Tasks() {
       {/* ── 详情列 ── */}
       <main className="flex-1 min-w-0 flex flex-col min-h-0 bg-bg">
         {tasks.detailId && tasks.detail && tasks.detail.job.id === tasks.detailId ? (
-          <Detail d={tasks.detail} />
+          <Detail key={tasks.detail.job.id} d={tasks.detail} />
         ) : (
           <div className="flex-1 flex items-center justify-center text-[12.5px] text-muted">
             {tasks.detailId ? t("tasks.loadingDetail") : t("tasks.pickOne")}
@@ -331,6 +331,8 @@ function detailToText(d: JobDetail): string {
 function Detail({ d }: { d: JobDetail }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  // 目标描述默认收起（两行截断）；这份 state 靠外层的 key={job.id} 在切换任务时自动重置。
+  const [descOpen, setDescOpen] = useState(false);
   const st = displayStatus(d.job);
   const m = metaOf(st);
   const subs = useMemo(() => [...d.subtasks].sort((a, b) => a.seq - b.seq), [d.subtasks]);
@@ -338,6 +340,8 @@ function Detail({ d }: { d: JobDetail }) {
   const done = d.job.steps_total ? (d.job.steps_done || 0) : subs.filter((s) => s.status === "done").length;
   const pct = total ? Math.round((done / total) * 100) : pctOf(d.job);
   const kind = [d.job.kind, d.job.channel].filter(Boolean).join(" · ");
+  // job.name 存在时 goal 才是「描述」；没有 name 时 goal 已经顶在标题位置了，不重复铺一遍。
+  const desc = d.job.name ? (d.job.goal || "") : "";
 
   // 统计条：里程碑与创建/更新时间是现成的；耗时由起止时间推。
   // 「执行设备」设计稿里有，但 Job 行没有这个字段，所以这一格不出现（不摆破折号占位）。
@@ -357,7 +361,22 @@ function Detail({ d }: { d: JobDetail }) {
             {kind ? <span className="flex-none whitespace-nowrap text-[11px] text-faint">{kind}</span> : null}
           </div>
           <div className="text-[15.5px] font-semibold leading-[1.45]">{d.job.name || d.job.goal}</div>
-          {d.job.name ? <div className="text-[12px] text-muted mt-[4px] leading-[1.6]">{d.job.goal}</div> : null}
+          {/* 目标描述：只有标题另有其名时才单独铺一段（否则 goal 已经当标题用了）。
+              收起态两行截断，展开态给一个 132px 的滚动窗；描述够长才出切换按钮。 */}
+          {desc ? (
+            <div className="mt-[5px]">
+              <div
+                className={`text-[12.5px] text-muted leading-[1.65] ${descOpen ? "max-h-[132px] overflow-y-auto" : "line-clamp-2"}`}
+                style={{ textWrap: "pretty" } as React.CSSProperties}
+              >{desc}</div>
+              {desc.length > 62 ? (
+                <button
+                  className="mt-[3px] p-0 border-none bg-transparent text-orange-text hover:text-orange-deep text-[11.5px] font-medium whitespace-nowrap cursor-pointer"
+                  onClick={() => setDescOpen((v) => !v)}
+                >{t(descOpen ? "tasks.collapseDesc" : "tasks.expandDesc")}</button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <div className="flex-none flex gap-[7px]">
           <button className={btnGhost} onClick={() => {
@@ -385,12 +404,16 @@ function Detail({ d }: { d: JobDetail }) {
     </div>
 
     <div className="flex-1 overflow-y-auto p-[16px_20px_28px]">
-      <div className="flex gap-[18px] items-start">
-        <div className="flex-1 min-w-0 flex flex-col gap-[16px]">
+      {/* 步骤 / 时间线两栏：窄窗口下允许换行叠成一列，两栏各自留 300px 的最小宽度。 */}
+      <div className="flex flex-wrap gap-[18px] items-start">
+        <div className="flex-[1_1_340px] min-w-[300px] flex flex-col gap-[14px]">
           <div>
-            <SecLabel>{t("tasks.steps")}</SecLabel>
+            <div className="flex items-center gap-[8px] mb-[9px]">
+              <span className="flex-1 min-w-0 text-[11px] font-semibold tracking-[.06em] text-faint whitespace-nowrap">{t("tasks.steps")}</span>
+              <span className="flex-none whitespace-nowrap text-[10.5px] text-faint">{t("tasks.stepCount", { n: subs.length })}</span>
+            </div>
             {subs.length ? (
-              <div className="flex flex-col">
+              <div className="flex flex-col bg-card border border-border rounded-[11px] px-[13px] pt-[12px]">
                 {subs.map((s, i) => <Step key={s.seq} s={s} last={i === subs.length - 1} />)}
               </div>
             ) : <div className="text-[12.5px] text-muted">{t("tasks.noSteps")}</div>}
@@ -419,8 +442,8 @@ function Detail({ d }: { d: JobDetail }) {
           <Results subs={subs} />
         </div>
 
-        {/* 事件时间线：右侧 300px 常驻一列 */}
-        <div className="w-[300px] flex-none">
+        {/* 事件时间线：右侧一列，和步骤列一起参与换行 */}
+        <div className="flex-[1_1_320px] min-w-[300px]">
           <div className="flex items-center gap-[8px] mb-[9px]">
             <span className="flex-1 min-w-0 text-[11px] font-semibold tracking-[.06em] text-faint whitespace-nowrap">{t("tasks.timeline")}</span>
             <span className="flex-none whitespace-nowrap text-[10.5px] text-faint">{t("tasks.eventCount", { n: d.events.length })}</span>
