@@ -28,9 +28,8 @@
     "launcherPreview": "What it looks like",
     "previewFolder": "Folder",
     "phraseCount": "{{n}}",
-    "phraseListHint": "Click a row to edit · arrows reorder",
-    "moveUp": "Move up",
-    "moveDown": "Move down"
+    "phraseListHint": "Click a row to edit · drag the handle to reorder",
+    "dragToReorder": "Drag to reorder"
   },
   "workspaces": {
     "countLine": "{{n}} total · {{auto}} auto-created",
@@ -121,7 +120,6 @@
     "copied": "Copied",
     "copyAll": "Copy all",
     "refresh": "Refresh",
-    "refreshing": "Refreshing",
     "loading": "Loading…",
     "none": "(none)",
     "enabled": "Enabled",
@@ -437,7 +435,6 @@
     "emptyTitle": "No ideas under this filter",
     "emptyHint": "Say “log an idea: …” on any device and the assistant fills in the title and tags — or add one manually.",
     "emptyAction": "Log an idea",
-    "pickOne": "Pick an idea on the left to see its details",
     "rawLabel": "Original",
     "summaryLabel": "Assistant’s notes",
     "addTag": "Add tag",

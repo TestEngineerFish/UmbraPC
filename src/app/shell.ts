@@ -522,6 +522,15 @@ function stopTasksPolling(): void {
 // ── 灵感页数据（/inspirations）───────────────────────────────────────────────
 let inspTimer: number | undefined;
 
+// 按状态数一遍列表，凑出和 /inspirations/counts 一样形状的结果（兜底用）。
+function tallyInspStatus(list: Inspiration[]): InspirationCounts {
+  const c: InspirationCounts = { all: list.length, open: 0, done: 0, archived: 0 };
+  for (const i of list) {
+    if (i.status === "open" || i.status === "done" || i.status === "archived") c[i.status] += 1;
+  }
+  return c;
+}
+
 async function loadInspirations(): Promise<void> {
   if (state.insp.list.length === 0) state.insp.loading = true;
   const [list, counts] = await Promise.all([
@@ -529,7 +538,9 @@ async function loadInspirations(): Promise<void> {
     fetchInspirationCounts(),
   ]);
   state.insp.list = list;
-  state.insp.counts = counts;
+  // 计数接口不可用（服务端还没升到带 /inspirations/counts 的版本）时退回本地统计：
+  // 没筛状态就直接数这次的列表，筛了状态才额外拉一次全量来数。
+  state.insp.counts = counts || tallyInspStatus(state.insp.filter ? await fetchInspirations() : list);
   state.insp.loading = false;
   if (state.nav === "inspiration") render();
 }

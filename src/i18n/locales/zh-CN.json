@@ -28,9 +28,8 @@
     "launcherPreview": "按下后长这样",
     "previewFolder": "文件夹",
     "phraseCount": "{{n}} 条",
-    "phraseListHint": "点行可编辑 · 左侧箭头调序",
-    "moveUp": "上移",
-    "moveDown": "下移"
+    "phraseListHint": "点行可编辑 · 左侧手柄拖拽调序",
+    "dragToReorder": "按住拖拽调整顺序"
   },
   "workspaces": {
     "countLine": "共 {{n}} 个 · {{auto}} 个自动创建",
@@ -121,7 +120,6 @@
     "copied": "已复制",
     "copyAll": "复制全部",
     "refresh": "刷新",
-    "refreshing": "刷新中",
     "loading": "加载中…",
     "none": "（无）",
     "enabled": "已开启",
@@ -437,7 +435,6 @@
     "emptyTitle": "这个筛选下还没有灵感",
     "emptyHint": "在任意端发一条「记个灵感：…」，秘书会自动补标题和标签；也可以点右上角手动添加。",
     "emptyAction": "记一条灵感",
-    "pickOne": "从左边选一条灵感看详情",
     "rawLabel": "原文",
     "summaryLabel": "秘书整理",
     "addTag": "加标签",

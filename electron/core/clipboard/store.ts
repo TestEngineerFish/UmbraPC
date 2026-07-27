@@ -89,7 +89,9 @@ export class ClipStore {
     return this.items.find((it) => it.id === id);
   }
 
-  // 查询：分类 + 关键词（匹配 preview / 文本 content），排序 favorite DESC, lastUsedAt DESC。
+  // 查询：分类 + 关键词（匹配 preview / 文本 content），一律按 lastUsedAt DESC 排。
+  // 收藏过的条目不再固定置顶——一旦收藏得多了，最上面永远是那几条老内容，
+  // 刚复制的反而被挤到下面，历史面板就失去意义了。收藏只当标记和「收藏」分类的筛选依据。
   list(category: ClipCategory = "all", keyword = ""): ClipItem[] {
     if (category === "phrase") return [];
     const kw = keyword.trim().toLowerCase();
@@ -103,7 +105,7 @@ export class ClipStore {
           (it.type === "text" && (it.content || "").toLowerCase().includes(kw)),
       );
     }
-    arr.sort((a, b) => (a.favorite === b.favorite ? b.lastUsedAt - a.lastUsedAt : a.favorite ? -1 : 1));
+    arr.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
     return arr;
   }
 

@@ -9,7 +9,7 @@ import * as legacy from "../../app/shell";
 import { deleteJobs, getServerUrl } from "../../services/server";
 import type { Job, JobDetail, Subtask } from "../../services/server";
 import { ImageViewer } from "../../components/ImageViewer";
-import { btnGhost, btnDanger } from "../../components/ui";
+import { btnGhost, btnDanger, RefreshButton } from "../../components/ui";
 import { IconSearch, IconRefresh, IconCheck, IconX, IconClock, IconAlert, IconFolder } from "../../components/icons";
 
 // 全局图片预览：任意 Step 图片点击后打开（避免逐层透传 onClick）。
@@ -180,10 +180,7 @@ export function Tasks() {
               <button className={btnGhost} onClick={exitSelect}>{t("common.cancel")}</button>
             </>) : (<>
               <button className={btnGhost} disabled={!tasks.list.length} onClick={() => setSelectMode(true)}>{t("tasks.manage")}</button>
-              <button className={btnGhost} onClick={() => legacy.manualRefresh()}>
-                <span className={`flex ${tasks.refreshing ? "animate-spin" : ""}`}><IconRefresh size={12} /></span>
-                {tasks.refreshing ? t("common.refreshing") : t("common.refresh")}
-              </button>
+              <RefreshButton onClick={() => legacy.manualRefresh()} spinning={tasks.refreshing} />
             </>)}
           </div>
 

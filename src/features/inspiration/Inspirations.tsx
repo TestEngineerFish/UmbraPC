@@ -5,10 +5,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
-import { btnGhost, btnIcon, btnPrimary, selectBox } from "../../components/ui";
+import { btnGhost, btnIcon, btnPrimary, selectBox, ConfirmDialog, Modal, RefreshButton } from "../../components/ui";
 import {
   IconArrowRight, IconBulb, IconChat, IconCheck, IconCopy, IconKeyboard,
-  IconPencil, IconPhone, IconPlus, IconSearch, IconTrash, IconX,
+  IconPencil, IconPhone, IconPlus, IconSearch, IconTrash,
 } from "../../components/icons";
 import { createInspiration, deleteInspirations, fetchJobDetail, updateInspiration } from "../../services/server";
 import type { Inspiration, Job } from "../../services/server";
@@ -78,8 +78,10 @@ export function Inspirations() {
     return out;
   }, [st.list, q, tag, sort]);
 
-  // 选中项：列表变了但选中项还在就保持不动，否则回落到第一条。
-  const current = list.find((i) => i.id === sel) || list[0] || null;
+  // 不默认选中：进页面时右侧是空态，点一下选中、再点一下取消。
+  // 选中项被筛掉时自然回到空态（find 找不到就是 null），不擅自跳到别的条目。
+  const current = list.find((i) => i.id === sel) || null;
+  const pick = (id: number) => setSel((prev) => (prev === id ? null : id));
 
   const setFilter = (f: Filter) => { legacy.setInspFilter(f); setSel(null); };
 
@@ -174,12 +176,15 @@ export function Inspirations() {
           <button className={btnPrimary} onClick={() => setEditing(null)}>
             <span className="inline-flex items-center gap-[5px]"><IconPlus size={12} />{t("inspiration.add")}</span>
           </button>
+          <RefreshButton onClick={() => legacy.manualRefreshInsp()} spinning={st.refreshing} />
         </div>
 
+        {/* 详情栏关掉后中间会宽出 392px，固定两列会把卡片撑得很空，
+            所以按 300px 最小宽度自动分列：详情栏开着仍是设计稿的两列，关掉自动变三列。 */}
         <div className="flex-1 overflow-y-auto p-[12px]">
           {list.length ? (
-            <div className="grid grid-cols-2 gap-[10px] content-start">
-              {list.map((i) => <Card key={i.id} item={i} on={current?.id === i.id} tag={tag} onPick={() => setSel(i.id)} />)}
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-[10px] content-start">
+              {list.map((i) => <Card key={i.id} item={i} on={current?.id === i.id} tag={tag} onPick={() => pick(i.id)} />)}
             </div>
           ) : (
             <div className="h-[420px] flex flex-col items-center justify-center gap-[11px]">
@@ -192,9 +197,9 @@ export function Inspirations() {
         </div>
       </section>
 
-      {/* ── 详情栏 ── */}
-      <aside className="w-[392px] flex-none bg-card border-l border-border flex flex-col min-h-0">
-        {current ? (
+      {/* ── 详情栏 ── 没选中就整列不出现，中间的网格自己撑满剩余宽度 */}
+      {current ? (
+        <aside className="w-[392px] flex-none bg-card border-l border-border flex flex-col min-h-0">
           <Detail
             key={current.id}
             item={current}
@@ -204,12 +209,8 @@ export function Inspirations() {
             onChanged={() => legacy.manualRefreshInsp()}
             setBusy={setBusy}
           />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-[12.5px] text-muted px-[20px] text-center">
-            {t("inspiration.pickOne")}
-          </div>
-        )}
-      </aside>
+        </aside>
+      ) : null}
 
       {editing !== undefined ? (
         <Editor item={editing} onClose={() => setEditing(undefined)}
@@ -217,16 +218,9 @@ export function Inspirations() {
       ) : null}
 
       {confirming && current ? (
-        <Modal onClose={() => setConfirming(false)}>
-          <div className="w-[380px] bg-card border border-border rounded-[14px] overflow-hidden">
-            <div className="p-[16px] text-[12.5px] leading-[1.7]">{t("inspiration.confirmDeleteOne")}</div>
-            <div className="flex items-center justify-end gap-[8px] p-[12px_16px] border-t border-border bg-bg">
-              <button className={btnGhost} onClick={() => setConfirming(false)}>{t("common.cancel")}</button>
-              <button className="flex-none whitespace-nowrap px-[15px] py-[7px] bg-danger text-white rounded-[8px] text-[12.5px] font-semibold cursor-pointer disabled:opacity-45"
-                disabled={busy} onClick={doDelete}>{t("inspiration.confirmDeleteBtn")}</button>
-            </div>
-          </div>
-        </Modal>
+        <ConfirmDialog danger busy={busy} message={t("inspiration.confirmDeleteOne")}
+          confirmText={t("inspiration.confirmDeleteBtn")}
+          onConfirm={doDelete} onCancel={() => setConfirming(false)} />
       ) : null}
     </div>
   );
@@ -409,15 +403,6 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
   </>);
 }
 
-// 遮罩 + 居中容器：新增/编辑弹窗与删除确认共用。
-function Modal({ children, onClose }: { children: React.ReactNode; onClose: () => void }) {
-  return (
-    <div onClick={onClose} className="fixed inset-0 z-50 flex items-center justify-center bg-[rgba(20,16,12,.42)]">
-      <div onClick={(e) => e.stopPropagation()}>{children}</div>
-    </div>
-  );
-}
-
 // 记灵感 / 编辑弹窗（item 为 null 时是新增）。⌘↩ / Ctrl+↩ 直接保存。
 function Editor({ item, onClose, onSaved }: { item: Inspiration | null; onClose: () => void; onSaved: () => void }) {
   const { t } = useTranslation();
@@ -438,41 +423,36 @@ function Editor({ item, onClose, onSaved }: { item: Inspiration | null; onClose:
 
   const field = "w-full border border-border bg-bg text-text rounded-[8px] px-[11px] py-[7px] text-[12.5px] outline-none focus:border-orange";
   return (
-    <Modal onClose={onClose}>
-      <div className="w-[500px] bg-card border border-border rounded-[14px] overflow-hidden"
-        onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") save(); }}>
-        <div className="flex items-center gap-[10px] p-[14px_16px] border-b border-border">
-          <span className="w-[24px] h-[24px] flex-none rounded-[7px] bg-orange-soft text-orange-text flex items-center justify-center"><IconBulb size={13} /></span>
-          <span className="flex-1 text-[14px] font-semibold">{item ? t("inspiration.editTitle") : t("inspiration.newTitle")}</span>
-          <button className={`${btnIcon} hover:border-orange hover:text-orange-text`} onClick={onClose}><IconX size={12} /></button>
+    <Modal width={500} onClose={onClose}
+      title={<span className="flex items-center gap-[10px]">
+        <span className="w-[24px] h-[24px] flex-none rounded-[7px] bg-orange-soft text-orange-text flex items-center justify-center"><IconBulb size={13} /></span>
+        {item ? t("inspiration.editTitle") : t("inspiration.newTitle")}
+      </span>}
+      footer={<>
+        <span className="flex-1 text-[11px] text-faint whitespace-nowrap">{t("inspiration.saveHotkey")}</span>
+        <button className={btnGhost} onClick={onClose}>{t("common.cancel")}</button>
+        <button className={btnPrimary} disabled={busy || !raw.trim()} onClick={save}>{t("common.save")}</button>
+      </>}>
+      <div className="flex flex-col gap-[13px]"
+        onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") void save(); }}>
+        <div>
+          <div className="text-[11.5px] text-muted mb-[5px]">{t("inspiration.fieldRaw")}</div>
+          <textarea rows={5} value={raw} onChange={(e) => setRaw(e.target.value)} placeholder={t("inspiration.rawPh")}
+            className={`${field} rounded-[9px] px-[12px] py-[10px] leading-[1.7] resize-y`} />
         </div>
-
-        <div className="p-[15px_16px] flex flex-col gap-[13px]">
-          <div>
-            <div className="text-[11.5px] text-muted mb-[5px]">{t("inspiration.fieldRaw")}</div>
-            <textarea rows={5} value={raw} onChange={(e) => setRaw(e.target.value)} placeholder={t("inspiration.rawPh")}
-              className={`${field} rounded-[9px] px-[12px] py-[10px] leading-[1.7] resize-y`} />
+        <div className="flex gap-[10px]">
+          <div className="flex-1 min-w-0">
+            <div className="text-[11.5px] text-muted mb-[5px]">{t("inspiration.fieldTitle")}</div>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("inspiration.titlePh")} className={field} />
           </div>
-          <div className="flex gap-[10px]">
-            <div className="flex-1 min-w-0">
-              <div className="text-[11.5px] text-muted mb-[5px]">{t("inspiration.fieldTitle")}</div>
-              <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder={t("inspiration.titlePh")} className={field} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-[11.5px] text-muted mb-[5px]">{t("inspiration.railTags")}</div>
-              <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder={t("inspiration.tagsPh")} className={field} />
-            </div>
-          </div>
-          <div className="flex items-center gap-[9px] bg-orange-soft rounded-[9px] p-[9px_11px]">
-            <span className="flex-none text-orange-text"><IconBulb size={13} /></span>
-            <span className="flex-1 text-[11.5px] text-orange-text leading-[1.55]">{t("inspiration.autoFillHint")}</span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[11.5px] text-muted mb-[5px]">{t("inspiration.railTags")}</div>
+            <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder={t("inspiration.tagsPh")} className={field} />
           </div>
         </div>
-
-        <div className="flex items-center gap-[8px] p-[12px_16px] border-t border-border bg-bg">
-          <span className="flex-1 text-[11px] text-faint whitespace-nowrap">{t("inspiration.saveHotkey")}</span>
-          <button className={btnGhost} onClick={onClose}>{t("common.cancel")}</button>
-          <button className={btnPrimary} disabled={busy || !raw.trim()} onClick={save}>{t("common.save")}</button>
+        <div className="flex items-center gap-[9px] bg-orange-soft rounded-[9px] p-[9px_11px]">
+          <span className="flex-none text-orange-text"><IconBulb size={13} /></span>
+          <span className="flex-1 text-[11.5px] text-orange-text leading-[1.55]">{t("inspiration.autoFillHint")}</span>
         </div>
       </div>
     </Modal>

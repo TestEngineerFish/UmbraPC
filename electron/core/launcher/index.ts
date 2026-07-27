@@ -177,11 +177,15 @@ export class LauncherManager {
   private async hide(returnFocus = false): Promise<void> {
     // 面板一收起，脚本要求的自动重查就没意义了，定时器要跟着停掉。
     if (this.rerunTimer) { clearTimeout(this.rerunTimer); this.rerunTimer = undefined; }
-    if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) this.panel.hide();
+    // 顺序要紧：先 app.hide() 再 panel.hide()。
+    // 反过来的话，面板一收起 macOS 就把同一个 app 的下一个窗口（主窗口）顶到前台，
+    // 等下一行 app.hide() 执行时主窗口已经画出来了 —— 肉眼就是「闪一下主窗口再一起消失」。
+    // 整体先隐藏就没有这个中间态；panel.hide() 仍要补一刀，否则 app 再被唤起时面板会跟着回来。
     if (returnFocus && !this.appWasActive && process.platform === "darwin") {
       const { app } = await import("electron");
       app.hide();
     }
+    if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) this.panel.hide();
   }
 
   // ── 全局快捷键（只注册自身；清理由 main.ts 统一做）──

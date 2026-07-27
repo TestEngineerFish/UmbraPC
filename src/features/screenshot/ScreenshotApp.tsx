@@ -178,18 +178,26 @@ export function App() {
   const onImgLoad = useCallback(() => {
     if (!imgSrc || !imgRef.current) return;
     const img = imgRef.current;
+    const src = img.src; // 会话令牌：延后的活儿跑起来时要确认还是同一张冻结画面
     sizeCanvas();
-    mosaicBaseRef.current = buildMosaicBase(img, window.innerWidth, window.innerHeight);
-    // 取色采样画布（原始分辨率）
-    const s = document.createElement("canvas");
-    s.width = img.naturalWidth;
-    s.height = img.naturalHeight;
-    const sctx = s.getContext("2d", { willReadFrequently: true })!;
-    sctx.drawImage(img, 0, 0);
-    sampleRef.current = { canvas: s, ctx: sctx, ratio: img.naturalWidth / window.innerWidth };
+    // 先把窗口显示出来。马赛克底图和取色采样画布都不是首帧必需的，
+    // 而取色画布是「原始分辨率 + willReadFrequently」——后者会强制走软件光栅，
+    // 一张 4K 截图光是分配 + drawImage 就要上百毫秒，摆在 ready() 前面等于让快门白等半拍。
     setPhase("select");
     shot.ready();
     requestAnimationFrame(redraw);
+    // 画面出来之后再补这两张离屏画布。消费方本来就容忍 null
+    // （drawObj 的 mosaicBase、放大镜的 sample），最多头一两帧没有马赛克底与取色。
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!imgRef.current || imgRef.current.src !== src) return; // 已经换会话了
+      mosaicBaseRef.current = buildMosaicBase(img, window.innerWidth, window.innerHeight);
+      const s = document.createElement("canvas");
+      s.width = img.naturalWidth;
+      s.height = img.naturalHeight;
+      const sctx = s.getContext("2d", { willReadFrequently: true })!;
+      sctx.drawImage(img, 0, 0);
+      sampleRef.current = { canvas: s, ctx: sctx, ratio: img.naturalWidth / window.innerWidth };
+    }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imgSrc]);
 

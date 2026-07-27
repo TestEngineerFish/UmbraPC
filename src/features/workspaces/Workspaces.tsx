@@ -11,8 +11,8 @@ import { getState } from "../../services/deviceTransport";
 import * as desktop from "../../services/desktop";
 import type { DirEntry } from "../../services/desktop";
 import * as legacy from "../../app/shell";
-import { btnGhost, btnPrimary, btnIcon, inputFlex } from "../../components/ui";
-import { IconSearch, IconRefresh, IconPlus, IconCopy, IconCheck, IconFolder, IconTrash, IconX, IconAlert, IconPencil } from "../../components/icons";
+import { btnGhost, btnPrimary, btnIcon, inputFlex, Modal, RefreshButton } from "../../components/ui";
+import { IconSearch, IconPlus, IconCopy, IconCheck, IconFolder, IconTrash, IconX, IconAlert, IconPencil } from "../../components/icons";
 
 // 名字首字母（或首个汉字）做 monogram 方块 —— 设计规范里分类与记录一律用字母方块，不用彩色 emoji。
 function monogramOf(name: string): string {
@@ -56,7 +56,6 @@ export function Workspaces() {
   const { t } = useTranslation();
   const [list, setList] = useState<Workspace[]>([]);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [q, setQ] = useState("");
   const [filter, setFilter] = useState("all");
   const [selId, setSelId] = useState<string>("");
@@ -69,12 +68,11 @@ export function Workspaces() {
   const [removing, setRemoving] = useState<Workspace | null>(null);
   const [purge, setPurge] = useState(false);
 
-  const load = useCallback(async (spin = false) => {
-    if (spin) setRefreshing(true);
+  // 刷新按钮自己管自旋（RefreshButton 里有最短自旋时长），这里只负责取数。
+  const load = useCallback(async () => {
     const rows = await fetchWorkspaces();
     setList(rows);
     setLoading(false);
-    if (spin) setRefreshing(false);
   }, []);
 
   useEffect(() => {
@@ -143,9 +141,7 @@ export function Workspaces() {
             <button className={btnPrimary} onClick={() => { setErr(""); setAdding(true); }}>
               <span className="flex items-center gap-1"><IconPlus size={12} />{t("workspaces.add")}</span>
             </button>
-            <button className={btnIcon} title={t("common.refresh")} onClick={() => void load(true)}>
-              <span className={`flex ${refreshing ? "animate-spin" : ""}`}><IconRefresh size={13} /></span>
-            </button>
+            <RefreshButton onClick={load} />
           </div>
 
           <div className="flex items-center gap-[7px] bg-card border border-border rounded-[8px] px-[9px] py-[5px]">
@@ -453,25 +449,6 @@ function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; 
   </>);
 }
 
-// 通用弹框：标题栏 + 内容 + 底栏。两个弹框共用，避免两处各写一遍遮罩与圆角。
-function Modal({ width, title, children, footer, onClose }: {
-  width: number; title: string; children: React.ReactNode; footer: React.ReactNode; onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <div className="absolute inset-0 z-40 bg-black/40 flex items-center justify-center" onMouseDown={onClose}>
-      <div className="bg-card border border-border rounded-[14px] overflow-hidden flex flex-col max-h-[calc(100%-32px)]"
-        style={{ width }} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="flex-none flex items-center gap-[10px] px-[16px] py-[14px] border-b border-border">
-          <span className="flex-1 min-w-0 truncate text-[14px] font-semibold">{title}</span>
-          <button className={btnIcon} title={t("common.close")} onClick={onClose}><IconX size={12} /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto px-[16px] py-[15px] flex flex-col gap-[13px]">{children}</div>
-        <div className="flex-none flex items-center gap-[8px] px-[16px] py-[12px] border-t border-border bg-bg">{footer}</div>
-      </div>
-    </div>
-  );
-}
 
 // 弹框里的一个字段块：标签 + 控件 + 可选脚注。
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {

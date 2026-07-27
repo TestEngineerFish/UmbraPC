@@ -406,14 +406,17 @@ export interface InspirationCounts {
   archived: number;
 }
 
-export async function fetchInspirationCounts(): Promise<InspirationCounts> {
-  const empty = { all: 0, open: 0, done: 0, archived: 0 };
+// 返回 null 表示这个接口不可用（服务端还没升级到带计数的版本），
+// 由调用方决定怎么兜底——直接给一串 0 会让筛选栏看起来像「一条灵感都没有」。
+export async function fetchInspirationCounts(): Promise<InspirationCounts | null> {
   try {
     const r = await fetch(`${getServerUrl()}/inspirations/counts`);
-    if (!r.ok) return empty;
-    return { ...empty, ...(await r.json()) };
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || typeof j.all !== "number") return null;
+    return { all: 0, open: 0, done: 0, archived: 0, ...j };
   } catch {
-    return empty;
+    return null;
   }
 }
 

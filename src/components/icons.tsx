@@ -194,6 +194,15 @@ export function IconX(p: IconProps) {
 }
 
 // 折角箭头：右用于「已选中」的行尾指示，下用于下拉触发器。
+// 拖拽手柄（可排序列表的行首）。三道短横是这个交互的通用符号，一眼就知道能拖。
+export function IconGrip(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M7 7h10M7 12h10M7 17h10" />
+    </svg>
+  );
+}
+
 // 直箭头（灵感详情「让 Umbra 去做这件事」这类行动号召用，比 chevron 更有推进感）。
 export function IconArrowRight(p: IconProps) {
   return (

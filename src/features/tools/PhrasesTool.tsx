@@ -1,10 +1,10 @@
-// 工具 → 常用语：维护可在快捷入口里直接粘贴的短语列表（支持关键字直达、上下调序），
+// 工具 → 常用语：维护可在快捷入口里直接粘贴的短语列表（支持关键字直达、拖拽调序），
 // 外加一把独立的全局快捷键 —— 按下后打开的是剪贴板面板的「常用语」分类（同一个弹框，默认列表不同）。
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Pill, btnGhost, btnPrimary, btnIcon, inputSmall, inputHotkey, toAccelerator } from "../../components/ui";
 import { HotkeyButton, HotkeyConflictBanner, useHotkeyConflict } from "./hotkeys";
-import { IconUp, IconDown, IconTrash } from "../../components/icons";
+import { IconGrip, IconTrash } from "../../components/icons";
 import { launcherApi, clipApi, hasClip, type Phrase } from "./bridges";
 
 // 常用语快捷键的出厂值（⌘⌥V，和剪贴板的 ⌘⇧V 同族好记）。
@@ -49,12 +49,19 @@ export function PhrasesTool() {
     setDraft({ name: "", keyword: "", content: "" });
   };
   const update = (id: string, patch: Partial<Phrase>) => save(phrases.map((p) => (p.id === id ? { ...p, ...patch } : p)));
-  const move = (i: number, dir: -1 | 1) => {
-    const j = i + dir; if (j < 0 || j >= phrases.length) return;
-    const list = phrases.slice(); [list[i], list[j]] = [list[j], list[i]]; save(list);
+  // 拖拽调序：手柄本身是 draggable 源，整行是放置目标。
+  // 只让手柄可拖，不把 draggable 放在整行上——否则选中行内输入框里的文字都会被当成拖拽起手。
+  const [dragI, setDragI] = useState<number | null>(null);
+  const [overI, setOverI] = useState<number | null>(null);
+  const endDrag = () => { setDragI(null); setOverI(null); };
+  const dropAt = (to: number) => {
+    if (dragI === null || dragI === to) { endDrag(); return; }
+    const list = phrases.slice();
+    const [it] = list.splice(dragI, 1);
+    list.splice(to, 0, it);
+    save(list);
+    endDrag();
   };
-  // 调序用的小箭头：26px 的图标按钮在 9px 行高里放不下两个，所以这一对压到 13px 高。
-  const moveBtn = "w-[18px] h-[13px] flex items-center justify-center bg-transparent border-none text-faint cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed";
 
   return (
     <>
@@ -86,12 +93,19 @@ export function PhrasesTool() {
 
         <div className="flex flex-col">
           {phrases.length ? phrases.map((p, i) => (
-            <div key={p.id} className="flex items-center gap-[11px] p-[9px_16px] border-b border-border-soft hover:bg-hover">
-              {/* 调序按钮拆成行内的兄弟节点，不套在整行按钮里，否则点箭头会连带触发「进入编辑」 */}
-              <div className="flex-none flex flex-col">
-                <button className={moveBtn} disabled={i === 0} onClick={() => move(i, -1)} title={t("tools.moveUp")}><IconUp size={11} /></button>
-                <button className={moveBtn} disabled={i === phrases.length - 1} onClick={() => move(i, 1)} title={t("tools.moveDown")}><IconDown size={11} /></button>
-              </div>
+            <div key={p.id}
+              onDragOver={(e) => { if (dragI !== null) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; setOverI(i); } }}
+              onDrop={(e) => { e.preventDefault(); dropAt(i); }}
+              className={`flex items-center gap-[11px] p-[9px_16px] border-b border-border-soft ${
+                dragI === i ? "opacity-40" : overI === i && dragI !== null ? "bg-orange-soft" : "hover:bg-hover"}`}>
+              {/* 手柄是拖拽源，和整行并列而不是套在行按钮里，否则按下手柄会连带触发「进入编辑」 */}
+              <span draggable
+                onDragStart={(e) => { setDragI(i); e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", p.id); }}
+                onDragEnd={endDrag}
+                title={t("tools.dragToReorder")}
+                className="flex-none flex items-center text-faint cursor-grab active:cursor-grabbing hover:text-orange-text">
+                <IconGrip size={13} />
+              </span>
               {editId === p.id ? (
                 <div className="flex-1 min-w-0 flex items-center gap-[8px]">
                   <input value={p.name} onChange={(e) => update(p.id, { name: e.target.value })} placeholder={t("settings.phraseName")} className={inputSmall} />
