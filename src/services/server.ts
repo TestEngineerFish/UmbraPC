@@ -196,6 +196,8 @@ export interface Job {
   steps_total?: number;
   steps_done?: number;
   is_task?: boolean;
+  // 所属工作区的名字（tasks.project）。旧 Job 行没有项目概念，恒为空。
+  project?: string | null;
 }
 export interface Subtask {
   id: string;
@@ -266,6 +268,19 @@ export async function fetchJobs(limit = 30): Promise<Job[]> {
   }
 }
 
+// 某个工作区（= 项目名）下的任务。过滤在服务端做（/jobs?project=），
+// 不把全部任务拉回客户端再筛 —— 任务多了那样会越来越慢。
+export async function fetchJobsByProject(project: string, limit = 20): Promise<Job[]> {
+  if (!project) return [];
+  try {
+    const r = await fetch(`${getServerUrl()}/jobs?limit=${limit}&project=${encodeURIComponent(project)}`);
+    if (!r.ok) return [];
+    return await r.json();
+  } catch {
+    return [];
+  }
+}
+
 // 批量删除任务（全选/多选）。返回实际删除数量。
 export async function deleteJobs(ids: string[]): Promise<number> {
   if (!ids.length) return 0;
@@ -294,6 +309,21 @@ export interface Workspace {
   task_count: number;
   last_goal: string | null;
   last_active_at: string;
+}
+
+// 改工作区描述（服务端 PATCH /workspaces/{id}）。返回更新后的行，失败返回 null。
+export async function updateWorkspaceDesc(id: string, description: string): Promise<Workspace | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/workspaces/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description: description || null }),
+    });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
 }
 
 // 工作区列表（可只看某设备的）。

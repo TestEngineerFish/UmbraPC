@@ -323,6 +323,34 @@ function registerIpc(): void {
     return await shell.openPath(target);
   });
 
+  // 列一个目录的顶层内容（工作区详情页的「目录内容」）。
+  // 只读顶层、不递归：这一栏是「让人认出这是哪个目录」，不是文件浏览器。
+  // 返回排好序的前 limit 项（目录在前、再按名字）+ total 供「共 N 项」用；目录不存在返回 total=-1。
+  ipcMain.handle("umbra:listDir", async (_e, p: string, limit = 5) => {
+    let target = String(p || "").trim();
+    if (!target) return { items: [], total: -1 };
+    if (target === "~" || target.startsWith("~/")) target = path.join(app.getPath("home"), target.slice(1));
+    try {
+      const names = await fs.readdir(target, { withFileTypes: true });
+      // 隐藏文件不列（.git / .DS_Store 之类占位没意义）。
+      const visible = names.filter((d) => !d.name.startsWith("."));
+      visible.sort((a, b) => (a.isDirectory() === b.isDirectory() ? a.name.localeCompare(b.name) : a.isDirectory() ? -1 : 1));
+      const take = visible.slice(0, Math.max(1, Number(limit) || 5));
+      const items = await Promise.all(take.map(async (d) => {
+        const full = path.join(target, d.name);
+        // 目录不给大小（算目录体积要递归，这一栏不值得为它做 IO）。
+        let size = -1;
+        if (d.isFile()) {
+          try { size = (await fs.stat(full)).size; } catch { /* 读不到就当未知 */ }
+        }
+        return { name: d.name, dir: d.isDirectory(), size };
+      }));
+      return { items, total: visible.length };
+    } catch {
+      return { items: [], total: -1 };   // 目录不存在 / 没权限：调用方按「读不到」展示
+    }
+  });
+
   // 渲染层（设备传输层）把每条日志也写进文件。
   ipcMain.handle("umbra:appendLog", (_e, line: string) => {
     appendLog(String(line || ""));

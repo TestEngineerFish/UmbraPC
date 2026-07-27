@@ -28,6 +28,13 @@ interface PublicConfig {
   logsDir: string;
 }
 
+// 目录里的一项（工作区详情页的「目录内容」）。size=-1 表示未知或它是目录。
+export interface DirEntry {
+  name: string;
+  dir: boolean;
+  size: number;
+}
+
 // providers.json 里的一条自定义程序。
 export interface CustomProviderCfg {
   provider: string;
@@ -52,6 +59,7 @@ interface UmbraBridge {
   openPrivacy(target: string): Promise<unknown>;
   setLoginItem(on: boolean): Promise<boolean>;
   openPath(path: string): Promise<string>;
+  listDir(path: string, limit?: number): Promise<{ items: DirEntry[]; total: number }>;
   computerStop(): Promise<unknown>;
   pauseShortcuts(): Promise<void>;
   resumeShortcuts(): Promise<void>;
@@ -121,6 +129,12 @@ export async function refreshPermissions(): Promise<Permissions> {
 // 打开系统设置对应隐私面板。
 export function openPrivacy(target: string): void {
   if (isDesktop()) window.umbra!.openPrivacy(target);
+}
+
+// 列目录顶层内容。total=-1 表示读不到（目录不存在 / 没权限 / 非桌面端）。
+export async function listDir(p: string, limit = 5): Promise<{ items: DirEntry[]; total: number }> {
+  if (!isDesktop() || !p) return { items: [], total: -1 };
+  return await window.umbra!.listDir(p, limit);
 }
 
 // 在系统文件管理器里打开一个目录/文件。返回 "" 表示成功，非空是错误信息。

@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld("umbra", {
   // 开机自启：只写；当前状态从 getConfig().openAtLogin 读（系统设置才是唯一真相）。
   setLoginItem: (on: boolean) => ipcRenderer.invoke("umbra:setLoginItem", on),
   openPath: (path: string) => ipcRenderer.invoke("umbra:openPath", path),
+  // 列目录顶层内容（工作区详情页的「目录内容」栏）。
+  listDir: (path: string, limit?: number) => ipcRenderer.invoke("umbra:listDir", path, limit),
   // computer-use 紧急停止
   computerStop: () => ipcRenderer.invoke("umbra:computerStop"),
   // 录制快捷键期间暂停/恢复全局快捷键
