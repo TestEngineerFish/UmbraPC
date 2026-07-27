@@ -5,7 +5,7 @@
 
 import { chatConn, getServerUrl, setServerUrl, setToken, getToken, getDeviceName, setDeviceName } from "../services/server";
 import { fetchJobs, fetchJobDetail, type Job, type JobDetail } from "../services/server";
-import { fetchInspirations, type Inspiration } from "../services/server";
+import { fetchInspirations, fetchInspirationCounts, type Inspiration, type InspirationCounts } from "../services/server";
 import * as chat from "../features/chat/chat";
 import * as desktop from "../services/desktop";
 import { t } from "../i18n";
@@ -53,6 +53,8 @@ const state = {
     loading: false,
     refreshing: false,
     filter: "" as "" | "open" | "done" | "archived",
+    // 各状态条数：筛选栏四个数字要同时显示，列表按 status 查只回一种状态。
+    counts: { all: 0, open: 0, done: 0, archived: 0 } as InspirationCounts,
   },
   // 剪贴板历史设置
   clip: {
@@ -435,6 +437,18 @@ export function setInspFilter(f: "" | "open" | "done" | "archived"): void {
   state.insp.filter = f;
   loadInspirations();
 }
+// 灵感页「让 Umbra 去做这件事」：跳到聊天页，把这条灵感当一条消息发给秘书。
+// 走的是快捷入口「发给秘书」那条现成通路（等聊天页挂载后再发，确保渲染）。
+export function sendToChat(text: string): void {
+  if (!text.trim()) return;
+  setNav("chat");
+  setTimeout(() => chat.sendText(text), 0);
+}
+// 灵感详情「关联任务 → 查看」：跳到任务页并直接展开那条任务。
+export function openTaskFrom(jobId: string): void {
+  setNav("tasks");
+  openJob(jobId);
+}
 // React 能力页：写入/删除自定义程序（复用 providers.json 持久化逻辑）。
 export function saveCustomProviderEntry(entry: desktop.CustomProviderCfg, original: string | null): void {
   const list = [...desktop.getCustomProviders()];
@@ -510,7 +524,12 @@ let inspTimer: number | undefined;
 
 async function loadInspirations(): Promise<void> {
   if (state.insp.list.length === 0) state.insp.loading = true;
-  state.insp.list = await fetchInspirations(state.insp.filter || undefined);
+  const [list, counts] = await Promise.all([
+    fetchInspirations(state.insp.filter || undefined),
+    fetchInspirationCounts(),
+  ]);
+  state.insp.list = list;
+  state.insp.counts = counts;
   state.insp.loading = false;
   if (state.nav === "inspiration") render();
 }

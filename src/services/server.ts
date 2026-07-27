@@ -393,8 +393,28 @@ export interface Inspiration {
   tags: string[];
   status: string; // open/done/archived
   source_channel?: string;
+  job_id?: string; // 已落地成任务时指向 tasks.id；空串表示没关联
   created_at?: string;
   updated_at?: string;
+}
+
+// 各状态的灵感条数。筛选栏要同时显示四个数字，列表接口按 status 查不出来。
+export interface InspirationCounts {
+  all: number;
+  open: number;
+  done: number;
+  archived: number;
+}
+
+export async function fetchInspirationCounts(): Promise<InspirationCounts> {
+  const empty = { all: 0, open: 0, done: 0, archived: 0 };
+  try {
+    const r = await fetch(`${getServerUrl()}/inspirations/counts`);
+    if (!r.ok) return empty;
+    return { ...empty, ...(await r.json()) };
+  } catch {
+    return empty;
+  }
 }
 
 export async function fetchInspirations(status?: string): Promise<Inspiration[]> {
@@ -429,7 +449,7 @@ export async function createInspiration(body: {
 
 export async function updateInspiration(
   id: number,
-  patch: Partial<Pick<Inspiration, "raw" | "title" | "summary" | "tags" | "status">>,
+  patch: Partial<Pick<Inspiration, "raw" | "title" | "summary" | "tags" | "status" | "job_id">>,
 ): Promise<Inspiration | null> {
   try {
     const r = await fetch(`${getServerUrl()}/inspirations/${id}`, {
