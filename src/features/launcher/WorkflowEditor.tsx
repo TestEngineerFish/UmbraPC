@@ -120,7 +120,7 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "input.units", label: "单位换算", icon: IconRuler },
     { type: "input.filefilter", label: "File Filter 文件过滤器", icon: IconFolder, soon: true, hint: "按范围和类型搜本地文件并列出来。等本地索引能力就绪后实现。" },
     { type: "input.appsfilter", label: "Running Apps 运行中应用", icon: IconWindow, soon: true, hint: "列出当前运行的应用供切换/退出。要接系统窗口信息，暂未实现。" },
-    { type: "input.dict", label: "Dictionary 词典查询", icon: IconBook, soon: true, hint: "查系统词典。macOS 专属能力，跨平台方案没定。" },
+    { type: "input.dict", label: "Dictionary 词典查询", icon: IconBook, hint: "把输入送进 macOS 的词典 App 查词。仅 macOS。" },
   ] },
   { cat: "工具 Utilities", icon: IconGear, items: [
     { type: "utility.args", label: "Args & Vars 改参数/设变量", icon: IconTag },
@@ -157,13 +157,13 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "action.browse", label: "Browse in Terminal 在终端中打开目录", icon: IconTerminal, soon: true, hint: "在终端里 cd 到这个目录。和终端命令一起做。" },
     { type: "action.websearch", label: "Web Search 默认网页搜索", icon: IconGlobe, soon: true, hint: "用默认搜索引擎搜关键词。等搜索引擎设置项落地。" },
     { type: "action.filebuffer", label: "File Buffer 文件暂存区", icon: IconGrid, soon: true, hint: "把文件攒进暂存区再一起处理。需要先有文件暂存区这个概念。" },
-    { type: "action.applescript", label: "Run AppleScript", icon: IconTerminal, soon: true, hint: "macOS 专属脚本。跨平台上没有对应物，优先级低。" },
+    { type: "action.applescript", label: "Run AppleScript", icon: IconTerminal, hint: "跑一段 AppleScript，可拿回它的返回值。仅 macOS。" },
   ] },
   { cat: "自动化 Automations", icon: IconClock, items: [
     { type: "automation.task", label: "Automation Task 自动化任务", icon: IconGear, soon: true, hint: "调用预置的系统自动化任务包。我们打算用「设备技能」来对应，先占位。" },
-    { type: "automation.shortcut", label: "Run Shortcut 运行快捷指令", icon: IconGear, soon: true, hint: "调用系统快捷指令。macOS/iOS 专属。" },
+    { type: "automation.shortcut", label: "Run Shortcut 运行快捷指令", icon: IconGear, hint: "调用「快捷指令」App 里的一条指令，可传入参数、取回结果。需 macOS 12+。" },
     { type: "automation.system", label: "System Command 系统命令", icon: IconWindow, soon: true, hint: "锁屏、睡眠、清废纸篓这类系统操作。要逐条对齐各平台实现。" },
-    { type: "automation.music", label: "Music Command 音乐控制", icon: IconMusic, soon: true, hint: "控制音乐播放。我们暂时不碰媒体控制。" },
+    { type: "automation.music", label: "Music Command 音乐控制", icon: IconMusic, hint: "控制「音乐」App：播放/暂停、切歌、音量、看当前播放。仅 macOS。" },
   ] },
   { cat: "输出 Outputs", icon: IconBell, items: [
     { type: "output.notify", label: "Post Notification 系统通知", icon: IconBell },
@@ -1474,6 +1474,12 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
 const DELIM_LABEL: Record<string, string> = { comma: "逗号", space: "空格", tab: "制表符", newline: "换行", custom: "自定义" };
 // Transform 节点的变换方式中文名。原来卡片上直接显示 mode 的英文值（upper/urlencode…），
 // 和别处都用中文对不上，顺手补齐。键要和 NodeConfig 里那个下拉的 option 值一一对应。
+// 音乐控制的命令名。键要和主进程 workflow.ts 里 MUSIC_CMDS 的键一一对应 ——
+// 两处对不上时卡片会显示原始键名（不至于崩，但一眼能看出是谁漏了）。
+const MUSIC_LABEL: Record<string, string> = {
+  playpause: "播放 / 暂停", play: "播放", pause: "暂停",
+  next: "下一首", previous: "上一首", volume: "设置音量", now: "当前播放",
+};
 const TRANSFORM_LABEL: Record<string, string> = {
   upper: "全部大写", lower: "全部小写", title: "首字母大写", trim: "去掉首尾空白",
   urlencode: "URL 编码", urldecode: "URL 解码",
@@ -1548,6 +1554,10 @@ export function nodeRows(n: WFNode): SumRow[] {
     case "input.codec": return [
       { k: "类型", v: { url: "URL", base64: "Base64" }[c.mode || "unicode"] || "Unicode" },
       { k: "方向", v: "按输入自动判断编/解码" },
+    ];
+    case "input.dict": return [
+      { k: "查询", v: "把输入当作要查的词" },
+      { k: "回车", v: "在词典 App 中打开" },
     ];
     case "input.calc": return [
       { k: "输入", v: "算式，如 3*4+2" },
@@ -1657,6 +1667,22 @@ export function nodeRows(n: WFNode): SumRow[] {
       c.cwd ? { k: "目录", v: cut(String(c.cwd), 26), mono: true }
             : { k: "失败时", v: c.onError === "continue" ? "忽略继续" : c.onError === "branch" ? "走失败出口" : "停止链路" },
     ];
+    case "action.applescript": return [
+      { k: "脚本", v: cut(val(c.script, "未设脚本")), mono: true },
+      { k: "返回值", v: c.output === "replace" ? "作为参数传给下游" : c.output === "copy" ? "复制到剪贴板" : "忽略" },
+    ];
+    case "automation.shortcut": return [
+      { k: "快捷指令", v: cut(val(c.name, "未填名称"), 24) },
+      { k: "输入", v: cfg.input === false ? "不传（空输入）" : "上游参数 {query}" },
+    ];
+    case "automation.music": {
+      const key = String(c.command || "playpause");
+      const label = MUSIC_LABEL[key] || key;
+      return [
+        { k: "动作", v: key === "volume" ? `${label} ${Number(cfg.volume ?? 50)}` : label },
+        { k: "目标", v: "「音乐」App（仅 macOS）" },
+      ];
+    }
     case "action.copy": return [
       { k: "内容", v: "上游参数 {query}", mono: true },
       { k: "去向", v: "系统剪贴板" },
@@ -1951,6 +1977,65 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
           {node.type === "utility.conditional" ? (<>
             <div className="text-[11.5px] text-muted">从上往下逐条判断，命中哪条就走哪个出口；全不中走「否则」。出口没连线时链路自然结束。</div>
             <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
+          </>) : null}
+          {node.type === "input.dict" ? (<>
+            <div className="text-[12px] text-muted leading-[1.7]">把输入当作一个要查的词列出来，回车在系统「词典」App 里打开它。<b>仅 macOS。</b><br />
+              这里<b>不内联释义</b>：取释义要调系统的 DictionaryServices 框架，我们这边（Node 主进程）没有可靠的调用途径，
+              与其塞一个半残的假释义，不如老实把词送进词典 App —— 那本来也是查完词要去的地方。</div>
+            <div><span className={lab}>副标题（可选）</span>
+              <input className={inp} value={String(c.hint || "")} onChange={(e) => set("hint", e.target.value)} placeholder="在词典中查这个词" /></div>
+            <div className="text-[11px] text-muted">不接下游时回车直接开词典；接了下游就按下游走（这时参数是那个词本身）。</div>
+          </>) : null}
+          {node.type === "action.applescript" ? (<>
+            <div><span className={lab}>AppleScript（可用 {"{query}"} / {"{var:名称}"}）</span>
+              <textarea className={`${inp} font-mono h-[110px] resize-y`} value={String(c.script || "")} onChange={(e) => set("script", e.target.value)}
+                placeholder={'tell application "Finder" to activate'} /></div>
+            <div><span className={lab}>脚本的返回值怎么处理</span>
+              <select className={inp} value={String(c.output || "none")} onChange={(e) => set("output", e.target.value)}>
+                <option value="none">忽略（参数原样传给下游）</option>
+                <option value="replace">作为参数传给下游</option>
+                <option value="copy">复制到剪贴板</option>
+              </select></div>
+            <div><span className={lab}>脚本失败时</span>
+              <select className={inp} value={String(c.onError || "stop")} onChange={(e) => set("onError", e.target.value)}>
+                <option value="stop">停止这条链路（默认）</option>
+                <option value="continue">忽略错误继续往下走</option>
+              </select></div>
+            <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS</b>，别的平台上会直接提示不可用并停下，不会静默什么都不做。<br />
+              脚本经标准输入送给 osascript，所以正文里带引号、换行、中文都没问题。超时 20 秒 —— AppleScript 要么秒回，要么就是弹了个框在等人。</div>
+          </>) : null}
+          {node.type === "automation.shortcut" ? (<>
+            <div><span className={lab}>快捷指令名称（要和「快捷指令」App 里完全一致）</span>
+              <input className={inp} value={String(c.name || "")} onChange={(e) => set("name", e.target.value)} placeholder="例如：整理下载文件夹" /></div>
+            <label className="flex items-center gap-2 text-[12px] text-muted">
+              <input type="checkbox" checked={c.input !== false} onChange={(e) => set("input", e.target.checked)} />把上游参数作为输入传给它
+            </label>
+            <div><span className={lab}>它的输出怎么处理</span>
+              <select className={inp} value={String(c.output || "none")} onChange={(e) => set("output", e.target.value)}>
+                <option value="none">忽略（参数原样传给下游）</option>
+                <option value="replace">作为参数传给下游</option>
+              </select></div>
+            <div className="text-[11px] text-muted leading-[1.7]"><b>需要 macOS 12 及以上</b>（用系统自带的 shortcuts 命令），找不到该命令时会明确提示。<br />
+              参数经标准输入传入、结果从标准输出取回，不落临时文件。超时 2 分钟 —— 快捷指令可能真要跑一会儿。<br />
+              不勾「传入输入」时连输入通道都不开：有些快捷指令收到空输入会走另一条分支。</div>
+          </>) : null}
+          {node.type === "automation.music" ? (<>
+            <div><span className={lab}>动作</span>
+              <select className={inp} value={String(c.command || "playpause")} onChange={(e) => set("command", e.target.value)}>
+                <option value="playpause">播放 / 暂停</option>
+                <option value="play">播放</option>
+                <option value="pause">暂停</option>
+                <option value="next">下一首</option>
+                <option value="previous">上一首</option>
+                <option value="volume">设置音量</option>
+                <option value="now">当前播放（把「歌名 — 歌手」传给下游）</option>
+              </select></div>
+            {String(c.command || "playpause") === "volume" ? (
+              <div><span className={lab}>音量（0–100）</span>
+                <input type="number" className={`${inp} font-mono`} value={String(c.volume ?? 50)} onChange={(e) => set("volume", e.target.value)} /></div>
+            ) : null}
+            <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS</b>，控制的是系统「音乐」App。<br />
+              最常见的失败是音乐 App 没开着 —— 这时会把系统原话带出来，不自己编一句模糊的提示。</div>
           </>) : null}
           {node.type === "utility.junction" ? (
             <div className="text-[12px] text-muted leading-[1.7]">纯理线用的中转点：多条连线先并到这里，再从这里出一条到下游，画布上就不用画一把交叉的线。<br />

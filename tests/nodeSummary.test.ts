@@ -42,14 +42,18 @@ const DEMO: Record<string, Cfg> = {
   "utility.filter": { rules: [{ op: "contains", value: "urgent" }] },
   "utility.random": { mode: "hex", length: 12, target: "token" },
   "utility.jsonconfig": { json: '{"api":"https://x","kw":"{query}"}' },
+  "action.applescript": { script: 'tell application "Finder" to activate', output: "replace" },
+  "automation.shortcut": { name: "整理下载文件夹", input: false, output: "replace" },
+  "automation.music": { command: "volume", volume: 30 },
+  "input.dict": { hint: "查一下" },
 };
 
 const ALL = CATALOG.flatMap((g) => g.items.map((i) => ({ type: i.type, soon: !!i.soon })));
 
 describe("对象库覆盖", () => {
-  it("62 种节点，26 种置灰、36 种可添加", () => {
+  it("62 种节点，22 种置灰、40 种可添加", () => {
     expect(ALL.length).toBe(62);
-    expect(ALL.filter((x) => x.soon).length).toBe(26);
+    expect(ALL.filter((x) => x.soon).length).toBe(22);
   });
 
   it.each(ALL.map((x) => [x.type, x.soon] as [string, boolean]))("%s 的摘要成形", (type, soon) => {
@@ -111,6 +115,14 @@ describe("值真的读进去了（不是永远显示占位）", () => {
     expect(t).toContain("十六进制 12 位");
     expect(t).toContain("变量 token");
     expect(text("utility.random")).toContain("1 – 100");
+  });
+
+  it("macOS 专属组：名称、返回值处理、动作都要读出来", () => {
+    expect(text("action.applescript", DEMO["action.applescript"])).toContain("作为参数传给下游");
+    expect(text("automation.shortcut", DEMO["automation.shortcut"])).toContain("整理下载文件夹");
+    expect(text("automation.shortcut", DEMO["automation.shortcut"])).toContain("不传");
+    expect(text("automation.music", DEMO["automation.music"])).toContain("设置音量 30");
+    expect(text("automation.music")).toContain("播放 / 暂停");
   });
 
   it("JSON Config：不合法的 JSON 在卡片上就说，别等运行才报错", () => {

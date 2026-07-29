@@ -202,3 +202,47 @@ describe("JSON Config", () => {
     expect(r.finalArg).toBe("透传");
   });
 });
+
+// ── macOS 专属组 ────────────────────────────────────────────────────────────
+// 真去跑 osascript / shortcuts 没法在 CI 里测（也不该测——那是在测系统），
+// 所以这里守的是**两道门**：平台不对时必须明确报错而不是静默跳过，
+// 以及配置不全时必须在动手之前就停下。「按了没反应」比「说清楚不支持」难查一百倍。
+describe("macOS 专属组：平台守卫", () => {
+  it.each([
+    ["action.applescript", { script: 'tell application "Finder" to activate' }],
+    ["automation.shortcut", { name: "某个快捷指令" }],
+    ["automation.music", { command: "playpause" }],
+  ])("%s 在非 macOS 上明确提示并中断", async (type, config) => {
+    if (process.platform === "darwin") return;   // 真在 Mac 上跑测试时这条不适用
+    const r = await runChain([{ id: "n", type, config }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("macOS");
+  });
+});
+
+describe("macOS 专属组：动手之前的配置校验", () => {
+  // 把平台伪装成 macOS，好走到各自的参数校验分支（这些分支都在真正执行之前就返回了）
+  const asMac = <T>(fn: () => Promise<T>) => async () => {
+    const real = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try { return await fn(); } finally { Object.defineProperty(process, "platform", real); }
+  };
+
+  it("AppleScript 脚本为空就停下", asMac(async () => {
+    const r = await runChain([{ id: "n", type: "action.applescript", config: { script: "   " } }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("脚本为空");
+  }));
+
+  it("快捷指令没填名称就停下", asMac(async () => {
+    const r = await runChain([{ id: "n", type: "automation.shortcut", config: { name: "" } }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("没填名称");
+  }));
+
+  it("音乐控制遇到未知命令就停下（而不是当成播放/暂停蒙一个）", asMac(async () => {
+    const r = await runChain([{ id: "n", type: "automation.music", config: { command: "没这个命令" } }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("未知命令");
+  }));
+});

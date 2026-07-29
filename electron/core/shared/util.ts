@@ -41,6 +41,10 @@ export interface RunOpts {
   onStderr?: (chunk: string) => void;
   // 独立进程组：agent 这类会拉起后台服务（dev server）的命令要用，配合 killTree 整组带走。
   detached?: boolean;
+  // 从标准输入喂给子进程的内容（写完即关闭）。
+  // AppleScript 这类「脚本正文本身带引号 / 换行 / 中文」的场景必须走 stdin ——
+  // 拼进命令行参数迟早会被引号截断，而且不同 shell 的转义规则还不一样。
+  stdin?: string;
 }
 
 // 以 argv 形式启动子进程（不经 shell），合并 stdout/stderr，带超时与逐行回调。
@@ -56,10 +60,15 @@ export function run(cmd: string, args: string[], opts: RunOpts = {}): Promise<Ru
     const child = spawn(cmd, args, {
       cwd: opts.cwd,
       env: opts.env ? { ...process.env, ...opts.env } : process.env,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
       detached: opts.detached ?? false, // 独立进程组 → 可以整组杀掉（见 killTree）
     });
     opts.onSpawn?.(child);
+    // 写完立刻关掉 stdin：osascript 这类命令要读到 EOF 才开始执行。
+    if (opts.stdin !== undefined && child.stdin) {
+      child.stdin.on("error", () => { /* 子进程已退出时写入会 EPIPE，忽略即可 */ });
+      child.stdin.end(opts.stdin);
+    }
     let output = "";
     let timedOut = false;
     let buf = "";
@@ -84,8 +93,8 @@ export function run(cmd: string, args: string[], opts: RunOpts = {}): Promise<Ru
         for (const l of lines) if (l.trim()) opts.onLine(l.trim());
       }
     };
-    child.stdout.on("data", onData);
-    child.stderr.on("data", (chunk: Buffer) => {
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", (chunk: Buffer) => {
       opts.onStderr?.(chunk.toString("utf-8"));
       onData(chunk);
     });

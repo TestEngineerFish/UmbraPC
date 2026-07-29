@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ConfigStore, expandHome, httpBase, Workflow, WorkflowNode } from "../config";
 import { httpFetch } from "../http";
-import { run } from "../shared/util";
+import { run, which, type RunResult } from "../shared/util";
 import { simulatePaste, simulateCopy } from "../clipboard/paste";
 import { readClipboardFiles } from "../clipboard/watcher";
 import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } from "./tools";
@@ -177,6 +177,49 @@ interface FanCtx {
 // 逐项串行跑几千遍会把链路拖到没反应，超出部分直接截断并在反馈里说明。
 const MAX_FAN = 200;
 
+// ── macOS 专属动作的公共部分 ─────────────────────────────────────────────────
+// 这一组节点（AppleScript / 快捷指令 / 音乐控制 / 词典）都只在 macOS 上有对应物。
+// 在别的平台上一律给一句明确的提示就停，**不要静默什么都不做** ——
+// 「按了没反应」比「说清楚不支持」难查一百倍。
+const MAC_ONLY = "这个节点只在 macOS 上可用";
+// AppleScript / 音乐控制的超时。这类脚本要么秒回，要么就是弹了个对话框在等人 ——
+// 等太久不如早点放手，链路卡死比脚本失败难查得多。
+const APPLESCRIPT_TIMEOUT = 20_000;
+// 快捷指令可能真的要跑一会儿（发消息、处理图片），给宽一些。
+const SHORTCUT_TIMEOUT = 120_000;
+function macOnly(): string | null {
+  return process.platform === "darwin" ? null : MAC_ONLY;
+}
+
+// 在系统词典里查一个词。dict:// 是 macOS 的词典 URL scheme，open 一下就会唤起词典 App。
+async function openDictionary(word: string): Promise<string> {
+  const bad = macOnly();
+  if (bad) return bad;
+  const { shell } = await import("electron");
+  await shell.openExternal(`dict://${encodeURIComponent(word)}`);
+  return "已在词典中打开 ✓";
+}
+
+// 跑一段 AppleScript。脚本从 stdin 送进 osascript，不走命令行参数 ——
+// 脚本里带引号、换行、中文都很常见，拼进 -e 迟早出事。
+async function runAppleScript(script: string, timeoutMs: number): Promise<RunResult> {
+  return run("osascript", ["-"], { timeoutMs, stdin: script });
+}
+
+// 音乐控制：全部落到 Music.app 的 AppleScript 命令上。
+// 只收录能一句话说清、且不带参数的那几个动作 —— 播放列表、曲库这类要先有 UI 才谈得上。
+const MUSIC_CMDS: Record<string, { label: string; script: string }> = {
+  playpause: { label: "播放 / 暂停", script: 'tell application "Music" to playpause' },
+  play: { label: "播放", script: 'tell application "Music" to play' },
+  pause: { label: "暂停", script: 'tell application "Music" to pause' },
+  next: { label: "下一首", script: 'tell application "Music" to next track' },
+  previous: { label: "上一首", script: 'tell application "Music" to previous track' },
+  // 音量是 0–100 的整数，越界会被 Music 拒绝，所以在这边先夹一道
+  volume: { label: "设置音量", script: 'tell application "Music" to set sound volume to %V%' },
+  // 「当前播放什么」：拿回一行文本给下游用
+  now: { label: "当前播放", script: 'tell application "Music" to if player state is playing then return (name of current track) & " — " & (artist of current track)' },
+};
+
 export class WorkflowEngine {
   private ctx = new Map<string, ItemCtx>();  // token → 上下文（每次 query 重置）
   private seq = 0;
@@ -329,6 +372,7 @@ export class WorkflowEngine {
       case "input.codec": return this.runCodec(wf, node, arg);
       case "input.calc": return this.runCompute(wf, node, arg, "calc");
       case "input.units": return this.runCompute(wf, node, arg, "units");
+      case "input.dict": return this.runDict(wf, node, arg);
       default: return null;
     }
   }
@@ -387,6 +431,27 @@ export class WorkflowEngine {
     if (!u) return [];
     const r = this.itemResult(wf, node.id, { title: u.title, subtitle: `${u.subtitle} · 回车复制`, arg: u.title }, []);
     r.icon = wf.icon || "📐"; r.score = 320; return [r];
+  }
+
+  // 内置输入：词典查询（macOS）。
+  //
+  // 只给一条「去词典里查这个词」的结果，**不内联释义**：拿到释义要调系统的
+  // DictionaryServices 框架，Node 这边没有可靠的调用途径（osascript 拿不到，
+  // 系统自带的 python3 也不一定有 pyobjc）。与其塞一个半残的假释义，不如老实
+  // 把词送进词典 App —— 那本来就是用户查完词之后要去的地方。
+  // 回车时若没接下游，run() 会走「节点自带默认动作」直接开词典。
+  private runDict(wf: Workflow, node: WorkflowNode, arg: string): LauncherResult[] {
+    const word = (arg || "").trim();
+    if (!word || process.platform !== "darwin") return [];
+    const r = this.itemResult(wf, node.id, {
+      title: word,
+      subtitle: `${String(node.config.hint || "在词典中查这个词")} · 回车打开词典`,
+      arg: word,
+      uid: "dict",   // 学习键固定：常用这条的人下次打首字母就该排在前面
+    }, this.branchMods(wf, node.id));
+    r.icon = wf.icon || "📖";
+    r.score = 300;
+    return [r];
   }
 
   // 跑 Script Filter 脚本 → 解析 Alfred JSON → 结果列表。
@@ -586,8 +651,14 @@ export class WorkflowEngine {
     const conns = this.outConns(wf, c.srcNodeId, m);
     if (!conns.length) {
       if (m !== "") return NO_BRANCH;           // 修饰键无分支 → 上层兜底
-      if (arg) { const { clipboard } = await import("electron"); clipboard.writeText(arg); return "已复制 ✓"; } // 回车且无下游 → 默认复制 arg
-      return "";
+      if (!arg) return "";
+      // 回车且无下游：先看这个来源节点有没有「自带默认动作」，没有才退回复制 arg。
+      // 目前只有词典查询一个（它单独存在就有意义，不该逼用户再挂一个「打开网址」）。
+      const self = this.node(wf, c.srcNodeId);
+      if (self?.type === "input.dict") return openDictionary(arg);
+      const { clipboard } = await import("electron");
+      clipboard.writeText(arg);
+      return "已复制 ✓";
     }
     const visited = new Set<string>();
     // 调试轨迹：一次「选中结果并回车/修饰键执行」= 一条运行记录。
@@ -824,6 +895,91 @@ export class WorkflowEngine {
       case "utility.delay": {
         const ms = Math.max(0, Math.min(Number(node.config.seconds || 0) * 1000, 60000));
         if (ms) await new Promise((r) => setTimeout(r, ms));
+        break;
+      }
+
+      // ── macOS 专属：Run AppleScript —— 跑一段 AppleScript ──
+      // 脚本走 stdin 送进 osascript（不拼命令行），所以正文里带引号 / 换行 / 中文都没问题。
+      // 占位符照常替换：脚本里可以直接写 {query} / {var:名称}。
+      case "action.applescript": {
+        const bad = macOnly();
+        if (bad) { feedback = bad; stop = true; break; }
+        const src = this.subst(String(node.config.script || ""), arg, vars);
+        if (!src.trim()) { feedback = "AppleScript：脚本为空"; stop = true; break; }
+        const r = await runAppleScript(src, APPLESCRIPT_TIMEOUT);
+        stdout = r.output;
+        exitCode = r.code ?? undefined;
+        if (r.timedOut) { feedback = `AppleScript 超时（${APPLESCRIPT_TIMEOUT / 1000}s）`; stop = true; break; }
+        if (r.code !== 0) {
+          // osascript 把编译/运行错误写在 stderr，已并进 output —— 原样带给用户，别自己编。
+          feedback = `AppleScript 失败：${r.output.trim().split("\n").pop()?.slice(0, 80) || `退出码 ${r.code}`}`;
+          if (String(node.config.onError || "stop") !== "continue") stop = true;
+          break;
+        }
+        // 脚本的返回值（osascript 打到 stdout 的那一行）按配置决定怎么处置。
+        const out = r.output.trim();
+        const mode = String(node.config.output || "none");
+        if (mode === "replace") outArg = out;
+        else if (mode === "copy") { clipboard.writeText(out); feedback = "已复制 ✓"; }
+        break;
+      }
+
+      // ── macOS 专属：Run Shortcut —— 调用「快捷指令」App 里的一条快捷指令 ──
+      // 用系统自带的 shortcuts CLI（macOS 12+）。参数经 stdin 传给快捷指令，
+      // 结果从 stdout 收回来 —— 两头都用管道，省得为了传个字符串去落临时文件。
+      case "automation.shortcut": {
+        const bad = macOnly();
+        if (bad) { feedback = bad; stop = true; break; }
+        const name = this.subst(String(node.config.name || ""), arg, vars).trim();
+        if (!name) { feedback = "快捷指令：没填名称"; stop = true; break; }
+        if (!which("shortcuts")) {
+          feedback = "找不到 shortcuts 命令（需要 macOS 12 及以上）";
+          stop = true; break;
+        }
+        // -i - 表示从 stdin 读输入，-o - 表示把输出写到 stdout。
+        // 明确不传输入时连 -i 都不给：有些快捷指令收到空输入会走另一条分支。
+        const passArg = node.config.input !== false && !!arg;
+        const args = ["run", name, ...(passArg ? ["-i", "-"] : []), "-o", "-"];
+        const r = await run("shortcuts", args, {
+          timeoutMs: SHORTCUT_TIMEOUT,
+          stdin: passArg ? arg : undefined,
+        });
+        stdout = r.output;
+        exitCode = r.code ?? undefined;
+        if (r.timedOut) { feedback = `快捷指令超时（${SHORTCUT_TIMEOUT / 1000}s）`; stop = true; break; }
+        if (r.code !== 0) {
+          feedback = `快捷指令失败：${r.output.trim().split("\n").pop()?.slice(0, 80) || `退出码 ${r.code}`}`;
+          stop = true; break;
+        }
+        if (String(node.config.output || "none") === "replace") outArg = r.output.trim();
+        break;
+      }
+
+      // ── macOS 专属：Music Command —— 控制「音乐」App ──
+      // 全部落到 Music.app 的 AppleScript 命令上（见 MUSIC_CMDS）。
+      case "automation.music": {
+        const bad = macOnly();
+        if (bad) { feedback = bad; stop = true; break; }
+        const key = String(node.config.command || "playpause");
+        const cmd = MUSIC_CMDS[key];
+        if (!cmd) { feedback = `音乐控制：未知命令 ${key}`; stop = true; break; }
+        let src = cmd.script;
+        if (key === "volume") {
+          // 0–100 之外的值 Music 会直接拒绝，先夹住比让它报错友好
+          const v = Math.max(0, Math.min(100, Math.trunc(Number(node.config.volume ?? 50)) || 0));
+          src = src.replace("%V%", String(v));
+        }
+        const r = await runAppleScript(src, APPLESCRIPT_TIMEOUT);
+        stdout = r.output;
+        exitCode = r.code ?? undefined;
+        if (r.code !== 0) {
+          // 最常见的失败是「音乐 App 没开」——原样把系统的话带出来，比我瞎猜准
+          feedback = `音乐控制失败：${r.output.trim().split("\n").pop()?.slice(0, 80) || `退出码 ${r.code}`}`;
+          stop = true; break;
+        }
+        // 「当前播放」这条要把结果交给下游，其余动作不动参数
+        if (key === "now") outArg = r.output.trim();
+        else feedback = `${cmd.label} ✓`;
         break;
       }
 
