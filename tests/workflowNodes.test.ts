@@ -246,3 +246,93 @@ describe("macOS 专属组：动手之前的配置校验", () => {
     expect(r.feedback).toContain("未知命令");
   }));
 });
+
+// ── 文件能力组 ──────────────────────────────────────────────────────────────
+describe("File Conditional 文件条件", () => {
+  // 多出口节点在 runChain 里下游连的是默认口，所以直接看它选了哪个出口
+  const portOf = async (rules: unknown[], arg: string) => {
+    const r = await runChain([{ id: "fc", type: "utility.fileconditional", config: { rules } }], arg);
+    return r.step("fc")?.outPort;
+  };
+
+  it("按扩展名命中第几条就走第几个出口", async () => {
+    const rules = [{ op: "ext_in", value: "png, jpg" }, { op: "ext_in", value: "pdf" }];
+    expect(await portOf(rules, "/x/a.png")).toBe("r0");
+    expect(await portOf(rules, "/x/b.pdf")).toBe("r1");
+  });
+
+  it("全不中走「否则」", async () => {
+    expect(await portOf([{ op: "ext_in", value: "png" }], "/x/c.txt")).toBe("else");
+  });
+
+  it("一条规则都没有时也走「否则」，不至于卡住", async () => {
+    expect(await portOf([], "/x/a.png")).toBe("else");
+  });
+
+  it("扩展名比对忽略大小写（PNG 和 png 是一回事）", async () => {
+    expect(await portOf([{ op: "ext_in", value: "png" }], "/x/A.PNG")).toBe("r0");
+  });
+
+  it("路径不存在这条判得出来", async () => {
+    expect(await portOf([{ op: "not_exists" }], "/根本没有/这个/文件.txt")).toBe("r0");
+  });
+
+  it("文件名包含 / 完整路径包含是两回事", async () => {
+    expect(await portOf([{ op: "name_contains", value: "报告" }], "/项目/报告.pdf")).toBe("r0");
+    // 「项目」在目录名里，不在文件名里 —— 只有 path_contains 该命中
+    expect(await portOf([{ op: "name_contains", value: "项目" }], "/项目/报告.pdf")).toBe("else");
+    expect(await portOf([{ op: "path_contains", value: "项目" }], "/项目/报告.pdf")).toBe("r0");
+  });
+});
+
+describe("File Buffer 文件暂存区", () => {
+  // 暂存区挂在引擎实例上，跨节点共享 —— 所以要在**同一条链路**里先收后取
+  const chain = (mode: string, extra: Record<string, unknown> = {}) =>
+    ({ id: `fb_${mode}`, type: "action.filebuffer", config: { mode, ...extra } });
+
+  it("收进去的路径会去重", async () => {
+    const r = await runChain([
+      { id: "a", type: "action.filebuffer", config: { mode: "add" } },
+    ], "/x/1.txt\n/x/1.txt\n/x/2.txt");
+    expect(r.feedback).toContain("2 个");
+  });
+
+  it("没有可收的路径时明确报错并中断", async () => {
+    const r = await runChain([chain("add")], "   ");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("没有可收的路径");
+  });
+
+  it("暂存区是空的时候取，要说清楚而不是给下游一个空串", async () => {
+    const r = await runChain([chain("list")], "随便");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("暂存区是空的");
+  });
+
+  it("清空永远成功，不管里面有没有东西", async () => {
+    const r = await runChain([chain("clear")], "随便");
+    expect(r.reached).toBe(true);
+    expect(r.feedback).toContain("已清空");
+  });
+});
+
+describe("Reveal / Browse 的路径守卫", () => {
+  it("在文件管理器中显示：路径不存在时明确报错", async () => {
+    const r = await runChain([{ id: "rv", type: "action.reveal", config: {} }], "/根本没有/这个.txt");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("路径不存在");
+  });
+
+  it("在文件管理器中显示：没有路径时也不静默跳过", async () => {
+    const r = await runChain([{ id: "rv", type: "action.reveal", config: { path: "" } }], "");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("没有路径");
+  });
+
+  it("在终端中打开：非 macOS 上明确提示不可用", async () => {
+    if (process.platform === "darwin") return;
+    const r = await runChain([{ id: "br", type: "action.browse", config: {} }], "/tmp");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("macOS");
+  });
+});

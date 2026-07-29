@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { ConfigStore, expandHome, httpBase, Workflow, WorkflowNode } from "../config";
 import { httpFetch } from "../http";
 import { run, which, type RunResult } from "../shared/util";
+import { describe as describeFile, parseExts, searchFiles, type FileHit, type FileKind } from "./filesearch";
 import { simulatePaste, simulateCopy } from "../clipboard/paste";
 import { readClipboardFiles } from "../clipboard/watcher";
 import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } from "./tools";
@@ -187,6 +188,8 @@ const MAC_ONLY = "这个节点只在 macOS 上可用";
 const APPLESCRIPT_TIMEOUT = 20_000;
 // 快捷指令可能真的要跑一会儿（发消息、处理图片），给宽一些。
 const SHORTCUT_TIMEOUT = 120_000;
+// 单个暂存区最多攒多少个文件。攒到这个量还没处理，多半是忘了接 list/clear。
+const FILE_BUFFER_MAX = 200;
 function macOnly(): string | null {
   return process.platform === "darwin" ? null : MAC_ONLY;
 }
@@ -220,6 +223,48 @@ const MUSIC_CMDS: Record<string, { label: string; script: string }> = {
   now: { label: "当前播放", script: 'tell application "Music" to if player state is playing then return (name of current track) & " — " & (artist of current track)' },
 };
 
+// ── 文件类节点的公共小工具 ──────────────────────────────────────────────────
+// 路径存不存在。存在性判断一律走 stat 而不是 access：access 只看权限位，
+// 对「符号链接指向的东西没了」这种情况会给出误判。
+async function pathExists(p: string): Promise<boolean> {
+  try { await fs.stat(p); return true; } catch { return false; }
+}
+async function isDirectory(p: string): Promise<boolean> {
+  try { return (await fs.stat(p)).isDirectory(); } catch { return false; }
+}
+// 把路径归到「一个目录」：本来就是目录就用它自己，是文件就取所在目录。
+// 用户说「在终端里打开这个」时想要的几乎总是所在目录，拿文件路径当工作目录只会失败。
+async function toDirectory(p: string): Promise<string | null> {
+  if (!await pathExists(p)) return null;
+  return (await isDirectory(p)) ? p : path.dirname(p);
+}
+
+// File Conditional 的单条规则。字段刻意和 Conditional 的规则表长得不一样 ——
+// 那边比的是文本，这边比的是「这个路径是什么」，混用一套字段只会让人配错。
+//   op: is_dir | is_file | not_exists | ext_in | name_contains | path_contains
+//   value: ext_in 是逗号分隔的扩展名，其余是要比的文本
+//
+// exists 单独传进来而不是从 info 里推：describe() 只拆路径字符串，它没法知道盘上有没有这个东西。
+// 早期版本拿 info.name 是否为空当「存在」，结果「路径不存在」这条永远判不出来（有名字≠有文件）。
+function matchFileRule(rule: Record<string, unknown>, info: FileHit, exists: boolean): boolean {
+  const op = String(rule.op || "ext_in");
+  const value = String(rule.value ?? "").trim();
+  const ci = rule.ci !== false;
+  const norm = (s: string) => (ci ? s.toLowerCase() : s);
+  switch (op) {
+    case "is_dir": return exists && info.dir;
+    case "is_file": return exists && !info.dir;
+    case "not_exists": return !exists;
+    case "name_contains": return !!value && norm(info.name).includes(norm(value));
+    case "path_contains": return !!value && norm(info.path).includes(norm(value));
+    case "ext_in":
+    default: {
+      const list = parseExts(value);
+      return list.length ? list.includes(info.ext) : false;
+    }
+  }
+}
+
 export class WorkflowEngine {
   private ctx = new Map<string, ItemCtx>();  // token → 上下文（每次 query 重置）
   private seq = 0;
@@ -230,6 +275,10 @@ export class WorkflowEngine {
   private sfCache = new Map<string, { out: string; at: number; ttl: number; loose: boolean }>();
   // rerun（W3）：脚本要求过 N 秒自动再查一次。每次查询前清零，查完由上层 takeRerun() 取走并安排定时。
   private rerunAfter = 0;
+  // 文件暂存区（File Buffer）：`工作流id:节点id` → 已攒的绝对路径。
+  // 只在内存里，进程退出即清空 —— 它是「这几分钟挑几个文件一起处理」的临时篮子，
+  // 不是长期收藏夹（那是书签该干的事）。
+  private fileBuffers = new Map<string, string[]>();
 
   constructor(private cfg: ConfigStore, private deps: WorkflowDeps) {}
 
@@ -373,6 +422,7 @@ export class WorkflowEngine {
       case "input.calc": return this.runCompute(wf, node, arg, "calc");
       case "input.units": return this.runCompute(wf, node, arg, "units");
       case "input.dict": return this.runDict(wf, node, arg);
+      case "input.filefilter": return this.runFileFilter(wf, node, arg);
       default: return null;
     }
   }
@@ -452,6 +502,40 @@ export class WorkflowEngine {
     r.icon = wf.icon || "📖";
     r.score = 300;
     return [r];
+  }
+
+  // 内置输入：File Filter —— 按范围和类型搜本地文件，列成结果。
+  // 检索本身在 filesearch.ts（macOS 走 Spotlight，其余走限定目录遍历），这里只管
+  // 「怎么配」和「怎么显示」。选中一条时把**绝对路径**作为 arg 传给下游 ——
+  // 下游最常接的是「打开文件」「在文件管理器中显示」「在终端中打开」，它们要的都是路径。
+  private async runFileFilter(wf: Workflow, node: WorkflowNode, arg: string): Promise<LauncherResult[]> {
+    const vars = this.baseVars(wf);
+    const kw = this.subst(String(node.config.keyword || "{query}"), arg, vars).trim();
+    // 要求至少有一个字：不设门槛的话，一进快捷入口就会拿空串去全盘搜。
+    const min = Math.max(1, Number(node.config.minChars ?? 2));
+    if (kw.length < min) return [];
+    const scopes = String(node.config.scopes || "")
+      .split("\n").map((x) => x.trim()).filter(Boolean);
+    const hits = await searchFiles({
+      keyword: kw,
+      scopes,
+      kind: (String(node.config.kind || "any") as FileKind),
+      exts: parseExts(String(node.config.exts || "")),
+      limit: Math.max(1, Math.min(Number(this.cfg.get().launcherMaxResults) || 12, 50)),
+    });
+    const mods = this.branchMods(wf, node.id);
+    return hits.map((h, i) => {
+      const r = this.itemResult(wf, node.id, {
+        title: h.name,
+        subtitle: h.path,
+        arg: h.path,
+        uid: h.path,             // 学习键用绝对路径：常开的那个文件下次会被顶上来
+        quicklookurl: h.path,    // ⌘Y 直接预览，不用先打开
+      }, mods, { rank: i });
+      // 图标按真实文件取（loadIcon 认路径），取不到就退回工作流自己的图标
+      r.icon = this.loadIcon(h.path, wf.icon || (h.dir ? "📁" : "📄"));
+      return r;
+    });
   }
 
   // 跑 Script Filter 脚本 → 解析 Alfred JSON → 结果列表。
@@ -895,6 +979,82 @@ export class WorkflowEngine {
       case "utility.delay": {
         const ms = Math.max(0, Math.min(Number(node.config.seconds || 0) * 1000, 60000));
         if (ms) await new Promise((r) => setTimeout(r, ms));
+        break;
+      }
+
+      // ── 文件：Reveal in Finder —— 在系统文件管理器里定位到这个文件 ──
+      // 和「打开文件」的区别是它不打开文件本身，只是把窗口开到那个文件上并选中它。
+      case "action.reveal": {
+        const target = expandHome(this.subst(String(node.config.path || "{query}"), arg, vars) || arg);
+        if (!target) { feedback = "在文件管理器中显示：没有路径"; stop = true; break; }
+        if (!await pathExists(target)) { feedback = `路径不存在：${target}`; stop = true; break; }
+        const { shell } = await import("electron");
+        shell.showItemInFolder(target);
+        feedback = "已在文件管理器中显示 ✓";
+        break;
+      }
+
+      // ── 文件：Browse in Terminal —— 在终端里 cd 到这个目录 ──
+      // 传进来的要是文件就取它所在的目录：用户说「在终端里打开这个」时，
+      // 想要的几乎总是它所在的目录，而不是拿文件路径当工作目录（那会直接失败）。
+      case "action.browse": {
+        const bad = macOnly();
+        if (bad) { feedback = bad; stop = true; break; }
+        const raw = expandHome(this.subst(String(node.config.path || "{query}"), arg, vars) || arg);
+        if (!raw) { feedback = "在终端中打开：没有路径"; stop = true; break; }
+        const dir = await toDirectory(raw);
+        if (!dir) { feedback = `路径不存在：${raw}`; stop = true; break; }
+        const app = String(node.config.app || "Terminal").trim() || "Terminal";
+        const r = await run("open", ["-a", app, dir], { timeoutMs: 8_000 });
+        if (r.code !== 0) { feedback = `打开终端失败：${r.output.trim().slice(0, 80)}`; stop = true; break; }
+        feedback = `已在 ${app} 中打开 ✓`;
+        break;
+      }
+
+      // ── 文件：File Conditional —— 按文件类型 / 扩展名分流（Conditional 的文件版）──
+      // 逐条判断，命中第 i 条走 "r{i}" 出口，全不中走 "else"，和 Conditional 一致。
+      // 判定只看**路径本身**（扩展名、是不是目录、存不存在），不读文件内容 ——
+      // 读内容既慢又要权限，而按类型分流这件事扩展名已经够用了。
+      case "utility.fileconditional": {
+        const target = expandHome(this.subst(String(node.config.path || "{query}"), arg, vars) || arg);
+        const rules = Array.isArray(node.config.rules) ? (node.config.rules as Record<string, unknown>[]) : [];
+        const exists = await pathExists(target);
+        const info = describeFile(target, exists && await isDirectory(target));
+        let hit = -1;
+        for (let i = 0; i < rules.length; i++) {
+          if (matchFileRule(rules[i] || {}, info, exists)) { hit = i; break; }
+        }
+        outPort = hit >= 0 ? `r${hit}` : "else";
+        break;
+      }
+
+      // ── 文件：File Buffer 文件暂存区 —— 把文件攒起来，攒够了一次性交给下游 ──
+      // 三个动作：add 收一条、list 把攒的全给下游（换行分隔）、clear 清空。
+      // 暂存区按「工作流 + 节点」分桶存在内存里，进程退出即清空 ——
+      // 它的用途是「这几分钟里挑几个文件一起处理」，不是长期收藏夹（那是书签该干的事）。
+      case "action.filebuffer": {
+        const key = `${wf.id}:${node.id}`;
+        const mode = String(node.config.mode || "add");
+        const buf = this.fileBuffers.get(key) || [];
+        if (mode === "clear") {
+          this.fileBuffers.delete(key);
+          feedback = "暂存区已清空 ✓";
+          break;
+        }
+        if (mode === "list") {
+          if (!buf.length) { feedback = "暂存区是空的"; stop = true; break; }
+          outArg = buf.join("\n");
+          if (node.config.clearAfter !== false) this.fileBuffers.delete(key);
+          break;
+        }
+        // add：把上游给的路径收进去（一次可以来多条，按换行拆）
+        const incoming = (this.subst(String(node.config.path || "{query}"), arg, vars) || arg)
+          .split("\n").map((x) => expandHome(x.trim())).filter(Boolean);
+        if (!incoming.length) { feedback = "暂存区：没有可收的路径"; stop = true; break; }
+        // 去重：同一个文件反复加没有意义，还会让下游重复处理
+        const merged = [...new Set([...buf, ...incoming])].slice(0, FILE_BUFFER_MAX);
+        this.fileBuffers.set(key, merged);
+        feedback = `已暂存 ${merged.length} 个文件`;
         break;
       }
 

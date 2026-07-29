@@ -46,14 +46,19 @@ const DEMO: Record<string, Cfg> = {
   "automation.shortcut": { name: "整理下载文件夹", input: false, output: "replace" },
   "automation.music": { command: "volume", volume: 30 },
   "input.dict": { hint: "查一下" },
+  "input.filefilter": { keyword: "{query}", scopes: "~/Documents", kind: "image", exts: "png, jpg" },
+  "utility.fileconditional": { rules: [{ op: "ext_in", value: "png" }, { op: "is_dir" }] },
+  "action.reveal": { path: "~/Desktop/a.txt" },
+  "action.browse": { path: "~/Projects", app: "iTerm" },
+  "action.filebuffer": { mode: "list", clearAfter: false },
 };
 
 const ALL = CATALOG.flatMap((g) => g.items.map((i) => ({ type: i.type, soon: !!i.soon })));
 
 describe("对象库覆盖", () => {
-  it("62 种节点，22 种置灰、40 种可添加", () => {
+  it("62 种节点，17 种置灰、45 种可添加", () => {
     expect(ALL.length).toBe(62);
-    expect(ALL.filter((x) => x.soon).length).toBe(22);
+    expect(ALL.filter((x) => x.soon).length).toBe(17);
   });
 
   it.each(ALL.map((x) => [x.type, x.soon] as [string, boolean]))("%s 的摘要成形", (type, soon) => {
@@ -115,6 +120,19 @@ describe("值真的读进去了（不是永远显示占位）", () => {
     expect(t).toContain("十六进制 12 位");
     expect(t).toContain("变量 token");
     expect(text("utility.random")).toContain("1 – 100");
+  });
+
+  it("文件组：范围、类型、动作都要读出来", () => {
+    const ff = text("input.filefilter", DEMO["input.filefilter"]);
+    expect(ff).toContain("~/Documents");
+    expect(ff).toContain("png, jpg");       // 填了扩展名就优先显示扩展名，比「图片」具体
+    expect(text("input.filefilter", { kind: "movie" })).toContain("视频");
+    expect(text("input.filefilter")).toContain("全盘");
+    expect(text("utility.fileconditional", DEMO["utility.fileconditional"])).toContain("2 个 + 否则");
+    expect(text("action.browse", DEMO["action.browse"])).toContain("iTerm");
+    expect(text("action.filebuffer", DEMO["action.filebuffer"])).toContain("取出全部交给下游");
+    expect(text("action.filebuffer", DEMO["action.filebuffer"])).toContain("保留暂存区");
+    expect(text("action.filebuffer")).toContain("收进暂存区");
   });
 
   it("macOS 专属组：名称、返回值处理、动作都要读出来", () => {

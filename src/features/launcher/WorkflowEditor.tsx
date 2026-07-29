@@ -109,7 +109,7 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "trigger.snippet", label: "Snippet 片段触发", icon: IconScissors, soon: true, hint: "打字触发：输入约定的缩写就跑工作流。需要键盘监听，安全模型还没定，暂未实现。" },
     { type: "trigger.external", label: "External 外部调用", icon: IconExternal, soon: true, hint: "给别的程序留一个可被调用的入口（命令行/URL Scheme）。等对外接口定稿后实现。" },
     { type: "trigger.remote", label: "Remote 远程触发", icon: IconPhone, soon: true, hint: "手机端点一下触发桌面工作流。等可信设备网络那一期一起做。" },
-    { type: "trigger.fileaction", label: "File Action 文件动作", icon: IconFolder, soon: true, hint: "在文件管理器里选中文件后触发。要接系统的文件服务，暂未实现。" },
+    { type: "trigger.fileaction", label: "File Action 文件动作", icon: IconFolder, soon: true, hint: "在文件管理器里选中文件后触发。要装 Finder 扩展/服务菜单，我们没走这条路——用「Universal Action 选中即用」把抓取源设成「选中的文件路径」，效果一样且不用装扩展。" },
     { type: "trigger.contact", label: "Contact Action 联系人动作", icon: IconUser, soon: true, hint: "从通讯录联系人触发。我们暂时没有通讯录能力。" },
   ] },
   { cat: "输入 Inputs", icon: IconFilter, items: [
@@ -118,7 +118,7 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "input.codec", label: "编解码", icon: IconCode },
     { type: "input.calc", label: "计算器", icon: IconCalc },
     { type: "input.units", label: "单位换算", icon: IconRuler },
-    { type: "input.filefilter", label: "File Filter 文件过滤器", icon: IconFolder, soon: true, hint: "按范围和类型搜本地文件并列出来。等本地索引能力就绪后实现。" },
+    { type: "input.filefilter", label: "File Filter 文件过滤器", icon: IconFolder, hint: "按关键词、目录范围和文件类型搜本地文件并列出来。macOS 走 Spotlight，其余平台需限定目录。" },
     { type: "input.appsfilter", label: "Running Apps 运行中应用", icon: IconWindow, soon: true, hint: "列出当前运行的应用供切换/退出。要接系统窗口信息，暂未实现。" },
     { type: "input.dict", label: "Dictionary 词典查询", icon: IconBook, hint: "把输入送进 macOS 的词典 App 查词。仅 macOS。" },
   ] },
@@ -133,7 +133,7 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "utility.join", label: "Join Args 合并参数", icon: IconLink },
     { type: "utility.junction", label: "Junction 汇流点", icon: IconBranch, hint: "纯理线用的中转点，只影响连线走向不改数据。" },
     { type: "utility.filter", label: "Filter 过滤", icon: IconFilter, hint: "条件不满足就整条中断（Conditional 的单出口版）。" },
-    { type: "utility.fileconditional", label: "File Conditional 文件条件", icon: IconFolder, soon: true, hint: "按文件类型/扩展名分流。等 File Filter 一起做。" },
+    { type: "utility.fileconditional", label: "File Conditional 文件条件", icon: IconFolder, hint: "按扩展名 / 是不是目录 / 名字包含什么来分流，多出口。" },
     { type: "utility.dialog", label: "Dialog Conditional 对话框", icon: IconAlert, soon: true, hint: "弹个框问用户，按点了哪个按钮分流。UI 规范还没定。" },
     { type: "utility.random", label: "Random 随机值", icon: IconDice, hint: "生成随机数 / UUID / 随机串，写进参数或变量。" },
     { type: "utility.jsonconfig", label: "JSON Config 配置", icon: IconFile, hint: "用一段 JSON 一次性设置多个变量。" },
@@ -152,11 +152,11 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "action.ask_assistant", label: "问秘书（等回复）", icon: IconChat },
     { type: "action.create_task", label: "建任务", icon: IconCalendar },
     { type: "action.device_skill", label: "设备技能派发", icon: IconCloud },
-    { type: "action.reveal", label: "Reveal in Finder 在文件管理器中显示", icon: IconSearch, soon: true, hint: "在系统文件管理器里定位到这个文件。跨平台差异小，排在下一批。" },
+    { type: "action.reveal", label: "Reveal in Finder 在文件管理器中显示", icon: IconSearch, hint: "在系统文件管理器里定位并选中这个文件（不打开它）。" },
     { type: "action.terminal", label: "Terminal Command 终端命令", icon: IconTerminal, soon: true, hint: "把命令送到系统终端里执行（区别于后台跑的 Run Script）。" },
-    { type: "action.browse", label: "Browse in Terminal 在终端中打开目录", icon: IconTerminal, soon: true, hint: "在终端里 cd 到这个目录。和终端命令一起做。" },
+    { type: "action.browse", label: "Browse in Terminal 在终端中打开目录", icon: IconTerminal, hint: "在终端里打开这个目录；给的是文件就取它所在的目录。仅 macOS。" },
     { type: "action.websearch", label: "Web Search 默认网页搜索", icon: IconGlobe, soon: true, hint: "用默认搜索引擎搜关键词。等搜索引擎设置项落地。" },
-    { type: "action.filebuffer", label: "File Buffer 文件暂存区", icon: IconGrid, soon: true, hint: "把文件攒进暂存区再一起处理。需要先有文件暂存区这个概念。" },
+    { type: "action.filebuffer", label: "File Buffer 文件暂存区", icon: IconGrid, hint: "把文件先攒起来，攒够了一次性交给下游。只在内存里，退出即清空。" },
     { type: "action.applescript", label: "Run AppleScript", icon: IconTerminal, hint: "跑一段 AppleScript，可拿回它的返回值。仅 macOS。" },
   ] },
   { cat: "自动化 Automations", icon: IconClock, items: [
@@ -274,7 +274,9 @@ function defaultConfig(type: string): Record<string, unknown> {
 // 节点的输出端口清单：默认只有一个匿名出口；Conditional 按规则条数出 r0…rN 再加一个 else；
 // Run Script 选了「失败走分支」时，成功口之外再多一个 error 口。端口顺序即画布上从上到下的顺序。
 function outPorts(n: WFNode): { port: string; label: string }[] {
-  if (n.type === "utility.conditional") {
+  // 文件条件和普通条件的出口结构完全一样（每条规则一个口 + 一个「否则」），
+  // 只是规则比的东西不同，所以这里合在一起处理。
+  if (n.type === "utility.conditional" || n.type === "utility.fileconditional") {
     const rules = Array.isArray(n.config.rules) ? (n.config.rules as unknown[]) : [];
     const list = rules.map((_, i) => ({ port: `r${i}`, label: `规则${i + 1}` }));
     list.push({ port: "else", label: "否则" });
@@ -1476,6 +1478,11 @@ const DELIM_LABEL: Record<string, string> = { comma: "逗号", space: "空格", 
 // 和别处都用中文对不上，顺手补齐。键要和 NodeConfig 里那个下拉的 option 值一一对应。
 // 音乐控制的命令名。键要和主进程 workflow.ts 里 MUSIC_CMDS 的键一一对应 ——
 // 两处对不上时卡片会显示原始键名（不至于崩，但一眼能看出是谁漏了）。
+// 文件类别的中文名。键要和主进程 filesearch.ts 里 KIND_UTI 的键一一对应。
+const FILE_KIND_LABEL: Record<string, string> = {
+  any: "全部", folder: "文件夹", image: "图片", audio: "音频",
+  movie: "视频", pdf: "PDF", text: "文本", archive: "压缩包",
+};
 const MUSIC_LABEL: Record<string, string> = {
   playpause: "播放 / 暂停", play: "播放", pause: "暂停",
   next: "下一首", previous: "上一首", volume: "设置音量", now: "当前播放",
@@ -1555,6 +1562,38 @@ export function nodeRows(n: WFNode): SumRow[] {
       { k: "类型", v: { url: "URL", base64: "Base64" }[c.mode || "unicode"] || "Unicode" },
       { k: "方向", v: "按输入自动判断编/解码" },
     ];
+    case "input.filefilter": {
+      const scopes = String(c.scopes || "").split("\n").map((x) => x.trim()).filter(Boolean);
+      const exts = String(c.exts || "").trim();
+      return [
+        { k: "范围", v: scopes.length === 1 ? cut(scopes[0], 24) : scopes.length ? `${scopes.length} 个目录` : "全盘（仅 macOS）", mono: scopes.length === 1 },
+        { k: "类型", v: exts ? cut(exts, 22) : FILE_KIND_LABEL[String(c.kind || "any")] || "全部" },
+      ];
+    }
+    case "utility.fileconditional": {
+      const rules = (cfg.rules as unknown[]) || [];
+      return [
+        { k: "规则", v: rules.length ? `${rules.length} 条` : "未设规则" },
+        { k: "出口", v: rules.length ? `${rules.length} 个 + 否则` : "只有「否则」" },
+      ];
+    }
+    case "action.reveal": return [
+      { k: "定位", v: cut(val(c.path, "{query}"), 26), mono: true },
+      { k: "行为", v: "选中它，不打开" },
+    ];
+    case "action.browse": return [
+      { k: "目录", v: cut(val(c.path, "{query}"), 26), mono: true },
+      { k: "用什么开", v: val(c.app, "Terminal") },
+    ];
+    case "action.filebuffer": {
+      const mode = String(c.mode || "add");
+      return [
+        { k: "动作", v: mode === "list" ? "取出全部交给下游" : mode === "clear" ? "清空暂存区" : "把路径收进暂存区" },
+        mode === "list"
+          ? { k: "取完", v: cfg.clearAfter === false ? "保留暂存区" : "清空暂存区" }
+          : { k: "来源", v: cut(val(c.path, "{query}"), 22), mono: true },
+      ];
+    }
     case "input.dict": return [
       { k: "查询", v: "把输入当作要查的词" },
       { k: "回车", v: "在词典 App 中打开" },
@@ -1813,6 +1852,52 @@ function RulesEditor({ rules, onChange }: { rules: Rule[]; onChange: (r: Rule[])
   );
 }
 
+// ── 文件条件的规则表 ──
+// 字段刻意和 Conditional 的规则表不一样：那边比的是文本内容，这边比的是「这个路径是什么」。
+// 混用一套字段只会让人配错（在文件条件里填一个「包含」然后期待它比文件内容）。
+export interface FileRule { op?: string; value?: string; ci?: boolean }
+const FILE_OPS: { v: string; t: string; needValue: boolean }[] = [
+  { v: "ext_in", t: "扩展名属于", needValue: true },
+  { v: "is_dir", t: "是文件夹", needValue: false },
+  { v: "is_file", t: "是文件", needValue: false },
+  { v: "not_exists", t: "路径不存在", needValue: false },
+  { v: "name_contains", t: "文件名包含", needValue: true },
+  { v: "path_contains", t: "完整路径包含", needValue: true },
+];
+function FileRulesEditor({ rules, onChange }: { rules: FileRule[]; onChange: (r: FileRule[]) => void }) {
+  const inp = "bg-bg border border-border rounded-lg px-[8px] py-[5px] text-[12px] outline-none";
+  const setAt = (i: number, patch: Partial<FileRule>) => onChange(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  return (
+    <div className="flex flex-col gap-2">
+      {rules.map((r, i) => {
+        const op = FILE_OPS.find((o) => o.v === (r.op || "ext_in"));
+        return (
+          <div key={i} className="border border-border rounded-lg p-2 flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] text-muted w-[38px] shrink-0">出口{i + 1}</span>
+              <select className={`${inp} flex-1`} value={r.op || "ext_in"} onChange={(e) => setAt(i, { op: e.target.value })}>
+                {FILE_OPS.map((o) => <option key={o.v} value={o.v}>{o.t}</option>)}
+              </select>
+              <button className="text-danger text-[12px] px-1" title="删除这条规则" onClick={() => onChange(rules.filter((_, j) => j !== i))}>✕</button>
+            </div>
+            {op?.needValue ? (
+              <div className="flex items-center gap-1.5">
+                <input className={`${inp} flex-1 font-mono`} value={r.value ?? ""} placeholder={r.op === "ext_in" ? "png, jpg, pdf" : "要比的文本"}
+                  onChange={(e) => setAt(i, { value: e.target.value })} />
+                <label className="flex items-center gap-1 text-[11px] text-muted shrink-0">
+                  <input type="checkbox" checked={r.ci !== false} onChange={(e) => setAt(i, { ci: e.target.checked })} />忽略大小写
+                </label>
+              </div>
+            ) : <span className="text-[11px] text-muted">（无需比较值）</span>}
+          </div>
+        );
+      })}
+      <button className="text-[12.5px] text-muted border border-dashed border-border rounded-lg px-3 py-1.5"
+        onClick={() => onChange([...rules, { op: "ext_in", value: "", ci: true }])}>＋ 加一条规则</button>
+    </div>
+  );
+}
+
 // ── 简易键值表（Args & Vars 节点用来设置变量）──
 function KVEditor({ kv, onChange }: { kv: Record<string, string>; onChange: (v: Record<string, string>) => void }) {
   const [rows, setRows] = useState<{ k: string; v: string }[]>(Object.entries(kv || {}).map(([k, v]) => ({ k, v: String(v) })));
@@ -1977,6 +2062,73 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
           {node.type === "utility.conditional" ? (<>
             <div className="text-[11.5px] text-muted">从上往下逐条判断，命中哪条就走哪个出口；全不中走「否则」。出口没连线时链路自然结束。</div>
             <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
+          </>) : null}
+          {node.type === "input.filefilter" ? (<>
+            <div><span className={lab}>关键词（按文件名匹配）</span>
+              <input className={`${inp} font-mono`} value={String(c.keyword || "")} onChange={(e) => set("keyword", e.target.value)} placeholder="{query}" /></div>
+            <div><span className={lab}>搜索目录（一行一个，支持 ~；留空=全盘）</span>
+              <textarea className={`${inp} font-mono h-[70px] resize-y`} value={String(c.scopes || "")} onChange={(e) => set("scopes", e.target.value)}
+                placeholder={"~/Documents\n~/Downloads"} /></div>
+            <div><span className={lab}>文件类型</span>
+              <select className={inp} value={String(c.kind || "any")} onChange={(e) => set("kind", e.target.value)}>
+                <option value="any">全部</option>
+                <option value="folder">文件夹</option>
+                <option value="image">图片</option>
+                <option value="audio">音频</option>
+                <option value="movie">视频</option>
+                <option value="pdf">PDF</option>
+                <option value="text">文本</option>
+                <option value="archive">压缩包</option>
+              </select></div>
+            <div><span className={lab}>扩展名（可选，逗号分隔；与上面的类型是「且」）</span>
+              <input className={`${inp} font-mono`} value={String(c.exts || "")} onChange={(e) => set("exts", e.target.value)} placeholder="png, jpg" /></div>
+            <div><span className={lab}>最少几个字才开始搜</span>
+              <input type="number" className={`${inp} font-mono`} value={String(c.minChars ?? 2)} onChange={(e) => set("minChars", e.target.value)} /></div>
+            <div className="text-[11px] text-muted leading-[1.7]">
+              <b>macOS 走 Spotlight</b>（系统索引，全盘也很快，还认它索引到的各种元数据）；
+              其它平台没有这套索引，退回「在指定目录里现走一遍」，所以<b>必须填搜索目录</b>，
+              而且只走有限层数、有访问量上限 —— 现走全盘会把主进程卡住。<br />
+              选中一条时把<b>绝对路径</b>传给下游，最常接的是「打开文件」「在文件管理器中显示」「在终端中打开」。
+              ⌘Y 可以直接预览选中的文件。
+            </div>
+          </>) : null}
+          {node.type === "utility.fileconditional" ? (<>
+            <div><span className={lab}>判定哪个路径（留空=上游参数）</span>
+              <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query}" /></div>
+            <div className="text-[11.5px] text-muted">从上往下逐条判断，命中哪条走哪个出口，全不中走「否则」。
+              只看<b>路径本身</b>（扩展名、是不是目录、名字里有什么），不读文件内容 —— 读内容既慢又要权限，按类型分流用不着。</div>
+            <FileRulesEditor rules={(c.rules as FileRule[]) || []} onChange={(r) => set("rules", r)} />
+          </>) : null}
+          {node.type === "action.reveal" ? (<>
+            <div><span className={lab}>要定位的路径</span>
+              <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query} 或固定路径（支持 ~）" /></div>
+            <div className="text-[11px] text-muted">在系统文件管理器里把窗口开到它所在的位置并选中它 —— <b>不打开文件本身</b>。路径不存在时会明确报错，不会静默打开一个空窗口。</div>
+          </>) : null}
+          {node.type === "action.browse" ? (<>
+            <div><span className={lab}>要打开的目录</span>
+              <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query} 或固定路径（支持 ~）" /></div>
+            <div><span className={lab}>用哪个终端</span>
+              <input className={inp} value={String(c.app || "")} onChange={(e) => set("app", e.target.value)} placeholder="Terminal（也可填 iTerm、Warp…）" /></div>
+            <div className="text-[11px] text-muted"><b>仅 macOS。</b>给的是文件就自动取它所在的目录 —— 说「在终端里打开这个」时想要的几乎总是所在目录，拿文件路径当工作目录只会失败。</div>
+          </>) : null}
+          {node.type === "action.filebuffer" ? (<>
+            <div><span className={lab}>这个节点做什么</span>
+              <select className={inp} value={String(c.mode || "add")} onChange={(e) => set("mode", e.target.value)}>
+                <option value="add">收：把上游的路径攒进暂存区</option>
+                <option value="list">取：把攒的全部交给下游（换行分隔）</option>
+                <option value="clear">清空暂存区</option>
+              </select></div>
+            {String(c.mode || "add") !== "clear" && String(c.mode || "add") !== "list" ? (
+              <div><span className={lab}>收哪些路径（多条用换行分隔）</span>
+                <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query}" /></div>
+            ) : null}
+            {String(c.mode || "add") === "list" ? (
+              <label className="flex items-center gap-2 text-[12px] text-muted">
+                <input type="checkbox" checked={c.clearAfter !== false} onChange={(e) => set("clearAfter", e.target.checked)} />取出后清空暂存区
+              </label>
+            ) : null}
+            <div className="text-[11px] text-muted leading-[1.7]">典型用法：一个工作流按「收」把文件一个个加进来，另一个工作流按「取」一次性处理掉。<br />
+              暂存区按「工作流 + 节点」分桶，<b>只在内存里，退出即清空</b> —— 它是「这几分钟挑几个文件一起处理」的临时篮子，不是长期收藏夹。重复路径会自动去重。</div>
           </>) : null}
           {node.type === "input.dict" ? (<>
             <div className="text-[12px] text-muted leading-[1.7]">把输入当作一个要查的词列出来，回车在系统「词典」App 里打开它。<b>仅 macOS。</b><br />
