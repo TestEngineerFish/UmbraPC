@@ -15,8 +15,8 @@ import {
   IconVolume, IconWindow, IconX,
 } from "../../components/icons";
 import {
-  Blank, BTN_SEC, CELL, CELL_MONO, CheckRow, Code, CodeRow, Dlg, FLD, FLD_MONO, Fold, Hint, HotkeyField,
-  Note, PickField, Row, RowTable, Sec, sameConfig,
+  Blank, BTN_SEC, CardList, CELL, CELL_MONO, CheckRow, Code, CodeRow, Dlg, FLD, FLD_MONO, Fold, Hint,
+  HotkeyField, Note, PickField, Pill, Row, RowTable, Sec, sameConfig,
 } from "./nodeform";
 import type { DlgWidth } from "./nodeform";
 import { ContextMenu } from "./menu";
@@ -377,12 +377,13 @@ function defaultConfig(type: string): Record<string, unknown> {
 }
 // 节点的输出端口清单：默认只有一个匿名出口；Conditional 按规则条数出 r0…rN 再加一个 else；
 // Run Script 选了「失败走分支」时，成功口之外再多一个 error 口。端口顺序即画布上从上到下的顺序。
-function outPorts(n: WFNode): { port: string; label: string }[] {
+export function outPorts(n: WFNode): { port: string; label: string }[] {
   // 文件条件和普通条件的出口结构完全一样（每条规则一个口 + 一个「否则」），
   // 只是规则比的东西不同，所以这里合在一起处理。
   if (n.type === "utility.conditional" || n.type === "utility.fileconditional") {
-    const rules = Array.isArray(n.config.rules) ? (n.config.rules as unknown[]) : [];
-    const list = rules.map((_, i) => ({ port: `r${i}`, label: `规则${i + 1}` }));
+    const rules = Array.isArray(n.config.rules) ? (n.config.rules as { label?: string }[]) : [];
+    // 出口名留空就退回「规则N」—— 名字是可选的，没填也得有个能指认的标签。
+    const list = rules.map((r, i) => ({ port: `r${i}`, label: String(r?.label || "").trim() || `规则${i + 1}` }));
     list.push({ port: "else", label: "否则" });
     return list;
   }
@@ -1379,7 +1380,9 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
                         onMouseDown={(e) => onPortDown(e, n, p.port)} />
                     ))}
                     {ports.length > 1 ? ports.map((p, pi) => (
-                      <span key={`lb${p.port}`} className="absolute text-[9.5px] whitespace-nowrap pointer-events-none" style={{ left: NODE_W + 9, top: PORT_Y + pi * PORT_GAP - 7, color: CV.faint }}>{p.label}</span>
+                      <span key={`lb${p.port}`} title={p.label}
+                        className="absolute text-[9.5px] whitespace-nowrap pointer-events-none overflow-hidden text-ellipsis max-w-[120px]"
+                        style={{ left: NODE_W + 9, top: PORT_Y + pi * PORT_GAP - 7, color: CV.faint }}>{p.label}</span>
                     )) : null}
                   </div>
                 );
@@ -1537,6 +1540,20 @@ const SCRIPT_LANG_LABEL: Record<string, string> = {
   bash: "bash", zsh: "zsh", python3: "Python 3", ruby: "Ruby", node: "Node.js", osascript: "AppleScript",
 };
 
+// 条件类节点在卡片上怎么写「出口」这一行。
+// 起了名字的出口直接把名字列出来 —— 卡片上能看见「打开网址 / 查快递 / 否则」时，
+// 不点开弹窗就知道这个分支节点在分什么，这正是出口命名的意义所在。
+// 名字太多放不下就退回计数，别把卡片撑破。
+function exitsLabel(rules: { label?: string }[]): string {
+  if (!rules.length) return "只有「否则」";
+  const named = rules.map((r) => String(r?.label || "").trim()).filter(Boolean);
+  if (named.length === rules.length) {
+    const joined = `${named.join(" / ")} / 否则`;
+    if (joined.length <= 24) return joined;
+  }
+  return `${rules.length} 个 + 否则`;
+}
+
 // 节点卡片正文的一行。k=字段名，v=值，mono=用等宽字 + 底框显示。
 // mono 留给「要逐字看清」的东西：路径、脚本、网址、键位、分隔符 —— 混在正文字体里
 // 一个下划线和一个连字符看着是一样的。
@@ -1639,10 +1656,10 @@ export function nodeRows(n: WFNode): SumRow[] {
       ];
     }
     case "utility.fileconditional": {
-      const rules = (cfg.rules as unknown[]) || [];
+      const rules = (cfg.rules as { label?: string }[]) || [];
       return [
         { k: "规则", v: rules.length ? `${rules.length} 条` : "未设规则" },
-        { k: "出口", v: rules.length ? `${rules.length} 个 + 否则` : "只有「否则」" },
+        { k: "出口", v: exitsLabel(rules) },
       ];
     }
     case "action.reveal": return [
@@ -1686,11 +1703,10 @@ export function nodeRows(n: WFNode): SumRow[] {
       ];
     }
     case "utility.conditional": {
-      const rules = (cfg.rules as { op?: string }[]) || [];
-      const first = rules[0]?.op;
+      const rules = (cfg.rules as { op?: string; label?: string }[]) || [];
       return [
         { k: "规则", v: rules.length ? `${rules.length} 条` : "未设规则" },
-        { k: "出口", v: rules.length ? `${rules.length} 个 + 否则` : (RULE_OPS.find((o) => o.v === first)?.t || "只有「否则」") },
+        { k: "出口", v: exitsLabel(rules) },
       ];
     }
     case "utility.transform": return [
@@ -1916,7 +1932,10 @@ function LaunchList({ paths, onChange }: { paths: string[]; onChange: (p: string
 
 // ── Conditional 规则表 ──
 // 一行一条规则，顺序即出口顺序（第 1 行 → r0 口，以此类推）；判断在引擎侧由 matchRule 执行。
-export interface Rule { subject?: string; op?: string; value?: string; ci?: boolean }
+// label：这条规则对应的出口在画布上显示成什么。留空时退回「规则N」。
+// 出口名是**给读画布的人看的**：一条工作流拉了五条线出去，端口边上写「打开网址」「查快递」
+// 远比「规则1」「规则2」有用 —— 后者还得点开弹窗才知道是什么。
+export interface Rule { subject?: string; op?: string; value?: string; ci?: boolean; label?: string }
 const RULE_OPS: { v: string; t: string }[] = [
   { v: "contains", t: "包含" }, { v: "not_contains", t: "不包含" },
   { v: "is", t: "等于" }, { v: "is_not", t: "不等于" },
@@ -1927,38 +1946,54 @@ const RULE_OPS: { v: string; t: string }[] = [
 ];
 // 这两个判断只看被判断对象本身，不需要填比较值。
 const NO_VALUE_OPS = ["is_empty", "is_not_empty"];
-function RulesEditor({ rules, onChange }: { rules: Rule[]; onChange: (r: Rule[]) => void }) {
-  const inp = "bg-bg border border-border rounded-lg px-[8px] py-[5px] text-[12px] outline-none";
+// exits=true 时每条规则多一行「走出口」——条件分支的每条规则各对应画布上一个出口，
+// 名字要能填；过滤节点只有「放行/不放行」，没有出口可命名，多这一行只会让人以为它有分支。
+function RulesEditor({ rules, onChange, exits }: { rules: Rule[]; onChange: (r: Rule[]) => void; exits?: boolean }) {
   const setAt = (i: number, patch: Partial<Rule>) => onChange(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
-    <div className="flex flex-col gap-2">
-      {rules.map((r, i) => (
-        <div key={i} className="border border-border rounded-lg p-2 flex flex-col gap-1.5">
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] text-muted w-[38px] shrink-0">出口{i + 1}</span>
-            <input className={`${inp} flex-1 font-mono`} value={r.subject ?? "{query}"} placeholder="{query}" onChange={(e) => setAt(i, { subject: e.target.value })} />
-            <button className="text-danger text-[12px] px-1" title="删除这条规则" onClick={() => onChange(rules.filter((_, j) => j !== i))}>✕</button>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <select className={`${inp} w-[104px] shrink-0`} value={r.op || "contains"} onChange={(e) => setAt(i, { op: e.target.value })}>
-              {RULE_OPS.map((o) => <option key={o.v} value={o.v}>{o.t}</option>)}
-            </select>
-            {NO_VALUE_OPS.includes(r.op || "contains") ? <span className="flex-1 text-[11px] text-muted">（无需比较值）</span>
-              : <input className={`${inp} flex-1 font-mono`} value={r.value ?? ""} placeholder="比较值" onChange={(e) => setAt(i, { value: e.target.value })} />}
-            <label className="flex items-center gap-1 text-[11px] text-muted shrink-0"><input type="checkbox" checked={r.ci !== false} onChange={(e) => setAt(i, { ci: e.target.checked })} />忽略大小写</label>
-          </div>
+    <CardList<Rule>
+      rows={rules} onChange={onChange} addLabel="加一条规则"
+      blank={() => ({ subject: "{query}", op: "contains", value: "", ci: true })}
+      emptyText={exits ? "还没有规则。加一条之后，节点上会多出一个对应的出口。" : "还没有规则。一条都不配 = 不过滤，全部放行。"}
+      tail={exits ? (
+        <div className="flex items-center gap-[9px] px-[11px] py-[9px] border border-border-soft rounded-[8px] bg-rail">
+          <Pill dim>兜底</Pill>
+          <span className="flex-1 min-w-0 text-[12px] text-muted leading-[1.6] [text-wrap:pretty]">都没命中时走「否则」出口。这一条不能删，也不用配。</span>
         </div>
-      ))}
-      <button className="text-[12.5px] text-muted border border-dashed border-border rounded-lg px-3 py-1.5"
-        onClick={() => onChange([...rules, { subject: "{query}", op: "contains", value: "", ci: true }])}>＋ 加一条规则</button>
-    </div>
+      ) : null}
+      card={(r, i) => (<>
+        <div className="flex items-center gap-[8px] flex-wrap">
+          <Pill>{i + 1}</Pill>
+          <input className={`${CELL_MONO} flex-1 basis-[150px] min-w-[110px]`} value={r.subject ?? "{query}"} placeholder="{query}"
+            onChange={(e) => setAt(i, { subject: e.target.value })} />
+          <select className={`${CELL} w-[110px] flex-none`} value={r.op || "contains"} onChange={(e) => setAt(i, { op: e.target.value })}>
+            {RULE_OPS.map((o) => <option key={o.v} value={o.v}>{o.t}</option>)}
+          </select>
+          {NO_VALUE_OPS.includes(r.op || "contains")
+            ? <span className="flex-1 basis-[120px] text-[12px] text-faint">无需比较值</span>
+            : <input className={`${CELL_MONO} flex-1 basis-[120px] min-w-[90px]`} value={r.value ?? ""} placeholder="比较值"
+                onChange={(e) => setAt(i, { value: e.target.value })} />}
+          <label className="flex items-center gap-[6px] flex-none whitespace-nowrap text-[12px] text-muted cursor-pointer">
+            <input type="checkbox" className="accent-orange w-[13px] h-[13px] m-0" checked={r.ci === false}
+              onChange={(e) => setAt(i, { ci: !e.target.checked })} />区分大小写
+          </label>
+        </div>
+        {exits ? (
+          <div className="flex items-center gap-[8px]">
+            <span className="flex-none whitespace-nowrap text-[12px] text-muted">走出口</span>
+            <input className={`${CELL} flex-1 min-w-0`} value={r.label ?? ""} placeholder={`留空显示「规则${i + 1}」`}
+              onChange={(e) => setAt(i, { label: e.target.value })} />
+          </div>
+        ) : null}
+      </>)}
+    />
   );
 }
 
 // ── 文件条件的规则表 ──
 // 字段刻意和 Conditional 的规则表不一样：那边比的是文本内容，这边比的是「这个路径是什么」。
 // 混用一套字段只会让人配错（在文件条件里填一个「包含」然后期待它比文件内容）。
-export interface FileRule { op?: string; value?: string; ci?: boolean }
+export interface FileRule { op?: string; value?: string; ci?: boolean; label?: string }
 const FILE_OPS: { v: string; t: string; needValue: boolean }[] = [
   { v: "ext_in", t: "扩展名属于", needValue: true },
   { v: "is_dir", t: "是文件夹", needValue: false },
@@ -1968,36 +2003,43 @@ const FILE_OPS: { v: string; t: string; needValue: boolean }[] = [
   { v: "path_contains", t: "完整路径包含", needValue: true },
 ];
 function FileRulesEditor({ rules, onChange }: { rules: FileRule[]; onChange: (r: FileRule[]) => void }) {
-  const inp = "bg-bg border border-border rounded-lg px-[8px] py-[5px] text-[12px] outline-none";
   const setAt = (i: number, patch: Partial<FileRule>) => onChange(rules.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
-    <div className="flex flex-col gap-2">
-      {rules.map((r, i) => {
+    <CardList<FileRule>
+      rows={rules} onChange={onChange} addLabel="加一条规则"
+      blank={() => ({ op: "ext_in", value: "", ci: true })}
+      emptyText="还没有规则。加一条之后，节点上会多出一个对应的出口。"
+      tail={
+        <div className="flex items-center gap-[9px] px-[11px] py-[9px] border border-border-soft rounded-[8px] bg-rail">
+          <Pill dim>兜底</Pill>
+          <span className="flex-1 min-w-0 text-[12px] text-muted leading-[1.6] [text-wrap:pretty]">都没命中时走「否则」出口。这一条不能删，也不用配。</span>
+        </div>
+      }
+      card={(r, i) => {
         const op = FILE_OPS.find((o) => o.v === (r.op || "ext_in"));
-        return (
-          <div key={i} className="border border-border rounded-lg p-2 flex flex-col gap-1.5">
-            <div className="flex items-center gap-1.5">
-              <span className="text-[11px] text-muted w-[38px] shrink-0">出口{i + 1}</span>
-              <select className={`${inp} flex-1`} value={r.op || "ext_in"} onChange={(e) => setAt(i, { op: e.target.value })}>
-                {FILE_OPS.map((o) => <option key={o.v} value={o.v}>{o.t}</option>)}
-              </select>
-              <button className="text-danger text-[12px] px-1" title="删除这条规则" onClick={() => onChange(rules.filter((_, j) => j !== i))}>✕</button>
-            </div>
-            {op?.needValue ? (
-              <div className="flex items-center gap-1.5">
-                <input className={`${inp} flex-1 font-mono`} value={r.value ?? ""} placeholder={r.op === "ext_in" ? "png, jpg, pdf" : "要比的文本"}
-                  onChange={(e) => setAt(i, { value: e.target.value })} />
-                <label className="flex items-center gap-1 text-[11px] text-muted shrink-0">
-                  <input type="checkbox" checked={r.ci !== false} onChange={(e) => setAt(i, { ci: e.target.checked })} />忽略大小写
-                </label>
-              </div>
-            ) : <span className="text-[11px] text-muted">（无需比较值）</span>}
+        return (<>
+          <div className="flex items-center gap-[8px] flex-wrap">
+            <Pill>{i + 1}</Pill>
+            <select className={`${CELL} w-[130px] flex-none`} value={r.op || "ext_in"} onChange={(e) => setAt(i, { op: e.target.value })}>
+              {FILE_OPS.map((o) => <option key={o.v} value={o.v}>{o.t}</option>)}
+            </select>
+            {op?.needValue ? (<>
+              <input className={`${CELL_MONO} flex-1 basis-[150px] min-w-[110px]`} value={r.value ?? ""}
+                placeholder={r.op === "ext_in" ? "png, jpg, pdf" : "要比的文本"} onChange={(e) => setAt(i, { value: e.target.value })} />
+              <label className="flex items-center gap-[6px] flex-none whitespace-nowrap text-[12px] text-muted cursor-pointer">
+                <input type="checkbox" className="accent-orange w-[13px] h-[13px] m-0" checked={r.ci === false}
+                  onChange={(e) => setAt(i, { ci: !e.target.checked })} />区分大小写
+              </label>
+            </>) : <span className="flex-1 text-[12px] text-faint">无需比较值</span>}
           </div>
-        );
-      })}
-      <button className="text-[12.5px] text-muted border border-dashed border-border rounded-lg px-3 py-1.5"
-        onClick={() => onChange([...rules, { op: "ext_in", value: "", ci: true }])}>＋ 加一条规则</button>
-    </div>
+          <div className="flex items-center gap-[8px]">
+            <span className="flex-none whitespace-nowrap text-[12px] text-muted">走出口</span>
+            <input className={`${CELL} flex-1 min-w-0`} value={r.label ?? ""} placeholder={`留空显示「规则${i + 1}」`}
+              onChange={(e) => setAt(i, { label: e.target.value })} />
+          </div>
+        </>);
+      }}
+    />
   );
 }
 
@@ -2219,8 +2261,8 @@ function NodeConfig({ node, onSave, onClose, onDelete }: {
 
       {node.type === "utility.conditional" ? (<>
         <Sec title="规则" note="从上往下匹配，命中第一条就走那个出口" />
-        <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
-        <Hint>全不中走「否则」出口。出口没连线时链路自然结束。</Hint>
+        <RulesEditor exits rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
+        <Hint>出口没连线时链路自然结束。出口名会直接显示在画布上节点的端口边。</Hint>
       </>) : null}
 
       {node.type === "utility.filter" ? (<>

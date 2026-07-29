@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 vi.stubGlobal("window", { umbraLauncher: {} });
 vi.stubGlobal("localStorage", { getItem: () => null, setItem: () => {}, removeItem: () => {} });
 
-const { CATALOG, nodeRows } = await import("../src/features/launcher/WorkflowEditor");
+const { CATALOG, nodeRows, outPorts } = await import("../src/features/launcher/WorkflowEditor");
 
 type Cfg = Record<string, unknown>;
 const rows = (type: string, config: Cfg = {}) => nodeRows({ id: "n", type, x: 0, y: 0, config } as never);
@@ -282,5 +282,63 @@ describe("对照 Alfred 文档补的配置项，卡片上要看得见", () => {
     expect(t).toContain("改参数");
     expect(t).toContain("改下游配置");
     expect(t).toContain("1 个");        // variables 里的数量，不是最外层的键数
+  });
+});
+
+// 出口命名：条件类节点的每条规则可以给自己的出口起名，名字直接显示在画布上的端口边。
+// 这块的价值全在「名字有没有真的透到画布」和「没起名时退回什么」，所以两头都测。
+describe("出口命名", () => {
+  const cond = (rules: unknown[], type = "utility.conditional") =>
+    outPorts({ id: "n", type, x: 0, y: 0, config: { rules } } as never);
+
+  it("没起名时退回「规则N」，序号从 1 开始", () => {
+    expect(cond([{}, {}]).map((p) => p.label)).toEqual(["规则1", "规则2", "否则"]);
+  });
+
+  it("起了名就用名字 —— 这是它存在的全部意义", () => {
+    expect(cond([{ label: "打开网址" }, { label: "查快递" }]).map((p) => p.label))
+      .toEqual(["打开网址", "查快递", "否则"]);
+  });
+
+  it("端口标识符不受名字影响 —— 改个名不能把已经连好的线弄断", () => {
+    expect(cond([{ label: "甲" }, { label: "乙" }]).map((p) => p.port)).toEqual(["r0", "r1", "else"]);
+    expect(cond([{}, {}]).map((p) => p.port)).toEqual(["r0", "r1", "else"]);
+  });
+
+  it("名字只填了空白等于没填", () => {
+    expect(cond([{ label: "   " }]).map((p) => p.label)).toEqual(["规则1", "否则"]);
+  });
+
+  it("文件条件走同一套", () => {
+    expect(cond([{ label: "图片" }], "utility.fileconditional").map((p) => p.label)).toEqual(["图片", "否则"]);
+  });
+
+  it("一条规则都没有时只剩「否则」", () => {
+    expect(cond([]).map((p) => p.port)).toEqual(["else"]);
+  });
+
+  it("过滤节点没有多出口 —— 它只有放行/不放行，不该冒出「否则」", () => {
+    expect(outPorts({ id: "n", type: "utility.filter", x: 0, y: 0, config: { rules: [{}, {}] } } as never).length).toBe(1);
+  });
+});
+
+describe("出口名要透到节点卡片上", () => {
+  it("全都起了名就把名字列出来，不点开弹窗也知道在分什么", () => {
+    expect(text("utility.conditional", { rules: [{ label: "网址" }, { label: "快递" }] }))
+      .toContain("网址 / 快递 / 否则");
+  });
+
+  it("只有一部分起了名就退回计数 —— 半截名字比计数更让人困惑", () => {
+    expect(text("utility.conditional", { rules: [{ label: "网址" }, {}] })).toContain("2 个 + 否则");
+  });
+
+  it("名字太长放不下也退回计数，别把卡片撑破", () => {
+    const long = [{ label: "这是一个特别长的出口名字" }, { label: "另一个同样很长的名字" }];
+    expect(text("utility.conditional", { rules: long })).toContain("2 个 + 否则");
+  });
+
+  it("没有规则时说清楚只剩「否则」", () => {
+    expect(text("utility.conditional")).toContain("只有「否则」");
+    expect(text("utility.fileconditional")).toContain("只有「否则」");
   });
 });

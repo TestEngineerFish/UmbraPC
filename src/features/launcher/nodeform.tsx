@@ -283,6 +283,84 @@ export function reorder<T>(rows: T[], from: number, to: number): T[] {
   return next;
 }
 
+// 行操作（拖拽调序 + 右键菜单）。表格和卡片列表共用这一套 ——
+// 两种排布的外观完全不同，但「怎么调序、右键有哪几项」必须一模一样，
+// 各写一份的结果一定是某天只改了其中一份。
+function useRowOps<T>(rows: T[], onChange: (r: T[]) => void) {
+  const [menu, setMenu] = useState<{ x: number; y: number; i: number } | null>(null);
+  const from = useRef<number | null>(null);
+
+  const move = (i: number, d: number) => {
+    const j = i + d;
+    if (j < 0 || j >= rows.length) return;
+    const next = rows.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+
+  // 挂在每一行/每张卡片外层：接住拖拽经过与右键
+  const rowProps = (i: number) => ({
+    onDragOver: (e: React.DragEvent) => {
+      e.preventDefault();
+      const f = from.current;
+      if (f === null) return;
+      const r = e.currentTarget.getBoundingClientRect();
+      const to = dragTarget(f, i, e.clientY > r.top + r.height / 2);
+      if (to === null) return;
+      from.current = to;
+      onChange(reorder(rows, f, to));
+    },
+    onContextMenu: (e: React.MouseEvent) => {
+      e.preventDefault(); e.stopPropagation();
+      setMenu({ x: e.clientX, y: e.clientY, i });
+    },
+  });
+
+  // 拖拽手柄。只有它是 draggable —— 整行可拖的话，在输入框里选文字会被当成拖拽。
+  const handle = (i: number, top?: boolean) => (
+    <span draggable onDragStart={(e) => { from.current = i; e.dataTransfer.effectAllowed = "move"; }}
+      onDragEnd={() => { from.current = null; }}
+      title="拖动调序 · 右键更多操作"
+      className={`w-[14px] flex-none text-faint flex cursor-grab active:cursor-grabbing ${top ? "pt-[6px]" : ""}`}>{GRIP}</span>
+  );
+
+  const items: MenuItem[] = menu === null ? [] : [
+    { label: "复制这一行", icon: COPY_ICON, onClick: () => { const n = rows.slice(); n.splice(menu.i + 1, 0, JSON.parse(JSON.stringify(rows[menu.i]))); onChange(n); } },
+    { label: "上移", icon: ARROW_UP, onClick: () => move(menu.i, -1) },
+    { label: "下移", icon: ARROW_DOWN, onClick: () => move(menu.i, 1) },
+    { sep: true },
+    { label: "删除这一行", icon: TRASH_ICON, danger: true, onClick: () => onChange(rows.filter((_, j) => j !== menu.i)) },
+  ];
+
+  const menuNode = menu
+    ? <ContextMenu x={menu.x} y={menu.y} items={items} title={`第 ${menu.i + 1} 项`} onClose={() => setMenu(null)} />
+    : null;
+
+  return { rowProps, handle, menuNode };
+}
+
+// 底部整行的「加一条」。表格和卡片列表都用它，样式只此一处。
+function AddRow({ label, onClick, framed }: { label: string; onClick: () => void; framed?: boolean }) {
+  return (
+    <button onClick={onClick}
+      className={framed
+        ? "flex items-center justify-center gap-[6px] w-full py-[9px] border border-border rounded-[8px] bg-transparent text-muted text-[12.5px] whitespace-nowrap hover:border-orange hover:text-orange-text"
+        : "flex items-center justify-center gap-[6px] w-full py-[8px] border-none bg-transparent text-[12.5px] whitespace-nowrap text-muted hover:bg-hover hover:text-orange-text"}>
+      {PLUS_ICON}{label}
+    </button>
+  );
+}
+
+// 空态：图标块 + 一句话。表格用它套在边框里，卡片列表直接用。
+function Empty({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col items-center gap-[8px] px-[18px] py-[26px]">
+      <span className="w-[34px] h-[34px] flex-none rounded-[9px] bg-chip text-faint flex items-center justify-center">{EMPTY_ICON}</span>
+      <div className="text-[12.5px] text-muted leading-[1.65] text-center [text-wrap:pretty]">{text}</div>
+    </div>
+  );
+}
+
 export function RowTable<T>({ rows, cols, onChange, blank, addLabel, emptyText, cell, scroll, extra }: {
   rows: T[];
   cols: TableCol[];
@@ -298,36 +376,7 @@ export function RowTable<T>({ rows, cols, onChange, blank, addLabel, emptyText, 
   /** 表格下面额外的入口（CSV 导入这类） */
   extra?: ReactNode;
 }) {
-  const [menu, setMenu] = useState<{ x: number; y: number; i: number } | null>(null);
-  const from = useRef<number | null>(null);
-
-  const move = (i: number, d: number) => {
-    const j = i + d;
-    if (j < 0 || j >= rows.length) return;
-    const next = rows.slice();
-    [next[i], next[j]] = [next[j], next[i]];
-    onChange(next);
-  };
-
-  const over = (i: number, e: React.DragEvent) => {
-    e.preventDefault();
-    const f = from.current;
-    if (f === null) return;
-    const r = e.currentTarget.getBoundingClientRect();
-    const to = dragTarget(f, i, e.clientY > r.top + r.height / 2);
-    if (to === null) return;
-    from.current = to;
-    onChange(reorder(rows, f, to));
-  };
-
-  const items: MenuItem[] = menu === null ? [] : [
-    { label: "复制这一行", icon: COPY_ICON, onClick: () => { const n = rows.slice(); n.splice(menu.i + 1, 0, JSON.parse(JSON.stringify(rows[menu.i]))); onChange(n); } },
-    { label: "上移", icon: ARROW_UP, onClick: () => move(menu.i, -1) },
-    { label: "下移", icon: ARROW_DOWN, onClick: () => move(menu.i, 1) },
-    { sep: true },
-    { label: "删除这一行", icon: TRASH_ICON, danger: true, onClick: () => onChange(rows.filter((_, j) => j !== menu.i)) },
-  ];
-
+  const { rowProps, handle, menuNode } = useRowOps(rows, onChange);
   return (
     <div className="border border-border rounded-[8px] overflow-hidden">
       {rows.length ? (
@@ -343,36 +392,63 @@ export function RowTable<T>({ rows, cols, onChange, blank, addLabel, emptyText, 
         {rows.map((row, i) => {
           const cells = cell(row, i);
           return (
-            <div key={i} onDragOver={(e) => over(i, e)}
-              onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY, i }); }}
+            <div key={i} {...rowProps(i)}
               className="flex items-center gap-[8px] px-[10px] py-[7px] border-b border-border-soft hover:bg-hover">
-              <span draggable onDragStart={(e) => { from.current = i; e.dataTransfer.effectAllowed = "move"; }}
-                onDragEnd={() => { from.current = null; }}
-                title="拖动调序 · 右键更多操作"
-                className="w-[14px] flex-none text-faint flex cursor-grab active:cursor-grabbing">{GRIP}</span>
+              {handle(i)}
               {cols.map((col, j) => <div key={col.label} className={col.cls}>{cells[j]}</div>)}
             </div>
           );
         })}
       </div>
 
-      {!rows.length ? (
-        <div className="flex flex-col items-center gap-[8px] px-[18px] py-[26px]">
-          <span className="w-[34px] h-[34px] flex-none rounded-[9px] bg-chip text-faint flex items-center justify-center">{EMPTY_ICON}</span>
-          <div className="text-[12.5px] text-muted leading-[1.65] text-center [text-wrap:pretty]">{emptyText}</div>
+      {!rows.length ? <Empty text={emptyText} /> : null}
+      {blank ? (
+        <div className={rows.length ? "border-t border-border-soft" : ""}>
+          <AddRow label={addLabel || "加一条"} onClick={() => onChange([...rows, blank()])} />
         </div>
       ) : null}
-
-      {blank ? (
-        <button onClick={() => onChange([...rows, blank()])}
-          className={`flex items-center justify-center gap-[6px] w-full py-[8px] border-none bg-transparent text-[12.5px] whitespace-nowrap hover:bg-hover ${rows.length ? "border-t border-border-soft text-muted hover:text-orange-text" : "text-orange-text"}`}>
-          {PLUS_ICON}{addLabel || "加一条"}
-        </button>
-      ) : null}
       {extra}
-
-      {menu ? <ContextMenu x={menu.x} y={menu.y} items={items} title={`第 ${menu.i + 1} 行`} onClose={() => setMenu(null)} /> : null}
+      {menuNode}
     </div>
+  );
+}
+
+// ── 卡片式列表 ──────────────────────────────────────────────────────────────
+// 规则类的东西（条件分支、过滤、文件条件）不走表格：一条规则有两行内容
+// （比较式一行、出口名一行），塞进表格的一行会挤成一条难读的长带子。
+// 卡片之间用间距分隔，每张卡片自己是一个小方框，读起来是「一条一条」而不是「一片」。
+export function CardList<T>({ rows, onChange, blank, addLabel, emptyText, card, tail }: {
+  rows: T[];
+  onChange: (rows: T[]) => void;
+  blank: () => T;
+  addLabel: string;
+  emptyText: string;
+  card: (row: T, i: number) => ReactNode;
+  /** 卡片列表末尾固定挂的东西（条件分支的「兜底」那一条） */
+  tail?: ReactNode;
+}) {
+  const { rowProps, handle, menuNode } = useRowOps(rows, onChange);
+  return (
+    <div className="flex flex-col gap-[9px]">
+      {rows.map((row, i) => (
+        <div key={i} {...rowProps(i)}
+          className="flex items-start gap-[9px] border border-border rounded-[8px] p-[10px] hover:border-orange">
+          {handle(i, true)}
+          <div className="flex-1 min-w-0 flex flex-col gap-[8px]">{card(row, i)}</div>
+        </div>
+      ))}
+      {!rows.length ? <div className="border border-border rounded-[8px]"><Empty text={emptyText} /></div> : null}
+      <AddRow framed label={addLabel} onClick={() => onChange([...rows, blank()])} />
+      {tail}
+      {menuNode}
+    </div>
+  );
+}
+
+// 序号药丸。规则卡片左上角那颗，也用于「兜底」那条（用 dim 换成灰底）。
+export function Pill({ children, dim }: { children: ReactNode; dim?: boolean }) {
+  return (
+    <span className={`flex-none whitespace-nowrap min-w-[22px] h-[22px] px-[6px] rounded-full text-[11px] font-semibold flex items-center justify-center ${dim ? "bg-chip text-faint" : "bg-orange-soft text-orange-text"}`}>{children}</span>
   );
 }
 
