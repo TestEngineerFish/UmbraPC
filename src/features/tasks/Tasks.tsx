@@ -361,6 +361,8 @@ function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
     { k: t("tasks.statMilestone"), v: total ? `${done} / ${total}` : "—" },
     { k: t("tasks.statDuration"), v: durationOf(d.job, t) },
     ...(devices.length ? [{ k: t("tasks.statDevice"), v: devices.join("、") }] : []),
+    // 自动纠错回合只在真补做过时才出现 —— 恒为 0 的一格纯占地方。
+    ...(d.job.fix_rounds ? [{ k: t("tasks.statFixRounds"), v: t("tasks.fixRoundsN", { n: d.job.fix_rounds }) }] : []),
     { k: t("tasks.statCreated"), v: legacy.fmtTime(d.job.created_at) },
     { k: t("tasks.statUpdated"), v: legacy.fmtTime(d.job.updated_at) },
   ];
@@ -477,6 +479,8 @@ function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
               </div>
             </div>
           ) : null}
+
+          <Checklist raw={d.job.checklist} />
 
           <Results subs={subs} />
         </div>
@@ -601,6 +605,36 @@ function Step({ s, last }: { s: Subtask; last: boolean }) {
           </div>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+// 验收清单：秘书建任务时定下的「做到什么算完成」。服务端存的是一段 JSON 文本。
+// 解析失败一律当没有——一条脏数据不该把整个详情页拖垮。
+function Checklist({ raw }: { raw?: string | null }) {
+  const { t } = useTranslation();
+  const items = useMemo(() => {
+    if (!raw) return [];
+    try {
+      const v = JSON.parse(raw);
+      return Array.isArray(v) ? v.map((x) => String(x)).filter(Boolean) : [];
+    } catch { return []; }
+  }, [raw]);
+  if (!items.length) return null;
+  return (
+    <div>
+      <SecLabel>{t("tasks.checklist")}</SecLabel>
+      <div className="bg-card border border-border rounded-[11px] px-[13px] py-[11px] flex flex-col gap-[7px]">
+        {items.map((it, i) => (
+          <div key={i} className="flex items-start gap-[8px]">
+            {/* 刻意不画勾/叉：服务端只存「验收标准是什么」，没有逐条的通过与否，
+                画成勾选框会让人以为那是真实结果。 */}
+            <span className="flex-none w-[16px] h-[16px] mt-[1px] rounded-[5px] bg-chip text-faint flex items-center justify-center text-[10px] font-semibold">{i + 1}</span>
+            <span className="flex-1 min-w-0 text-[12.5px] leading-[1.65]">{it}</span>
+          </div>
+        ))}
+      </div>
+      <div className="text-[10.5px] text-faint mt-[7px] leading-[1.6]">{t("tasks.checklistFootnote")}</div>
     </div>
   );
 }

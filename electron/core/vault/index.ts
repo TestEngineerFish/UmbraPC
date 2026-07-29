@@ -10,6 +10,7 @@ import {
 } from "./crypto";
 import { VaultMeta, VaultInfo, VaultType, VaultData, Item, Attachment } from "./types";
 import { ConfigStore, httpBase } from "../config";
+import { httpFetch } from "../http";
 
 // 导入用的明文 bundle 结构（每个 vault 会作为新身份库追加）。
 interface ImportBundle { vaults: { name: string; owner?: string; icon?: string; types?: VaultType[]; items?: Item[]; attachments?: Record<string, string> }[] }
@@ -21,6 +22,8 @@ const WF_SECRET_TYPE = "工作流密钥";
 const SYNC_DEBOUNCE_MS = 3_000;
 // 解锁期间的定时拉取间隔：别的设备改了，这个周期内会看到。
 const SYNC_PULL_INTERVAL_MS = 5 * 60_000;
+// 单次同步请求的超时。同步是后台行为，卡太久不如早点放弃等下一轮。
+const SYNC_TIMEOUT_MS = 25_000;
 
 const rid = (p = "") => p + randomBytes(9).toString("hex");
 const b64 = (b: Buffer) => b.toString("base64");
@@ -509,22 +512,30 @@ export class VaultManager {
     }
     return { v: 1, vaults, data };
   }
-  // 网络请求委托给保险箱窗口的渲染层用 Chromium 发（主进程 undici 会被 Cloudflare 等按非浏览器 UA 重置连接）。
-  private httpSeq = 0;
-  private httpWaiters = new Map<string, (r: { ok: boolean; json?: Record<string, unknown>; error?: string }) => void>();
+  // 同步的 HTTP 出口。走 core/http.ts 的 httpFetch（Electron net.fetch = Chromium 网络栈），
+  // 代理 / DNS / 证书行为与渲染层完全一致。
+  //
+  // 这里以前是把请求**委托给保险箱窗口的渲染层**发的，理由写着「主进程 undici 会被 CDN 按
+  // 非浏览器 UA 重置连接」。net.fetch 从根上解决了那个问题（它就是渲染层用的那套栈），
+  // 于是那圈 IPC 往返、id 配对、超时兜底一并删掉 —— 少一层就少一处能出错的地方。
   private async httpVault(method: string, path: string, body?: unknown): Promise<{ status: number; json: Record<string, unknown> }> {
     const c = this.cfg.get();
     if (!c.serverUrl || !c.token) throw new Error("未配置服务器地址或令牌");
-    if (!this.win || this.win.isDestroyed()) throw new Error("请在保险箱窗口内同步");
-    const id = `h${this.httpSeq++}`;
-    const r = await new Promise<{ ok: boolean; json?: Record<string, unknown>; error?: string }>((resolve) => {
-      this.httpWaiters.set(id, resolve);
-      this.win!.webContents.send("vault:http", { id, url: `${httpBase(c)}${path}`, method, token: c.token, body: body ? JSON.stringify(body) : null });
-      setTimeout(() => { if (this.httpWaiters.has(id)) { this.httpWaiters.delete(id); resolve({ ok: false, error: "同步请求超时" }); } }, 25_000);
+    const headers: Record<string, string> = { "X-Umbra-Token": c.token };
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    const resp = await httpFetch(`${httpBase(c)}${path}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(SYNC_TIMEOUT_MS),
     });
-    if (!r.ok) throw new Error(r.error || "同步请求失败");
-    return { status: 200, json: r.json || {} };
+    // 响应体解不出 JSON 也不抛：调用方看 status 和 json 里的字段自己判断，
+    // 抛一个 "Unexpected token <" 出去只会把真正的原因（比如 502 网关页）盖掉。
+    const json = await resp.json().catch(() => ({})) as Record<string, unknown>;
+    if (!resp.ok && !json.detail) throw new Error(`同步请求失败（HTTP ${resp.status}）`);
+    return { status: resp.status, json };
   }
+
   // 上传本地快照（乐观并发）。返回 {ok} 或 {conflict, rev}。
   private async syncPush(force = false): Promise<{ ok: boolean; conflict?: boolean; rev?: number }> {
     if (!this.auk || !this.meta) throw new Error("保险箱已锁定");
@@ -822,10 +833,6 @@ export class VaultManager {
       ipcMain.handle(name, async (_e, ...args: unknown[]) => { if (needUnlock && !this.unlocked) throw new Error("保险箱已锁定"); this.touch(); return fn(...args); });
 
     ipcMain.handle("vault:openWindow", () => this.openWindow());
-    // 渲染层回传网络请求结果（Chromium fetch 代主进程发的请求）。
-    ipcMain.on("vault:httpResult", (_e, msg: { id: string; ok: boolean; json?: Record<string, unknown>; error?: string }) => {
-      const w = this.httpWaiters.get(msg.id); if (w) { this.httpWaiters.delete(msg.id); w(msg); }
-    });
     ipcMain.handle("vault:status", () => this.status());
     ipcMain.handle("vault:setup", (_e, mp: string) => this.setup(mp));
     ipcMain.handle("vault:unlock", (_e, mp: string, sk?: string) => this.unlock(mp, sk));

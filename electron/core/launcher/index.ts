@@ -13,7 +13,7 @@ import { run } from "../shared/util";
 import { suppressAppActivate } from "../activation";
 import { anyStrongMatch, bestMatch, frecency, frecencyBoost, lookupUsage, noteUsage, pruneUsage, type UsageEntry } from "./rank";
 import { readBundleNames, searchableNames, type BundleNames } from "./appinfo";
-import { hasHan, pinyinVariants } from "./pinyin";
+import { pinyinAliases } from "./pinyin";
 import { WorkflowEngine, migrateScriptsToWorkflows, migrateFolders, seedBuiltinTools, NO_BRANCH } from "./workflow";
 import type { TextViewPayload } from "./workflow";
 import { ensureWorkflowDir } from "./workspace";
@@ -301,9 +301,9 @@ export class LauncherManager {
         const kwHit = !!kw && (kw === ql || kw.startsWith(ql));
         // 命中判定交给模糊匹配，但同样只认词首级别的匹配，免得正文里散落几个字母就冒出来。
         // 关键词是「直达」语义，永远保留；用过的条目也豁免。
-        // 名字含汉字时补一条拼音首字母别名（「周报模板」→ zbmb）。只给名字补，不给正文补：
+        // 名字含汉字时补拼音别名（首字母 zbmb + 全拼 zhoubaomuban）。只给名字补，不给正文补：
         // 正文动辄几十上百字，转成一长串首字母之后什么查询都能蹭上，纯属噪音。
-        const py = hasHan(p.name || "") ? pinyinVariants(p.name) : [];
+        const py = pinyinAliases(p.name || "");
         if (!kwHit
             && !anyStrongMatch(q, [p.name, ...py, p.content])
             && this.boost(q, `phrase:${p.id}`) <= 0) return null;

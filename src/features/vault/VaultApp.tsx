@@ -34,8 +34,6 @@ interface VaultAPI {
   copy(text: string): Promise<void>;
   syncNow(): Promise<{ ok: boolean; rev: number; pulled: boolean }>;
   onSyncState(cb: (s: { syncing: boolean; lastAt: number; lastError: string; pulled: boolean }) => void): () => void;
-  onHttp(cb: (msg: { id: string; url: string; method: string; token: string; body: string | null }) => void): () => void;
-  httpResult(id: string, ok: boolean, json: unknown, error?: string): void;
   exportBackup(): Promise<{ ok: boolean; path?: string }>;
   exportPlain(): Promise<{ ok: boolean; path?: string }>;
   importPick(): Promise<{ ok: boolean; needPassword: boolean }>;
@@ -212,17 +210,6 @@ export function VaultApp({ embedded = false }: { embedded?: boolean }) {
   const [ready, setReady] = useState(false);
   const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "", syncConfigured: false, syncRev: 0, syncing: false, syncAt: 0, syncError: "" });
   useEffect(() => { void api.status().then((s) => { setSt(s); setReady(true); }); }, []);
-  // 代主进程用 Chromium 发同步 HTTP（避开 undici 被 CDN 重置）。
-  useEffect(() => api.onHttp(async (msg) => {
-    try {
-      const headers: Record<string, string> = {};
-      if (msg.token) headers["X-Umbra-Token"] = msg.token;
-      if (msg.body) headers["Content-Type"] = "application/json";
-      const resp = await fetch(msg.url, { method: msg.method, headers, body: msg.body || undefined });
-      const json = await resp.json().catch(() => ({}));
-      api.httpResult(msg.id, true, json);
-    } catch (e) { api.httpResult(msg.id, false, null, String(e)); }
-  }), []);
   const refresh = useCallback(async () => setSt(await api.status()), []);
   // 独立窗口时跟随主窗口的主题：storage 事件负责实时跟随，focus 兜底一次
   // （窗口被隐藏期间浏览器可能压掉事件）。嵌入主窗口时整棵树继承外层的 data-theme，什么都不用做。

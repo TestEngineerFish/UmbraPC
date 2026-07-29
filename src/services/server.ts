@@ -232,6 +232,11 @@ export interface Job {
   is_task?: boolean;
   // 所属工作区的名字（tasks.project）。旧 Job 行没有项目概念，恒为空。
   project?: string | null;
+  // 验收清单：服务端存的是 JSON 文本（`["…","…"]`），这里原样透传，由界面解析。
+  // 解析放界面而不是这里，是因为脏数据只该影响那一块的渲染，不该让整个详情挂掉。
+  checklist?: string | null;
+  // 已用掉的自动纠错回合数（验收没过时秘书会自己补做几轮）。0 或缺省 = 一次都没补过。
+  fix_rounds?: number;
 }
 // 一步失败时的结构化错误。kind 决定界面怎么归类：
 // step_error=执行轮自己抛的异常 · device_error=设备报错 · timeout=看门狗判定卡住（此时步骤仍在跑）。

@@ -868,6 +868,14 @@ export function sendText(text: string): void {
   sendTo(MAIN, text);
 }
 
+// 从别处（灵感页「让 Umbra 去做这件事」）切换发送模式。
+// 只改主会话的模式并重绘那个三态开关 —— 用户跳过来之后能一眼看到当前是「执行」，
+// 而不是在不知情的状态下把消息发进了另一种模式。
+export function setMode(m: ChatMode): void {
+  chatMode = m;
+  if (container) renderModeBar(container);
+}
+
 function switchConv(id: string): void {
   if (id === activeConv) {
     renderMessages();

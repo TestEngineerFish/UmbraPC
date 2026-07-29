@@ -98,7 +98,8 @@ function wfMeta(w: WF): string {
 // 补齐时只要写好 runNode 分支再把 soon 去掉即可，面板结构不用动。
 // hint 是置灰项的悬停说明，写清楚「为什么还没做 / 打算怎么做」。
 interface CatItem { type: string; label: string; icon: IconComp; soon?: boolean; hint?: string }
-const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
+// 导出给测试遍历用（见 nodeRows 上面那句）。
+export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
   { cat: "触发 Triggers", icon: IconKeyboard, items: [
     { type: "trigger.keyword", label: "Keyword 关键词", icon: IconKeyboard },
     { type: "trigger.hotkey", label: "Hotkey 全局热键", icon: IconCommand },
@@ -1510,7 +1511,8 @@ const SOON_TYPES = new Set(CATALOG.flatMap((g) => g.items.filter((i) => i.soon).
 // 节点卡片正文：按类型给出「字段名 : 值」的键值行（最多两行，卡片放不下更多）。
 // 覆盖对象库里的全部 62 种：32 种可添加的各写一套，30 种置灰未实现的共用 SOON_ROWS。
 // 每一条都只描述**这个节点自己配了什么**，不复述类型名——类型名已经在卡片标题上了。
-function nodeRows(n: WFNode): SumRow[] {
+// 导出是给 tests/nodeSummary.test.ts 用的：62 种节点逐个跑一遍，防止新加对象忘了补摘要。
+export function nodeRows(n: WFNode): SumRow[] {
   if (SOON_TYPES.has(n.type)) return SOON_ROWS;
   const c = n.config as Record<string, string>;
   const cfg = n.config as Record<string, unknown>;
@@ -1669,8 +1671,9 @@ function nodeRows(n: WFNode): SumRow[] {
     ];
 
     // 兜底：类型不在上面（理论上不会发生，除非新加了对象忘了补这里）。
-    // 显示类型名而不是空白，至少还能看出是谁漏了。
-    default: return [{ k: "类型", v: TYPE_META[n.type]?.label || n.type, mono: true }];
+    // 字段名用「未登记」而不是「类型」——它同时是 tests/nodeSummary.test.ts 判定
+    // 「有人漏写了摘要」的标志位，和正常分支的字段名撞名就判不出来了。
+    default: return [{ k: "未登记", v: TYPE_META[n.type]?.label || n.type, mono: true }];
   }
 }
 

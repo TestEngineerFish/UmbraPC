@@ -444,10 +444,15 @@ export function setInspFilter(f: "" | "open" | "done" | "archived"): void {
 }
 // 灵感页「让 Umbra 去做这件事」：跳到聊天页，把这条灵感当一条消息发给秘书。
 // 走的是快捷入口「发给秘书」那条现成通路（等聊天页挂载后再发，确保渲染）。
-export function sendToChat(text: string): void {
+// 跳到聊天页并发一条消息。mode 用来指定发送模式（灵感的「让 Umbra 去做」要走「执行」）。
+// setTimeout(0) 是等聊天页挂载完 —— 模式也要在那之后设，否则 renderModeBar 拿不到容器。
+export function sendToChat(text: string, mode?: "auto" | "chat" | "execution"): void {
   if (!text.trim()) return;
   setNav("chat");
-  setTimeout(() => chat.sendText(text), 0);
+  setTimeout(() => {
+    if (mode) chat.setMode(mode);
+    chat.sendText(text);
+  }, 0);
 }
 // 灵感详情「关联任务 → 查看」：跳到任务页并直接展开那条任务。
 export function openTaskFrom(jobId: string): void {

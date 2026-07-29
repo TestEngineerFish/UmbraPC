@@ -40,6 +40,31 @@ const tagChip = (on: boolean) =>
   `flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] ${
     on ? "bg-orange-soft text-orange-text" : "bg-chip text-muted"}`;
 
+// 「让 Umbra 去做这件事」发给秘书的那条消息。
+//
+// 为什么是**跳聊天页 + 切「执行」模式 + 发一段固定格式的文字**，而不是直接调 create_task：
+// 灵感常常只是一句话，直接建任务等于让秘书拿着半个需求硬做。走执行模式让它先把需求问清楚，
+// 确认之后再由它自己决定建几个任务、怎么拆 —— 这是秘书本来就擅长的事。
+//
+// 为什么把灵感**正文整段带上**，而不是只发一个 id 让它自己查：
+// 秘书手上查灵感的工具是 list_inspirations，它只回「标题 + 标签」，拿不到正文；
+// 只给 id 的话它得靠关键词去搜，搜不到就只能瞎猜。id 也一并附上，方便它回头引用。
+function doItPrompt(item: Inspiration): string {
+  const body = [
+    item.title ? `标题：${item.title}` : "",
+    item.summary ? `摘要：${item.summary}` : "",
+    item.raw ? `原文：${item.raw}` : "",
+    item.tags?.length ? `标签：${item.tags.join("、")}` : "",
+    `灵感 ID：${item.id}`,
+  ].filter(Boolean).join("\n");
+  return [
+    "下面是我记录的一条灵感。请先分析它到底想要什么，有不清楚的地方随时问我；",
+    "等你确认完全清楚之后，再创建任务把它实现。灵感内容如下：",
+    "",
+    body,
+  ].join("\n");
+}
+
 export function Inspirations() {
   const { t } = useTranslation();
   const st = legacy.getInspState();
@@ -385,7 +410,7 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
     </div>
 
     <div className="flex-none p-[12px_16px] border-t border-border bg-bg flex flex-col gap-[9px]">
-      <button onClick={() => legacy.sendToChat([item.title, item.raw, item.summary].filter(Boolean).join("\n"))}
+      <button onClick={() => legacy.sendToChat(doItPrompt(item), "execution")}
         className="w-full flex items-center justify-center gap-[6px] px-0 py-[8px] bg-orange text-white border-none rounded-[8px] text-[12.5px] font-semibold cursor-pointer hover:bg-orange-deep">
         <IconArrowRight size={13} />{t("inspiration.sendToChat")}
       </button>
