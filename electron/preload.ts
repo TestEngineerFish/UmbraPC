@@ -183,6 +183,12 @@ contextBridge.exposeInMainWorld("umbraVault", {
   copy: (text: string) => ipcRenderer.invoke("vault:copy", text),
   syncNow: () => ipcRenderer.invoke("vault:syncNow"),
   syncReset: () => ipcRenderer.invoke("vault:syncReset"),
+  // 自动同步的状态广播。pulled=true 表示本地数据被云端改过，界面要重新拉一遍列表。
+  onSyncState: (cb: (s: { syncing: boolean; lastAt: number; lastError: string; pulled: boolean }) => void) => {
+    const l = (_e: unknown, s: { syncing: boolean; lastAt: number; lastError: string; pulled: boolean }) => cb(s);
+    ipcRenderer.on("vault:syncState", l);
+    return () => ipcRenderer.removeListener("vault:syncState", l);
+  },
   // 主进程委托渲染层用 Chromium 发同步请求（避开 undici 被服务器/CDN 重置）。
   onHttp: (cb: (msg: { id: string; url: string; method: string; token: string; body: string | null }) => void) => {
     const l = (_e: unknown, msg: any) => cb(msg);

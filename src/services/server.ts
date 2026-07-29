@@ -3,28 +3,58 @@
 
 export type ConnStatus = "connecting" | "online" | "offline";
 
+// 连接配置（服务器地址 / 令牌 / 设备名 / 客户端 ID）的**唯一真源是主进程**的 umbra-config.json。
+// 桌面端启动时由 desktop.ts 灌进来，改配置也是「先写主进程、再回灌镜像」，渲染层只持有只读副本。
+//
+// 以前是两边各存一份（渲染层放 localStorage、主进程放配置文件），后果：
+// - 同一个 serverUrl 有两个出处，改一处忘另一处就会出现「聊天连 A、主进程连 B」；
+// - 令牌在 localStorage 里另存了一份明文，而渲染层压根不用它（HTTP 请求都不带 token）；
+// - 客户端 ID 也各生成各的（渲染层 pc-xxxx、主进程 deviceId），日志里对不上号。
+//
+// localStorage 只留给**浏览器预览**（没有 window.umbra 的跑法）兜底。
 const LS = {
   serverUrl: "umbra.serverUrl",
-  token: "umbra.token",
   clientId: "umbra.clientId",
   deviceName: "umbra.deviceName",
 };
+// 历史遗留：老版本把令牌明文存在这个键下。桌面端接管配置时顺手清掉，别留着。
+const LEGACY_TOKEN_KEY = "umbra.token";
 
 const DEFAULT_SERVER = "https://umbra.tingyusha.xyz";
 
+// 主进程配置的渲染层镜像。null = 不是桌面端（浏览器预览），走 localStorage 兜底。
+interface RuntimeConfig { serverUrl: string; deviceName: string; clientId: string; hasToken: boolean }
+let runtime: RuntimeConfig | null = null;
+
+// 桌面端专用：把主进程的公开配置灌进来。desktop.ts 在启动、回读、写配置之后都会调用。
+export function adoptDesktopConfig(c: { serverUrl?: string; deviceId?: string; deviceName?: string; hasToken?: boolean }): void {
+  runtime = {
+    serverUrl: (c.serverUrl || DEFAULT_SERVER).replace(/\/+$/, ""),
+    deviceName: c.deviceName || "此设备",
+    // 客户端 ID 直接用主进程的 deviceId：聊天消息带的 client_id 与设备通道从此是同一个标识。
+    clientId: c.deviceId || "pc",
+    hasToken: !!c.hasToken,
+  };
+  try { localStorage.removeItem(LEGACY_TOKEN_KEY); } catch { /* 无痕模式等禁用 storage，忽略 */ }
+}
+
 export function getServerUrl(): string {
+  if (runtime) return runtime.serverUrl;
   return (localStorage.getItem(LS.serverUrl) || DEFAULT_SERVER).replace(/\/+$/, "");
 }
+// 桌面端只更新镜像（真正落盘由 desktop.pushConfig 写主进程），浏览器预览下才写 localStorage。
 export function setServerUrl(v: string): void {
-  localStorage.setItem(LS.serverUrl, v.trim().replace(/\/+$/, ""));
+  const s = v.trim().replace(/\/+$/, "");
+  if (!s) return;
+  if (runtime) { runtime.serverUrl = s; return; }
+  localStorage.setItem(LS.serverUrl, s);
 }
-export function getToken(): string {
-  return localStorage.getItem(LS.token) || "";
-}
-export function setToken(v: string): void {
-  localStorage.setItem(LS.token, v);
+// 是否已配置令牌。令牌本身渲染层不持有 —— 它只在主进程发请求时用得到。
+export function hasToken(): boolean {
+  return runtime ? runtime.hasToken : false;
 }
 export function getClientId(): string {
+  if (runtime) return runtime.clientId;
   let id = localStorage.getItem(LS.clientId);
   if (!id) {
     id = "pc-" + Math.random().toString(36).slice(2, 10);
@@ -33,10 +63,14 @@ export function getClientId(): string {
   return id;
 }
 export function getDeviceName(): string {
+  if (runtime) return runtime.deviceName;
   return localStorage.getItem(LS.deviceName) || "此设备";
 }
 export function setDeviceName(v: string): void {
-  localStorage.setItem(LS.deviceName, v);
+  const s = v.trim();
+  if (!s) return;
+  if (runtime) { runtime.deviceName = s; return; }
+  localStorage.setItem(LS.deviceName, s);
 }
 
 function wsUrl(): string {

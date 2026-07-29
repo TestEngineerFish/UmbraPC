@@ -20,7 +20,8 @@ interface Att { id: string; name: string; mime: string; size: number; addedAt: n
 interface Block { id: string; type: string; label?: string; data: Record<string, unknown> }
 interface Item { id: string; typeId: string; title: string; icon?: string; favorite?: boolean; tags?: string[]; blocks: Block[]; attachments: Att[]; createdAt: number; updatedAt: number; revision: number }
 
-interface VStatus { exists: boolean; unlocked: boolean; autoLockMin: number; quickUnlock: boolean; biometric: boolean; shortcut: string; syncConfigured: boolean; syncRev: number }
+// syncing / syncAt / syncError 是自动同步的实时状态（主进程内存里的，锁一次就清）。
+interface VStatus { exists: boolean; unlocked: boolean; autoLockMin: number; quickUnlock: boolean; biometric: boolean; shortcut: string; syncConfigured: boolean; syncRev: number; syncing: boolean; syncAt: number; syncError: string }
 interface VaultAPI {
   status(): Promise<VStatus>;
   setup(mp: string): Promise<{ secretKey: string }>;
@@ -32,6 +33,7 @@ interface VaultAPI {
   lock(): Promise<boolean>;
   copy(text: string): Promise<void>;
   syncNow(): Promise<{ ok: boolean; rev: number; pulled: boolean }>;
+  onSyncState(cb: (s: { syncing: boolean; lastAt: number; lastError: string; pulled: boolean }) => void): () => void;
   onHttp(cb: (msg: { id: string; url: string; method: string; token: string; body: string | null }) => void): () => void;
   httpResult(id: string, ok: boolean, json: unknown, error?: string): void;
   exportBackup(): Promise<{ ok: boolean; path?: string }>;
@@ -208,7 +210,7 @@ function readDark(): boolean {
 export function VaultApp({ embedded = false }: { embedded?: boolean }) {
   const [dark, setDark] = useState(readDark);
   const [ready, setReady] = useState(false);
-  const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "", syncConfigured: false, syncRev: 0 });
+  const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "", syncConfigured: false, syncRev: 0, syncing: false, syncAt: 0, syncError: "" });
   useEffect(() => { void api.status().then((s) => { setSt(s); setReady(true); }); }, []);
   // 代主进程用 Chromium 发同步 HTTP（避开 undici 被 CDN 重置）。
   useEffect(() => api.onHttp(async (msg) => {
@@ -466,6 +468,16 @@ function Unlock({ onDone, st }: { onDone: () => Promise<void>; st: VStatus }) {
 }
 
 // 解锁后的主界面：顶栏 + 三栏（分组 196 / 列表 302 / 详情自适应）。
+// 同步状态一句话。没配服务器就直说，别让用户对着一个不动的字猜。
+function syncLabel(st: VStatus): string {
+  if (!st.syncConfigured) return "未配置同步";
+  if (st.syncing) return "同步中…";
+  if (st.syncError) return `同步失败：${st.syncError}`;
+  if (!st.syncAt) return "等待同步";
+  const min = Math.floor((Date.now() - st.syncAt) / 60000);
+  return min < 1 ? "刚刚已同步" : `${min} 分钟前同步`;
+}
+
 function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStatus; onStatus: () => Promise<void> }) {
   const [vaults, setVaults] = useState<VaultInfo[]>([]);
   const [vid, setVid] = useState("");
@@ -502,6 +514,17 @@ function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStat
   }, []);
   useEffect(() => { if (vid) void loadVault(vid); setSelecting(false); setChecked(new Set()); }, [vid, loadVault]);
   const refresh = useCallback(async () => { if (vid) await loadVault(vid); }, [vid, loadVault]);
+  // 自动同步的状态广播：每次同步开始/结束都会来一条。pulled=true 说明本地数据被云端改过，
+  // 列表要重拉一遍，否则用户看到的还是同步前那份。
+  useEffect(() => {
+    const off = api.onSyncState((s) => {
+      void onStatus();
+      if (s.pulled) void refresh();
+    });
+    // 低频轮询只为让「N 分钟前」自己往上走 —— 广播只在同步前后各来一次，光靠它这行字会停在原地。
+    const timer = window.setInterval(() => { void onStatus(); }, 30_000);
+    return () => { off(); window.clearInterval(timer); };
+  }, [onStatus, refresh]);
   // 关菜单时把「移动到…」也收回去，下次右键重新从收起态开始。
   const closeMenus = () => { setIdOpen(false); setGearOpen(false); setMoveOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
 
@@ -668,6 +691,9 @@ function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStat
         </div>
         <span className="flex-1" />
         <span className="flex-none whitespace-nowrap text-[11.5px] text-faint">{st.autoLockMin} 分钟无操作自动锁定</span>
+        {/* 自动同步状态：改完自己会同步，这里只是让用户看得见它在动、失败了也知道 */}
+        <span className={`flex-none whitespace-nowrap text-[11.5px] ${st.syncError ? "text-danger" : "text-faint"}`}
+          title={st.syncError || undefined}>{syncLabel(st)}</span>
         <button className={btnPrimary} onClick={() => void addRecord()}><IconPlus size={13} className="inline-block align-[-2px] mr-[4px]" />添加记录</button>
         <button className={btnGhost} onClick={() => void onLock()}>锁定</button>
         <div className="relative flex-none">

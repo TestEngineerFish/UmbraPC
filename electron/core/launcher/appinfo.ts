@@ -10,6 +10,7 @@
 // 只解顶层字典里那几个字符串键，不做通用 plist 支持。XML 格式的走正则。
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import { withPinyin } from "./pinyin";
 
 export interface BundleNames {
   display?: string;   // CFBundleDisplayName（Finder 显示的名字，优先取本地化版本）
@@ -173,11 +174,6 @@ export function searchableNames(appPath: string, b: BundleNames): string[] {
   const file = path.basename(appPath).replace(/\.app$/i, "");
   const idTail = b.id ? b.id.split(".").pop() || "" : "";
   const all = [file, b.display || "", b.name || "", ...(b.aliases || []), idTail];
-  const seen = new Set<string>();
-  return all.filter((s) => {
-    const k = s.trim().toLowerCase();
-    if (!k || seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
+  // withPinyin 负责去重，并给含汉字的名字各补一条拼音首字母别名（企业微信 → qywx）。
+  return withPinyin(all);
 }

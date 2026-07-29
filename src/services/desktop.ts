@@ -1,6 +1,6 @@
 // 桌面（Electron）集成门面：同步主进程配置 + 启动设备传输层（渲染层连 /ws/device）。
 // 浏览器预览（无 window.umbra）下全部 no-op，聊天仍可用。
-import { setServerUrl, setDeviceName, chatConn } from "./server";
+import { adoptDesktopConfig, chatConn } from "./server";
 import * as transport from "./deviceTransport";
 import { initRpcHost } from "./rpcHost";
 import type { DeviceState, ProviderManifest } from "./deviceTransport";
@@ -179,8 +179,8 @@ export async function initDesktop(onUpdate: (kind: string) => void): Promise<voi
   if (!isDesktop()) return;
   initRpcHost(); // 注册渲染层 RPC（替主进程上传等）
   config = await window.umbra!.getConfig();
-  setServerUrl(config.serverUrl);
-  setDeviceName(config.deviceName);
+  // 主进程配置是唯一真源，灌进渲染层的镜像里（见 server.ts 的说明）。
+  adoptDesktopConfig(config);
   chatConn.reconnect();
   await refreshPermissions().catch(() => {});
   await reloadCustomProviders().catch(() => {});
@@ -191,6 +191,7 @@ export async function initDesktop(onUpdate: (kind: string) => void): Promise<voi
 export async function refreshConfig(): Promise<void> {
   if (!isDesktop()) return;
   config = await window.umbra!.getConfig();
+  adoptDesktopConfig(config);
 }
 
 // 纯外观类配置：改了它们没有任何理由去断开设备连接。
@@ -201,6 +202,9 @@ const COSMETIC_KEYS = new Set(["trayEnabled"]);
 export async function pushConfig(patch: Record<string, unknown>): Promise<void> {
   if (!isDesktop()) return;
   config = await window.umbra!.setConfig(patch);
+  // 写完立刻回灌：主进程可能对 patch 做过加工（比如空令牌会被丢弃、地址会去掉结尾斜杠），
+  // 以它返回的那份为准，别拿刚才提交的值当结果。
+  adoptDesktopConfig(config);
   const keys = Object.keys(patch);
   if (keys.length && keys.every((k) => COSMETIC_KEYS.has(k))) return;
   transport.reconnect();

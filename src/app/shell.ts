@@ -3,7 +3,7 @@
 // 以及 render()→React 重渲染、nav 同步、点击/键盘委托与设备事件订阅(initLegacy)。
 // 业务逻辑走 services/*(server/desktop/…)；聊天走 features/chat。
 
-import { chatConn, getServerUrl, setServerUrl, setToken, getToken, getDeviceName, setDeviceName } from "../services/server";
+import { chatConn, getServerUrl, setServerUrl, hasToken, getDeviceName, setDeviceName } from "../services/server";
 import { fetchJobs, fetchJobDetail, type Job, type JobDetail } from "../services/server";
 import { fetchInspirations, fetchInspirationCounts, type Inspiration, type InspirationCounts } from "../services/server";
 import * as chat from "../features/chat/chat";
@@ -192,7 +192,7 @@ function deviceIdLabel(): string {
 
 // Token 输入占位：设备注册需要与服务端 ASSIST_TOKEN 一致。
 function tokenPlaceholder(): string {
-  const set = desktop.isDesktop() ? !!desktop.getDesktopConfig()?.hasToken : !!getToken();
+  const set = hasToken();
   return set ? t("settings.tokenSaved") : t("settings.tokenHint");
 }
 
@@ -397,9 +397,14 @@ function render(): void {
 // React 设置页用：带参保存连接配置并重连（等价于旧 saveAndReconnect，但入参来自受控输入）。
 export function applyConnection(server: string, token: string, device: string): void {
   if (server) setServerUrl(server);
-  if (token) setToken(token);
   if (device) setDeviceName(device);
-  desktop.pushConfig({ serverUrl: server || getServerUrl(), token: token || "", deviceName: device || getDeviceName() }).catch(() => {});
+  // 令牌只往主进程写，渲染层不留副本 —— 它在渲染层没有任何用处（这里的 HTTP 请求都不带 token），
+  // 留一份明文在 localStorage 里纯粹是白送一个泄露面。空串代表「没改」，主进程会忽略掉。
+  desktop.pushConfig({
+    serverUrl: server || getServerUrl(),
+    token: token || "",
+    deviceName: device || getDeviceName(),
+  }).catch(() => {});
   chatConn.reconnect();
   render();
 }

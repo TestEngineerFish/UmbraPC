@@ -17,6 +17,11 @@ interface ImportBundle { vaults: { name: string; owner?: string; icon?: string; 
 // 工作流配置项密钥（W10）统一收纳到这个类型下，便于用户在保险箱里一眼认出来。
 const WF_SECRET_TYPE = "工作流密钥";
 
+// 本地改动后延迟多久推送云端。连着改几条（批量删除、拖拽调序）时合并成一次往返。
+const SYNC_DEBOUNCE_MS = 3_000;
+// 解锁期间的定时拉取间隔：别的设备改了，这个周期内会看到。
+const SYNC_PULL_INTERVAL_MS = 5 * 60_000;
+
 const rid = (p = "") => p + randomBytes(9).toString("hex");
 const b64 = (b: Buffer) => b.toString("base64");
 const unb64 = (s: string) => Buffer.from(s, "base64");
@@ -123,6 +128,8 @@ export class VaultManager {
       quickUnlock: !!this.meta?.quickUnlockEnc, biometric: await this.biometricAvailable(),
       shortcut: c.vaultShortcut || "",
       syncConfigured: !!(c.serverUrl && c.token), syncRev: this.meta?.syncRev ?? 0,
+      // 自动同步的实时状态，界面上显示「同步中… / N 分钟前 / 失败原因」。
+      syncing: this.syncStatus.syncing, syncAt: this.syncStatus.lastAt, syncError: this.syncStatus.lastError,
     };
   }
   private async biometricAvailable(): Promise<boolean> {
@@ -151,7 +158,8 @@ export class VaultManager {
     this.vaultKeys.clear(); this.vdata.clear();
     for (const v of this.meta.vaults) { const vk = unwrapKey(auk, v.keyWrapped); this.vaultKeys.set(v.id, vk); this.vdata.set(v.id, await this.loadVault(v.id, vk)); }
     this.auk = auk; this.armAutoLock();
-    void this.autoPull();
+    void this.autoSync();
+    this.armSyncPull();
     return true;
   }
   private armAutoLock(): void {
@@ -163,6 +171,8 @@ export class VaultManager {
   private lock(): void {
     this.auk = null; this.vaultKeys.clear(); this.vdata.clear();
     if (this.lockTimer) { clearTimeout(this.lockTimer); this.lockTimer = undefined; }
+    // 锁上之后既推不了也拉不了（没有 AUK），定时器留着只会空转。
+    this.stopSyncTimers();
   }
   private requireKey(vaultId: string): Buffer {
     if (!this.auk) throw new Error("保险箱已锁定");
@@ -239,18 +249,24 @@ export class VaultManager {
     }
     if (secretKeyOverride) { this.meta.secretKeyEnc = await this.encSecret(secretKey); await this.saveMeta(); } // 新设备：写入本机 keychain
     this.armAutoLock();
-    void this.autoPull();
+    void this.autoSync();
+    this.armSyncPull();
     return true;
   }
 
   // ── 持久化 ──
+  // 落盘之后顺手排一次云端同步。挂在这两个方法上而不是逐个 CRUD 上，是因为**所有**改动
+  // 最终都要经过它们俩，挂在这里就不会有人新加一个操作忘了同步。
+  // 同步自身也会写 meta/密文（拉取合并、更新 syncRev），靠 syncBusy 挡掉，不会自己触发自己。
   private async saveMeta(): Promise<void> {
     await fs.writeFile(this.metaFile, JSON.stringify(this.meta, null, 2), { mode: 0o600 });
+    this.scheduleSync();
   }
   private vaultFile(id: string): string { return path.join(this.dir, `v-${id}.enc`); }
   private async persistVault(id: string): Promise<void> {
     const vk = this.requireKey(id);
     await fs.writeFile(this.vaultFile(id), encryptJSON(vk, this.data(id)), { mode: 0o600 });
+    this.scheduleSync();
   }
   private async loadVault(id: string, vk: Buffer): Promise<VaultData> {
     try {
@@ -563,24 +579,82 @@ export class VaultManager {
     }
     await this.saveMeta();
   }
-  // 一键同步：先拉取合并，再上传；冲突则再拉再传（最多几次），最后必要时强制。
+  // ── 自动同步 ──────────────────────────────────────────────────────────────
+  // 改完就同步，不用再手点「立即同步」。
+  //
+  // 「锁着的时候怎么办」这个问题其实不存在：**改动只可能发生在解锁态**（关窗即锁定），
+  // 所以「改完就推」永远有 AUK 可用。锁着时唯一做不到的是把别的设备的改动拉下来，
+  // 那个由解锁时的一次同步和解锁期间的定时拉取补上。
+  private syncTimer?: NodeJS.Timeout;
+  private pullTimer?: NodeJS.Timeout;
+  // 同步进行中。既防重入，也用来挡住「同步自己写盘 → 又排一次同步」的自激。
+  private syncBusy = false;
+  // 给界面显示用的同步状态（不落盘，锁一次就清）。
+  private syncStatus: { syncing: boolean; lastAt: number; lastError: string } = { syncing: false, lastAt: 0, lastError: "" };
+
+  private syncConfigured(): boolean {
+    const c = this.cfg.get();
+    return !!(c.serverUrl && c.token);
+  }
+  // 把同步状态推给保险箱窗口。pulled=true 表示本地数据被云端改过，界面要重新拉一遍列表。
+  private emitSyncState(pulled = false): void {
+    if (!this.win || this.win.isDestroyed()) return;
+    this.win.webContents.send("vault:syncState", { ...this.syncStatus, pulled });
+  }
+  // 本地有改动后调用：攒一小会儿再同步，避免连着改几条时发好几轮。
+  private scheduleSync(): void {
+    if (this.syncBusy || !this.unlocked || !this.syncConfigured()) return;
+    if (this.syncTimer) clearTimeout(this.syncTimer);
+    this.syncTimer = setTimeout(() => { this.syncTimer = undefined; void this.autoSync(); }, SYNC_DEBOUNCE_MS);
+  }
+  // 解锁后启动定时拉取；锁定时由 stopSyncTimers 清掉。
+  private armSyncPull(): void {
+    if (this.pullTimer) clearInterval(this.pullTimer);
+    this.pullTimer = setInterval(() => { void this.autoSync(); }, SYNC_PULL_INTERVAL_MS);
+  }
+  private stopSyncTimers(): void {
+    if (this.syncTimer) { clearTimeout(this.syncTimer); this.syncTimer = undefined; }
+    if (this.pullTimer) { clearInterval(this.pullTimer); this.pullTimer = undefined; }
+    this.syncStatus = { syncing: false, lastAt: 0, lastError: "" };
+  }
+  // 后台同步：失败只记状态，不抛。后台行为弹窗打断用户不合适，界面上有一行状态可看。
+  private async autoSync(): Promise<void> {
+    if (!this.unlocked || this.syncBusy || !this.syncConfigured()) return;
+    try { await this.runSync(); } catch { /* 原因已记在 syncStatus 里 */ }
+  }
+  // 一次完整往返：先拉取合并，再上传；冲突则再拉再传（最多几次），最后一次强制。
+  private async runSync(): Promise<{ ok: boolean; rev: number; pulled: boolean }> {
+    this.syncBusy = true;
+    this.syncStatus.syncing = true;
+    this.emitSyncState();
+    let pulled = false;
+    try {
+      const pull = await this.syncPull();
+      pulled = pull.pulled;
+      let push = await this.syncPush(false);
+      for (let i = 0; i < 3 && push.conflict; i++) { await this.syncPull(); push = await this.syncPush(i === 2); }
+      this.syncStatus.lastAt = Date.now();
+      this.syncStatus.lastError = "";
+      return { ok: true, rev: this.meta?.syncRev ?? 0, pulled };
+    } catch (e) {
+      this.syncStatus.lastError = String(e instanceof Error ? e.message : e);
+      throw e;
+    } finally {
+      this.syncBusy = false;
+      this.syncStatus.syncing = false;
+      this.emitSyncState(pulled);
+    }
+  }
+  // 菜单里的「立即同步」：用户在等回话，失败要抛给他看。
   private async syncNow(): Promise<{ ok: boolean; rev: number; pulled: boolean }> {
     if (!this.unlocked) throw new Error("保险箱已锁定");
-    const pull = await this.syncPull();
-    let push = await this.syncPush(false);
-    for (let i = 0; i < 3 && push.conflict; i++) { await this.syncPull(); push = await this.syncPush(i === 2); } // 最后一次强制
-    return { ok: true, rev: this.meta?.syncRev ?? 0, pulled: pull.pulled };
+    if (this.syncBusy) throw new Error("正在同步中");
+    return this.runSync();
   }
   private async syncReset(): Promise<{ ok: boolean }> {
     await this.httpVault("DELETE", "/vault/sync");
     if (this.meta) { this.meta.syncRev = 0; await this.saveMeta(); }
     return { ok: true };
-  }
-  // 解锁后后台静默拉取（不打断用户；失败忽略）。
-  private async autoPull(): Promise<void> {
-    const c = this.cfg.get();
-    if (!c.serverUrl || !c.token) return;
-    try { await this.syncPull(); } catch { /* 静默 */ }
   }
 
   // ── 批量导入 / 导出 ──

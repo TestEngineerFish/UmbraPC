@@ -13,6 +13,7 @@ import { run } from "../shared/util";
 import { suppressAppActivate } from "../activation";
 import { anyStrongMatch, bestMatch, frecency, frecencyBoost, lookupUsage, noteUsage, pruneUsage, type UsageEntry } from "./rank";
 import { readBundleNames, searchableNames, type BundleNames } from "./appinfo";
+import { hasHan, pinyinVariants } from "./pinyin";
 import { WorkflowEngine, migrateScriptsToWorkflows, migrateFolders, seedBuiltinTools, NO_BRANCH } from "./workflow";
 import type { TextViewPayload } from "./workflow";
 import { ensureWorkflowDir } from "./workspace";
@@ -300,10 +301,13 @@ export class LauncherManager {
         const kwHit = !!kw && (kw === ql || kw.startsWith(ql));
         // 命中判定交给模糊匹配，但同样只认词首级别的匹配，免得正文里散落几个字母就冒出来。
         // 关键词是「直达」语义，永远保留；用过的条目也豁免。
+        // 名字含汉字时补一条拼音首字母别名（「周报模板」→ zbmb）。只给名字补，不给正文补：
+        // 正文动辄几十上百字，转成一长串首字母之后什么查询都能蹭上，纯属噪音。
+        const py = hasHan(p.name || "") ? pinyinVariants(p.name) : [];
         if (!kwHit
-            && !anyStrongMatch(q, [p.name, p.content])
+            && !anyStrongMatch(q, [p.name, ...py, p.content])
             && this.boost(q, `phrase:${p.id}`) <= 0) return null;
-        const m = Math.max(0, bestMatch(q, [p.name, p.keyword, p.content]));
+        const m = Math.max(0, bestMatch(q, [p.name, ...py, p.keyword, p.content]));
         const score = 100 + Math.round(m * 0.55) + (kwHit ? 35 : 0);
         return {
           id: `phrase:${p.id}`, title: p.name || p.content.slice(0, 40),
@@ -416,9 +420,20 @@ export class LauncherManager {
   // 这份数据直接读 Info.plist（见 appinfo.ts），不依赖 Spotlight，也就不会因为索引状态而静默失效。
   private appDirCache: { at: number; paths: string[]; info: Map<string, BundleNames> } =
     { at: 0, paths: [], info: new Map() };
-  // 路径 → 参与匹配的全部名字（文件名 / 展示名 / 短名 / bundle id 尾段）
+  // 路径 → 参与匹配的全部名字（文件名 / 展示名 / 短名 / bundle id 尾段 / 拼音首字母）
+  // 结果缓存起来：每敲一个字母都要对几百个应用各算一遍名字数组（还含拼音转换），
+  // 而这份数据只在目录缓存重建时才会变。缓存跟着 appDirCache.at 一起失效。
+  private namesCache: { at: number; map: Map<string, string[]> } = { at: 0, map: new Map() };
   private appNames(p: string): string[] {
-    return searchableNames(p, this.appDirCache.info.get(p) || {});
+    if (this.namesCache.at !== this.appDirCache.at) {
+      this.namesCache = { at: this.appDirCache.at, map: new Map() };
+    }
+    let v = this.namesCache.map.get(p);
+    if (!v) {
+      v = searchableNames(p, this.appDirCache.info.get(p) || {});
+      this.namesCache.map.set(p, v);
+    }
+    return v;
   }
   // 路径 → 列表里显示的标题：优先包内展示名（企业微信.app 显示成 WeCom），回落文件名。
   private appTitle(p: string): string {
