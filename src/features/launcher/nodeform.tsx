@@ -472,14 +472,31 @@ export function sameConfig(a: Record<string, unknown>, b: Record<string, unknown
   return true;
 }
 
+// 快捷键可用性检测的结果（主进程 electron/core/launcher/hotkey.ts 的返回形状）。
+export interface AccelCheck { state: string; by?: string; message?: string }
+
 // 快捷键录制的三态按钮（设计稿 05 的「录制按钮三态」）。
 // 空=虚线框，录制中=橙底 + 圆点，已录=chip 底等宽字。三态各配一句提示。
-export function HotkeyField({ value, onChange, hint }: {
+//
+// check：录到键位后拿去问主进程「这个键能用吗」。做成注入而不是在这里直接调 IPC，
+// 是为了让这一层保持纯展示 —— 它现在没有任何 window.umbraLauncher 的依赖。
+export function HotkeyField({ value, onChange, hint, check }: {
   value: string; onChange: (v: string) => void; hint?: ReactNode;
+  check?: (accel: string) => Promise<AccelCheck>;
 }) {
   const [rec, setRec] = useState(false);
+  const [chk, setChk] = useState<AccelCheck | null>(null);
   const ref = useRef(onChange);
   ref.current = onChange;
+
+  // 键位一变就重新检测。带 seq 防竞态：连续改两次时，先发的请求可能后回来，
+  // 不管的话界面上会留着上一个键位的结论 —— 而且看起来完全像是当前键位的结论。
+  const seq = useRef(0);
+  useEffect(() => {
+    if (!check || !value) { setChk(null); return; }
+    const mine = ++seq.current;
+    void check(value).then((r) => { if (seq.current === mine) setChk(r); }).catch(() => { /* 检测不了就不提示，别拦着用 */ });
+  }, [value, check]);
 
   useEffect(() => {
     if (!rec) return;
@@ -520,6 +537,10 @@ export function HotkeyField({ value, onChange, hint }: {
         ) : null}
       </div>
       <Hint>{rec ? "松手即录入，Esc 取消。" : value ? <>点按钮可以重录。{hint}</> : <>至少要带一个修饰键。{hint}</>}</Hint>
+      {/* system / taken / self / invalid 都是「按了不会触发」，红；common 是「能触发但会误伤」，黄 */}
+      {!rec && chk && chk.state !== "free" && chk.message ? (
+        <Note kind={chk.state === "common" ? "warn" : "danger"}>{chk.message}</Note>
+      ) : null}
     </>
   );
 }

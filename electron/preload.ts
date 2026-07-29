@@ -132,6 +132,7 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   // 工作流配置项里的密钥（W10）：明文交给密码保险箱，换回一条 vault://... 引用存进工作流。
   setWfSecret: (ref: string, title: string, value: string) => ipcRenderer.invoke("launcher:setWfSecret", ref, title, value),
   vaultUnlocked: () => ipcRenderer.invoke("launcher:vaultUnlocked"),
+  checkAccel: (accel: string) => ipcRenderer.invoke("launcher:checkAccel", accel),
   // 工作流调试轨迹（编辑器底部调试抽屉）：拉最近若干次执行记录 / 清空 / 订阅新记录。
   // 编辑器顶栏「运行」：nodeId 留空则自动挑第一个可用触发器。
   runWorkflow: (wfId: string, nodeId: string, arg: string) => ipcRenderer.invoke("launcher:runWorkflow", wfId, nodeId, arg),

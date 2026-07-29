@@ -67,6 +67,7 @@ interface LauncherAPI {
   // W10：把配置项里的密钥交给密码保险箱，拿回一条 vault://... 引用存进工作流。
   setWfSecret(ref: string, title: string, value: string): Promise<{ ok: boolean; ref?: string; error?: string }>;
   vaultUnlocked(): Promise<boolean>;
+  checkAccel(accel: string): Promise<{ state: string; by?: string; message?: string }>;
   // 打开这条工作流自己的目录：脚本节点的默认 cwd 就是它，随行的可执行文件/资源都放在里面。
   openWorkflowDir(wfId: string): Promise<{ ok: boolean; dir: string; error: string }>;
 }
@@ -2116,14 +2117,14 @@ function NodeConfig({ node, onSave, onClose, onDelete }: {
 
       {node.type === "trigger.hotkey" ? (
         <Row label="全局快捷键" top last>
-          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)}
+          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)} check={api.checkAccel}
             hint="触发时把当前剪贴板文本作为参数，跑「回车」分支。" />
         </Row>
       ) : null}
 
       {node.type === "trigger.universal" ? (<>
         <Row label="全局快捷键" top>
-          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)} />
+          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)} check={api.checkAccel} />
         </Row>
         <Row label="抓什么" last>
           <select className={FLD} value={s("source", "auto")} onChange={(e) => set("source", e.target.value)}>

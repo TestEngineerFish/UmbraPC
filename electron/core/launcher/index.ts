@@ -15,6 +15,7 @@ import { anyStrongMatch, bestMatch, frecency, frecencyBoost, lookupUsage, noteUs
 import { readBundleNames, searchableNames, type BundleNames } from "./appinfo";
 import { pinyinAliases } from "./pinyin";
 import { WorkflowEngine, migrateScriptsToWorkflows, migrateFolders, seedBuiltinTools, NO_BRANCH } from "./workflow";
+import { accelMessage, checkAccel } from "./hotkey";
 import type { TextViewPayload } from "./workflow";
 import { ensureWorkflowDir } from "./workspace";
 
@@ -690,6 +691,24 @@ export class LauncherManager {
     });
     // 保险箱是否已解锁：配置面板据此提示「先解锁才能存/改密钥」。
     ipcMain.handle("launcher:vaultUnlocked", () => !!this.secretDeps?.unlocked);
+    // 快捷键可用性检测：查一张已知系统快捷键表，表里没有再做一次注册探测。
+    // 探测**必须用完就注销** —— 用户还在配置界面上试键位，留着就等于已经把键抢过来了；
+    // 而且我们自己已经注册过的键（比如快捷入口那个）会让 register 返回 false，
+    // 所以先用 isRegistered 把「自己占的」摘出去，否则会把自家的键报成「被别的应用占用」。
+    ipcMain.handle("launcher:checkAccel", async (_e, accel: string) => {
+      const { globalShortcut } = await import("electron");
+      const acc = String(accel || "");
+      const r = checkAccel(acc, (id) => {
+        if (globalShortcut.isRegistered(id)) return "self";
+        let ok = false;
+        try { ok = globalShortcut.register(id, () => { /* 探测用，不做事 */ }); }
+        catch { return "taken"; }
+        if (ok) globalShortcut.unregister(id);
+        return ok ? "free" : "taken";
+      });
+      // 提示语在主进程拼好一并返回：措辞和判定是一回事，分到渲染层去写迟早会对不上。
+      return { ...r, message: accelMessage(r, acc) };
+    });
     // 工作流调试轨迹：只读内存里最近若干次执行（编辑器底部调试抽屉用）。
     // 编辑器顶栏的「运行」：带参跑一条工作流，轨迹照常进调试抽屉。
     ipcMain.handle("launcher:runWorkflow", (_e, wfId: string, nodeId: string, arg: string) =>
