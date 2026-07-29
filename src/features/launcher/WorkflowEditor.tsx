@@ -103,13 +103,15 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
   { cat: "触发 Triggers", icon: IconKeyboard, items: [
     { type: "trigger.keyword", label: "Keyword 关键词", icon: IconKeyboard },
     { type: "trigger.hotkey", label: "Hotkey 全局热键", icon: IconCommand },
-    // 对应 Alfred 的 Fallback Search：主面板没匹配到结果时兜底，所以不再单列 Fallback 一项。
-    { type: "trigger.always", label: "Fallback 始终触发", icon: IconInfinity },
+    // 注意别把它当成 Alfred 的 Fallback Search —— Fallback 是「本地一条结果都没搜到时才冒出来」，
+    // 我们这个是**每次查询都无条件跑一遍并把结果并进列表**，触发时机完全不同。
+    // 名字也别叫 Fallback，写过 Alfred 工作流的人会照着 Fallback 的时机去设计，然后发现对不上。
+    { type: "trigger.always", label: "Always 每次输入都跑", icon: IconInfinity, hint: "任意输入都会跑一遍下游的输入节点（计算器、单位换算这类），结果并入普通搜索。不是「搜不到才兜底」，是每次都并入。" },
     { type: "trigger.universal", label: "Universal Action 选中即用", icon: IconTarget },
     { type: "trigger.snippet", label: "Snippet 片段触发", icon: IconScissors, soon: true, hint: "打字触发：输入约定的缩写就跑工作流。需要键盘监听，安全模型还没定，暂未实现。" },
     { type: "trigger.external", label: "External 外部调用", icon: IconExternal, soon: true, hint: "给别的程序留一个可被调用的入口（命令行/URL Scheme）。等对外接口定稿后实现。" },
     { type: "trigger.remote", label: "Remote 远程触发", icon: IconPhone, soon: true, hint: "手机端点一下触发桌面工作流。等可信设备网络那一期一起做。" },
-    { type: "trigger.fileaction", label: "File Action 文件动作", icon: IconFolder, soon: true, hint: "在文件管理器里选中文件后触发。要装 Finder 扩展/服务菜单，我们没走这条路——用「Universal Action 选中即用」把抓取源设成「选中的文件路径」，效果一样且不用装扩展。" },
+    { type: "trigger.fileaction", label: "File Action 文件动作", icon: IconFolder, soon: true, hint: "在文件管理器里选中文件后触发。要装 Finder 扩展/服务菜单，我们没走这条路——最接近的替代是「Universal Action 选中即用」把抓取源设成「选中的文件路径」，但代价要说清楚：那条路要占一个全局热键、要授权辅助功能、靠模拟 ⌘C 抓选区；Finder 右键那种「不用记快捷键、不用授权」的体验我们给不了。" },
     { type: "trigger.contact", label: "Contact Action 联系人动作", icon: IconUser, soon: true, hint: "从通讯录联系人触发。我们暂时没有通讯录能力。" },
   ] },
   { cat: "输入 Inputs", icon: IconFilter, items: [
@@ -245,13 +247,18 @@ const ADD_GROUPS: { cat: string; icon: IconComp; items: CatItem[]; total: number
 
 function defaultConfig(type: string): Record<string, unknown> {
   switch (type) {
-    case "trigger.keyword": return { keyword: "kw", arg: "optional", title: "" };
+    case "trigger.keyword": return { keyword: "kw", arg: "optional", title: "", withSpace: true };
     case "trigger.hotkey": return { accelerator: "" };
     case "trigger.universal": return { accelerator: "", source: "auto" };
-    case "input.scriptfilter": return { script: "", cwd: "", alfredFilters: false };
+    case "input.scriptfilter": return { script: "", cwd: "", alfredFilters: false, debounceMs: 0 };
     case "input.listfilter": return { items: [{ title: "示例项", subtitle: "", arg: "" }], match: "word", learn: true };
     case "input.codec": return { mode: "unicode" };
-    case "action.script": return { script: "", cwd: "", output: "none", onError: "stop" };
+    case "action.script": return { script: "", cwd: "", language: "bash", output: "none", onError: "stop" };
+    case "action.applescript": return { script: "", output: "replace", onError: "stop" };
+    case "automation.shortcut": return { name: "", input: true, output: "none", wait: true };
+    case "automation.system": return { command: "lock", confirm: false };
+    case "output.notify": return { title: "", text: "", ifEmpty: "skip" };
+    case "output.keycombo": return { accelerator: "", hideFirst: true, delayMs: 180, repeat: 1 };
     case "utility.args": return { argMode: "keep", text: "{query}", vars: {} };
     case "utility.conditional": return { rules: [{ subject: "{query}", op: "contains", value: "", ci: true }] };
     case "utility.transform": return { target: "", mode: "upper" };
@@ -265,7 +272,7 @@ function defaultConfig(type: string): Record<string, unknown> {
     case "action.create_task": return { text: "{query}", prefix: "帮我建个任务：" };
     case "action.device_skill": return { device: "", provider: "", skill: "", params: "" };
     case "output.textview": return { title: "", markdown: true, append: false };
-    case "action.openurl": return { url: "{query}" };
+    case "action.openurl": return { url: "{query}", browser: "" };
     case "action.openfile": return { path: "{query}", app: "" };
     case "action.launch": return { paths: [], toggleVisibility: false };
     case "action.terminal": return { command: "{query}", app: "Terminal" };
@@ -1502,11 +1509,18 @@ const SEARCH_ENGINE_LABEL: Record<string, string> = {
   google: "Google", bing: "Bing", duckduckgo: "DuckDuckGo",
   baidu: "百度", github: "GitHub", wikipedia: "维基百科", custom: "自定义地址",
 };
+// 变换方式的中文名。键要和主进程 workflow.ts 里 transformText() 的 case 一一对应 ——
+// 原来这里写的是 base64/unbase64/json/unjson，实际取值却是 base64encode/base64decode，
+// 结果卡片上直接露出英文 mode 值。改键名时两处要一起改。
 const TRANSFORM_LABEL: Record<string, string> = {
   upper: "全部大写", lower: "全部小写", title: "首字母大写", trim: "去掉首尾空白",
   urlencode: "URL 编码", urldecode: "URL 解码",
-  base64: "Base64 编码", unbase64: "Base64 解码",
-  json: "转 JSON 字符串", unjson: "解析 JSON",
+  base64encode: "Base64 编码", base64decode: "Base64 解码",
+  reverse: "反转字符串", deaccent: "去掉重音符号", alnum: "只留字母数字",
+};
+// Run Script 的语言名。键要和主进程 workflow.ts 里 SCRIPT_LANGS 的键一一对应。
+const SCRIPT_LANG_LABEL: Record<string, string> = {
+  bash: "bash", zsh: "zsh", python3: "Python 3", ruby: "Ruby", node: "Node.js", osascript: "AppleScript",
 };
 
 // 节点卡片正文的一行。k=字段名，v=值，mono=用等宽字 + 底框显示。
@@ -1548,7 +1562,7 @@ export function nodeRows(n: WFNode): SumRow[] {
     // ── 触发器 ──────────────────────────────────────────────────────────────
     case "trigger.keyword": return [
       { k: "关键词", v: val(c.keyword, "未设"), mono: true },
-      { k: "参数", v: c.arg === "none" ? "不带参数" : c.arg === "required" ? "必填" : "可选" },
+      { k: "参数", v: c.arg === "none" ? "不带参数" : `${c.arg === "required" ? "必填" : "可选"}${cfg.withSpace === false ? " · 紧贴关键词" : ""}` },
     ];
     case "trigger.hotkey": return [
       { k: "快捷键", v: val(c.accelerator, "未录制"), mono: true },
@@ -1566,8 +1580,10 @@ export function nodeRows(n: WFNode): SumRow[] {
     // ── 输入 ────────────────────────────────────────────────────────────────
     case "input.scriptfilter": return [
       { k: "脚本", v: cut(val(c.script, "未设脚本")), mono: true },
-      c.cwd ? { k: "目录", v: cut(String(c.cwd)), mono: true }
-            : { k: "过滤", v: c.alfredFilters ? "由 Umbra 按输入过滤" : "脚本自己过滤" },
+      Number(c.debounceMs) > 0
+        ? { k: "防抖", v: `停手 ${Number(c.debounceMs)}ms 后才跑` }
+        : c.cwd ? { k: "目录", v: cut(String(c.cwd)), mono: true }
+                : { k: "过滤", v: c.alfredFilters ? "由 Umbra 按输入过滤" : "脚本自己过滤" },
     ];
     case "input.listfilter": return [
       { k: "列表", v: `${((cfg.items as unknown[]) || []).length} 项` },
@@ -1589,13 +1605,16 @@ export function nodeRows(n: WFNode): SumRow[] {
       { k: "动作", v: "重新唤起快捷入口面板" },
       { k: "配套", v: "和「隐藏主面板」成对用" },
     ];
-    case "output.keycombo": return [
-      { k: "按键", v: val(c.accelerator, "未录键位"), mono: true },
-      { k: "发送前", v: cfg.hideFirst === false ? "不收起面板" : "先收起面板" },
-    ];
+    case "output.keycombo": {
+      const rep = Math.trunc(Number(c.repeat ?? 1)) || 1;
+      return [
+        { k: "按键", v: `${val(c.accelerator, "未录键位")}${rep > 1 ? ` ×${rep}` : ""}`, mono: true },
+        { k: "发送前", v: cfg.hideFirst === false ? "不收起面板" : "先收起面板" },
+      ];
+    }
     case "automation.system": return [
       { k: "命令", v: SYSTEM_LABEL[String(c.command || "lock")] || String(c.command) },
-      { k: "范围", v: "系统级（仅 macOS）" },
+      { k: "执行前", v: cfg.confirm === true ? "弹确认框（防误触）" : "直接执行" },
     ];
     case "input.filefilter": {
       const scopes = String(c.scopes || "").split("\n").map((x) => x.trim()).filter(Boolean);
@@ -1696,6 +1715,7 @@ export function nodeRows(n: WFNode): SumRow[] {
       const shape = mode === "uuid" ? "UUID"
         : mode === "hex" ? `十六进制 ${Number(c.length || 8)} 位`
         : mode === "str" ? `随机串 ${Number(c.length || 8)} 位`
+        : mode === "list" ? `列表随机取一项（${String(c.list || "").split("\n").filter((x) => x.trim()).length} 项）`
         : `${Number(c.min ?? 1)} – ${Number(c.max ?? 100)}`;
       return [
         { k: "生成", v: shape },
@@ -1705,13 +1725,22 @@ export function nodeRows(n: WFNode): SumRow[] {
     case "utility.jsonconfig": {
       const raw = String(c.json || "").trim();
       let keys = 0;
+      let wrapped: Record<string, unknown> | null = null;
       try {
         const o = raw ? JSON.parse(raw) : null;
-        if (o && typeof o === "object" && !Array.isArray(o)) keys = Object.keys(o).length;
+        if (o && typeof o === "object" && !Array.isArray(o)) {
+          const w = (o as Record<string, unknown>).alfredworkflow;
+          if (w && typeof w === "object" && !Array.isArray(w)) wrapped = w as Record<string, unknown>;
+          keys = Object.keys(wrapped ? (wrapped.variables as object) || {} : o).length;
+        }
       } catch { keys = -1; }   // 填了但解不出来：直接在卡片上说清楚，别等运行才报错
+      // 包裹写法能同时改 arg 和下游节点的配置，这两件事比「设了几个变量」重要得多，优先显示。
+      const extra = wrapped
+        ? [wrapped.arg !== undefined ? "改参数" : "", wrapped.config ? "改下游配置" : ""].filter(Boolean).join(" · ")
+        : "";
       return [
         { k: "变量", v: keys < 0 ? "JSON 不合法" : keys ? `${keys} 个` : "未填" },
-        { k: "值里", v: "可用 {query} / {var:名称}" },
+        { k: extra ? "还会" : "值里", v: extra || "可用 {query} / {var:名称}" },
       ];
     }
     case "utility.join": return [
@@ -1734,20 +1763,23 @@ export function nodeRows(n: WFNode): SumRow[] {
     ];
     case "action.openurl": return [
       { k: "网址", v: cut(val(c.url, "{query}"), 30), mono: true },
-      { k: "打开方式", v: "默认浏览器" },
+      { k: "打开方式", v: val(c.browser, "默认浏览器") },
     ];
-    case "action.script": return [
-      { k: "脚本", v: cut(val(c.script, "未设脚本")), mono: true },
-      c.cwd ? { k: "目录", v: cut(String(c.cwd), 26), mono: true }
-            : { k: "失败时", v: c.onError === "continue" ? "忽略继续" : c.onError === "branch" ? "走失败出口" : "停止链路" },
-    ];
+    case "action.script": {
+      const lg = String(c.language || "bash");
+      return [
+        { k: SCRIPT_LANG_LABEL[lg] || lg, v: cut(val(c.script, "未设脚本")), mono: true },
+        c.cwd ? { k: "目录", v: cut(String(c.cwd), 26), mono: true }
+              : { k: "失败时", v: c.onError === "continue" ? "忽略继续" : c.onError === "branch" ? "走失败出口" : "停止链路" },
+      ];
+    }
     case "action.applescript": return [
       { k: "脚本", v: cut(val(c.script, "未设脚本")), mono: true },
       { k: "返回值", v: c.output === "replace" ? "作为参数传给下游" : c.output === "copy" ? "复制到剪贴板" : "忽略" },
     ];
     case "automation.shortcut": return [
       { k: "快捷指令", v: cut(val(c.name, "未填名称"), 24) },
-      { k: "输入", v: cfg.input === false ? "不传（空输入）" : "上游参数 {query}" },
+      { k: "输入", v: `${cfg.input === false ? "不传（空输入）" : "上游参数 {query}"}${cfg.wait === false && c.output !== "replace" ? " · 不等它跑完" : ""}` },
     ];
     case "automation.music": {
       const key = String(c.command || "playpause");
@@ -1801,8 +1833,8 @@ export function nodeRows(n: WFNode): SumRow[] {
 
     // ── 输出 ────────────────────────────────────────────────────────────────
     case "output.notify": return [
-      { k: "内容", v: "上游参数 {query}", mono: true },
-      { k: "形式", v: "系统通知" },
+      { k: "标题", v: cut(val(c.title, "（用工作流名）"), 24) },
+      { k: "正文", v: `${cut(val(c.text, "上游参数 {query}"), 18)}${c.ifEmpty === "show" ? " · 空也弹" : " · 空则跳过"}` },
     ];
     case "output.largetype": return [
       { k: "内容", v: "上游参数 {query}", mono: true },
@@ -1814,7 +1846,7 @@ export function nodeRows(n: WFNode): SumRow[] {
     ];
     case "output.writefile": return [
       { k: "文件", v: cut(val(c.path, "未设文件名"), 26), mono: true },
-      { k: "已存在时", v: c.ifExists === "append" ? "追加" : c.ifExists === "skip" ? "跳过" : "覆盖" },
+      { k: "已存在时", v: { append: "追加到末尾", prepend: "插到开头", skip: "跳过", unique: "另存新名" }[String(c.ifExists || "overwrite")] || "覆盖" },
     ];
     case "output.speak": return [
       { k: "念什么", v: cut(val(c.text, "{query}"), 26), mono: true },
@@ -2017,6 +2049,12 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
                 <option value="none">无参数（仅关键词）</option><option value="optional">可选参数</option><option value="required">必填参数</option>
               </select></div>
             <div><span className={lab}>显示标题（可选）</span><input className={inp} value={String(c.title || "")} onChange={(e) => set("title", e.target.value)} /></div>
+            {String(c.arg || "optional") !== "none" ? (<>
+              <label className="flex items-center gap-2 text-[12px] text-muted">
+                <input type="checkbox" checked={c.withSpace !== false} onChange={(e) => set("withSpace", e.target.checked)} />关键词和参数之间要有空格
+              </label>
+              <div className="text-[11px] text-muted leading-[1.7]">关掉后参数紧贴关键词也认 —— <span className="font-mono">cal2+2</span>、<span className="font-mono">tr你好</span> 这类计算/转换关键词几乎都要关掉它。</div>
+            </>) : null}
           </>) : null}
           {node.type === "trigger.hotkey" ? (
             <div><span className={lab}>全局快捷键</span>
@@ -2043,6 +2081,9 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
               <textarea className={`${inp} font-mono h-[90px] resize-y`} value={String(c.script || "")} onChange={(e) => set("script", e.target.value)} placeholder={`./runtime/txiki ./index.js "$1"`} /></div>
             <div><span className={lab}>运行目录 cwd（可选，支持 ~）</span><input className={`${inp} font-mono`} value={String(c.cwd || "")} onChange={(e) => set("cwd", e.target.value)} /></div>
             <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.alfredFilters} onChange={(e) => set("alfredFilters", e.target.checked)} />由 Umbra 按输入过滤结果</label>
+            <div><span className={lab}>防抖（毫秒，0=每敲一下就跑）</span>
+              <input type="number" className={`${inp} font-mono`} value={String(c.debounceMs ?? 0)} onChange={(e) => set("debounceMs", e.target.value)} placeholder="0" />
+              <div className="text-[11px] text-muted mt-1 leading-[1.7]">不设的话，打一个七字的词就是七个进程 —— 脚本一慢就把机器拖住，而前六次的结果压根没人看。脚本要联网或要跑一会儿的，建议填 150–300。上限 1000。</div></div>
           </>) : null}
           {node.type === "input.listfilter" ? (<>
             <div className="text-[11.5px] text-muted">不用写脚本的 Script Filter：在下面维护一张固定列表，按输入过滤后作为结果给出。选中某项时，它的「参数」会作为 arg 传给下游。</div>
@@ -2066,6 +2107,14 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
             <div className="text-[12px] text-muted">{node.type === "input.calc" ? "输入算式即时求值（如 3*4+2）。" : "输入换算（如 10km to mi、72f to c）。"}回车复制结果。</div>
           ) : null}
           {node.type === "action.script" ? (<>
+            <div><span className={lab}>语言</span>
+              <select className={inp} value={String(c.language || "bash")} onChange={(e) => set("language", e.target.value)}>
+                <option value="bash">bash</option><option value="zsh">zsh</option>
+                <option value="python3">Python 3</option><option value="ruby">Ruby</option>
+                <option value="node">Node.js</option><option value="osascript">AppleScript（osascript）</option>
+              </select>
+              <div className="text-[11px] text-muted mt-1 leading-[1.7]">各语言里取上游参数的写法：bash/zsh 用 <span className="font-mono">$1</span>，Python 用 <span className="font-mono">sys.argv[1]</span>，Ruby 用 <span className="font-mono">ARGV[0]</span>，Node 用 <span className="font-mono">process.argv[1]</span>。环境变量 <span className="font-mono">query</span> 在哪种语言里都读得到。<br />
+                脚本首行的 shebang 和这里选的语言不一致时会直接报错停下 —— bash 会把 <span className="font-mono">#!/usr/bin/env python3</span> 当注释忽略，然后拿 bash 去解释 Python，报出来的错完全指不到真正的原因。</div></div>
             <div><span className={lab}>脚本（$1=上游 arg，变量注入 env）</span>
               <textarea className={`${inp} font-mono h-[80px] resize-y`} value={String(c.script || "")} onChange={(e) => set("script", e.target.value)} placeholder={`say "$1"`} /></div>
             <div><span className={lab}>运行目录 cwd（可选）</span><input className={`${inp} font-mono`} value={String(c.cwd || "")} onChange={(e) => set("cwd", e.target.value)} /></div>
@@ -2082,9 +2131,11 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
               <div className="text-[11px] text-muted mt-1">脚本还可以输出 Alfred 风格的 JSON（{"{alfredworkflow:{arg,variables}}"}）来改写下游参数与变量。</div>
             </div>
           </>) : null}
-          {node.type === "action.openurl" ? (
+          {node.type === "action.openurl" ? (<>
             <div><span className={lab}>网址（{"{query}"}=arg）</span><input className={`${inp} font-mono`} value={String(c.url || "")} onChange={(e) => set("url", e.target.value)} placeholder="https://example.com/?q={query}" /></div>
-          ) : null}
+            <div className="flex gap-1.5"><input className={`flex-1 ${inp}`} value={String(c.browser || "")} onChange={(e) => set("browser", e.target.value)} placeholder="用哪个浏览器打开（留空=系统默认）" />
+              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const a = await api.pickApp(); if (a) set("browser", a); }}>选择</button></div>
+          </>) : null}
           {node.type === "action.openfile" ? (<>
             <div className="text-[11.5px] text-muted">打开上游传入的文件/文件夹；下方可设固定路径（书签）与用哪个应用打开。</div>
             <div className="flex gap-1.5"><input className={`flex-1 ${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query} 或固定路径（支持 ~）" />
@@ -2145,15 +2196,20 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
             <label className="flex items-center gap-2 text-[12px] text-muted">
               <input type="checkbox" checked={c.hideFirst !== false} onChange={(e) => set("hideFirst", e.target.checked)} />发送前先收起面板（建议开着）
             </label>
-            {c.hideFirst !== false ? (
-              <div><span className={lab}>收起后等多久再发（毫秒）</span>
-                <input type="number" className={`${inp} font-mono`} value={String(c.delayMs ?? 180)} onChange={(e) => set("delayMs", e.target.value)} /></div>
-            ) : null}
+            <div className="flex gap-2">
+              {c.hideFirst !== false ? (
+                <div className="flex-1"><span className={lab}>收起后等多久再发（毫秒）</span>
+                  <input type="number" className={`${inp} font-mono`} value={String(c.delayMs ?? 180)} onChange={(e) => set("delayMs", e.target.value)} /></div>
+              ) : null}
+              <div className="w-[130px]"><span className={lab}>连按几次</span>
+                <input type="number" className={`${inp} font-mono`} value={String(c.repeat ?? 1)} onChange={(e) => set("repeat", e.target.value)} /></div>
+            </div>
             <div className="text-[11px] text-muted leading-[1.7]">键位写法和别处录快捷键一样：<span className="font-mono">Command+Shift+K</span>、
               <span className="font-mono">Control+Return</span>、<span className="font-mono">Alt+Left</span>。功能键直接写名字（Return / Tab / Space / Escape / Delete / 方向键 / F1–F12）。<br />
               <b>需要「辅助功能」权限</b>，没授权时会明确报出来，不会静默失败。<br />
               不收起面板的话，按键会发给面板自己而不是你以为的那个应用 —— 所以默认开着，
-              等待的那一下是留给系统把焦点真正交还回去的时间。</div>
+              等待的那一下是留给系统把焦点真正交还回去的时间。<br />
+              「连按几次」用来做 Tab 缩进三级、方向键连走这类，上限 20 次 —— 模拟按键发不出去时没有回执，发几百次只会让人以为死机了。</div>
           </>) : null}
           {node.type === "automation.system" ? (<>
             <div><span className={lab}>命令</span>
@@ -2165,9 +2221,13 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
                 <option value="hideothers">隐藏其它应用</option>
                 <option value="logout">注销当前用户</option>
               </select></div>
+            <label className="flex items-center gap-2 text-[12px] text-muted">
+              <input type="checkbox" checked={c.confirm === true} onChange={(e) => set("confirm", e.target.checked)} />执行前弹确认框
+            </label>
             <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS。</b>
-              这里刻意<b>没有关机和重启</b> —— 工作流误触的代价太大，真需要的话应该走带确认弹窗的那条路。<br />
-              「清空废纸篓」会弹系统自己的确认框，不会无声删掉东西。</div>
+              这里刻意<b>没有关机和重启</b> —— 工作流误触的代价太大。<br />
+              绑了热键的话建议给「注销」「清空废纸篓」这类勾上确认框：这两件事不可逆，而热键最容易误触。点「取消」算正常结束，不报错。<br />
+              「清空废纸篓」本身还会再弹一次系统自己的确认框，不会无声删掉东西。</div>
           </>) : null}
           {node.type === "input.filefilter" ? (<>
             <div><span className={lab}>关键词（按文件名匹配）</span>
@@ -2333,9 +2393,15 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
                 <option value="none">忽略（参数原样传给下游）</option>
                 <option value="replace">作为参数传给下游</option>
               </select></div>
+            {String(c.output || "none") !== "replace" ? (
+              <label className="flex items-center gap-2 text-[12px] text-muted">
+                <input type="checkbox" checked={c.wait !== false} onChange={(e) => set("wait", e.target.checked)} />等它跑完再继续
+              </label>
+            ) : null}
             <div className="text-[11px] text-muted leading-[1.7]"><b>需要 macOS 12 及以上</b>（用系统自带的 shortcuts 命令），找不到该命令时会明确提示。<br />
               参数经标准输入传入、结果从标准输出取回，不落临时文件。超时 2 分钟 —— 快捷指令可能真要跑一会儿。<br />
-              不勾「传入输入」时连输入通道都不开：有些快捷指令收到空输入会走另一条分支。</div>
+              不勾「传入输入」时连输入通道都不开：有些快捷指令收到空输入会走另一条分支。<br />
+              不勾「等它跑完」就是发出去立刻往下走，适合那种要跑好几分钟的整理类指令。要拿返回值就必须等，所以选了「作为参数传给下游」时这个开关不出现 —— 否则会拿到一个空参数还以为成功了。</div>
           </>) : null}
           {node.type === "automation.music" ? (<>
             <div><span className={lab}>动作</span>
@@ -2371,7 +2437,13 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
                 <option value="uuid">UUID</option>
                 <option value="hex">十六进制串</option>
                 <option value="str">字母数字随机串</option>
+                <option value="list">从列表里随机取一项</option>
               </select></div>
+            {String(c.mode || "range") === "list" ? (
+              <div><span className={lab}>列表（一行一项，支持占位符）</span>
+                <textarea className={`${inp} h-[80px] resize-y`} value={String(c.list || "")} onChange={(e) => set("list", e.target.value)}
+                  placeholder={"今天吃什么\n面\n饭\n沙拉"} /></div>
+            ) : null}
             {String(c.mode || "range") === "range" ? (
               <div className="flex items-center gap-[8px]">
                 <div className="flex-1"><span className={lab}>最小值</span>
@@ -2395,7 +2467,9 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
             <div className="text-[11px] text-muted leading-[1.7]">一次设置多个变量，省得摆一排 Args &amp; Vars。<br />
               值里可以用 {"{query}"} / {"{var:名称}"} 等占位符，替换在 <b>解析之后</b> 做，所以值里带引号和换行都不会撑坏 JSON。<br />
               值不是字符串时（数字、布尔、嵌套对象）会转成字符串存 —— 变量表只存字符串。<br />
-              JSON 不合法会中断链路并提示，不会带着半份变量往下跑。</div>
+              JSON 不合法会中断链路并提示，不会带着半份变量往下跑。<br />
+              <b>还认包裹写法</b>（这才是它叫 Config 的由来）：<span className="font-mono">{"{\"alfredworkflow\":{\"arg\":…,\"variables\":{…},\"config\":{…}}}"}</span> ——
+              其中 <span className="font-mono">config</span> 会<b>临时改写紧接着的下游节点</b>的配置字段（比如按变量决定「打开网址」去哪个地址），只对这一次执行生效，不会写回保存的配置。</div>
           </>) : null}
           {node.type === "utility.transform" ? (<>
             <div><span className={lab}>作用对象（留空=作用于参数 arg）</span>
@@ -2405,7 +2479,11 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
                 <option value="upper">全部大写</option><option value="lower">全部小写</option><option value="title">首字母大写</option>
                 <option value="trim">去掉首尾空白</option><option value="urlencode">URL 编码</option><option value="urldecode">URL 解码</option>
                 <option value="base64encode">Base64 编码</option><option value="base64decode">Base64 解码</option>
-              </select></div>
+                <option value="reverse">反转字符串</option><option value="deaccent">去掉重音符号（café → cafe）</option>
+                <option value="alnum">只留字母数字（去标点空格）</option>
+              </select>
+              <div className="text-[11px] text-muted mt-1 leading-[1.7]">「反转」按字符算，emoji 和生僻字不会被劈成两半变乱码。<br />
+                「只留字母数字」认中文和各国文字，不是只留 ASCII —— 只留 ASCII 会把中文内容清空，那是个静悄悄的数据丢失。</div></div>
           </>) : null}
           {node.type === "utility.replace" ? (<>
             <div><span className={lab}>作用对象（留空=作用于参数 arg）</span>
@@ -2482,6 +2560,7 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
             <div><span className={lab}>文件已存在时</span>
               <select className={inp} value={String(c.ifExists || "overwrite")} onChange={(e) => set("ifExists", e.target.value)}>
                 <option value="overwrite">覆盖</option><option value="append">追加到末尾</option>
+                <option value="prepend">插到开头（新的在上面）</option>
                 <option value="unique">另存为 名称-1.后缀</option><option value="skip">什么都不做</option>
               </select></div>
             <div className="flex flex-col gap-1.5">
@@ -2520,7 +2599,19 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
             <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={c.markdown !== false} onChange={(e) => set("markdown", e.target.checked)} />按 Markdown 渲染</label>
             <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.append} onChange={(e) => set("append", e.target.checked)} />追加到已有内容（流式续写，不清屏）</label>
           </>) : null}
-          {["action.copy", "action.paste", "action.assistant", "action.inspiration", "output.notify", "output.largetype"].includes(node.type) ? (
+          {node.type === "output.notify" ? (<>
+            <div><span className={lab}>标题（留空=用工作流名）</span>
+              <input className={inp} value={String(c.title || "")} onChange={(e) => set("title", e.target.value)} placeholder="{query} / 固定文字都行" /></div>
+            <div><span className={lab}>正文（留空=直接用上游参数）</span>
+              <textarea className={`${inp} h-[60px] resize-y`} value={String(c.text ?? "")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" /></div>
+            <div><span className={lab}>正文为空时</span>
+              <select className={inp} value={String(c.ifEmpty || "skip")} onChange={(e) => set("ifEmpty", e.target.value)}>
+                <option value="skip">不弹通知（默认）</option>
+                <option value="show">照样弹一个空通知</option>
+              </select>
+              <div className="text-[11px] text-muted mt-1 leading-[1.7]">上游脚本没输出、条件没命中却接了通知 —— 这时弹一个什么都没有的框出来最招人烦，所以默认跳过。跳过算正常结束，链路继续往下走。</div></div>
+          </>) : null}
+          {["action.copy", "action.paste", "action.assistant", "action.inspiration", "output.largetype"].includes(node.type) ? (
             <div className="text-[12px] text-muted">{node.type === "output.largetype" ? "大字显示：把上游内容放大居中显示在半透明浮层里。" : "此动作无需额外配置，直接使用上游传入的内容（arg）。"}</div>
           ) : null}
         </div>

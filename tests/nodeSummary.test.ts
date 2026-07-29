@@ -33,7 +33,7 @@ const DEMO: Record<string, Cfg> = {
   "action.launch": { paths: ["/Applications/企业微信.app"], toggleVisibility: true },
   "action.openfile": { path: "~/Desktop/a.txt", app: "TextEdit" },
   "action.openurl": { url: "https://example.com/?q={query}" },
-  "action.script": { script: 'say "$1"', onError: "branch" },
+  "action.script": { script: "print(1)", language: "python3", onError: "branch" },
   "action.ask_assistant": { prompt: "帮我总结 {query}", show: true },
   "action.create_task": { text: "做个日报", device: "pc-1" },
   "action.device_skill": { provider: "system", skill: "write_file", device: "pc-1" },
@@ -199,7 +199,8 @@ describe("排版约束", () => {
     ["action.openfile", "路径"],
     ["action.openurl", "网址"],
     ["trigger.hotkey", "快捷键"],
-    ["action.script", "脚本"],
+    // Run Script 的字段名就是语言名（DEMO 里选的是 Python 3），不是固定的「脚本」
+    ["action.script", "Python 3"],
   ])("%s 的「%s」走等宽底框", (type, key) => {
     expect(rows(type, DEMO[type] || {}).find((r) => r.k === key)?.mono).toBe(true);
   });
@@ -209,5 +210,77 @@ describe("排版约束", () => {
       .find((r) => r.k === "网址")!.v;
     expect(v.length).toBeLessThanOrEqual(40);
     expect(v.endsWith("…")).toBe(true);
+  });
+});
+
+// 这一批是对着 Alfred 官方文档逐个对照后补上的差异修复，摘要要能看出新配置生效了。
+describe("对照 Alfred 文档补的配置项，卡片上要看得见", () => {
+  it("关键词：关掉「要有空格」时卡片要标出来，不然只能靠试", () => {
+    expect(text("trigger.keyword", { keyword: "cal", arg: "optional", withSpace: false })).toContain("紧贴关键词");
+    expect(text("trigger.keyword", { keyword: "cal", arg: "optional" })).not.toContain("紧贴");
+    // 「不带参数」时空格开关没有意义，不该冒出来
+    expect(text("trigger.keyword", { keyword: "cal", arg: "none", withSpace: false })).not.toContain("紧贴");
+  });
+
+  it("Run Script：字段名就是语言，一眼看出这段代码会被谁执行", () => {
+    expect(text("action.script", { script: "print(1)", language: "python3" })).toContain("Python 3");
+    expect(text("action.script", { script: "ls" })).toContain("bash");   // 不配时默认 bash
+  });
+
+  it("Script Filter：配了防抖就优先显示防抖（性能相关，比 cwd 重要）", () => {
+    expect(text("input.scriptfilter", { script: "x", cwd: "~/a", debounceMs: 200 })).toContain("200ms");
+    expect(text("input.scriptfilter", { script: "x", cwd: "~/a" })).toContain("~/a");
+  });
+
+  it("系统命令：有没有确认框要写在卡片上 —— 这是不可逆操作的唯一护栏", () => {
+    expect(text("automation.system", { command: "logout", confirm: true })).toContain("弹确认框");
+    expect(text("automation.system", { command: "logout" })).toContain("直接执行");
+  });
+
+  it("系统通知：标题正文都能配，空正文默认跳过", () => {
+    const t = text("output.notify", { title: "构建完成", text: "{query}" });
+    expect(t).toContain("构建完成");
+    expect(t).toContain("空则跳过");
+    expect(text("output.notify", { ifEmpty: "show" })).toContain("空也弹");
+    expect(text("output.notify")).toContain("用工作流名");
+  });
+
+  it("发送按键：连按次数要显示，一次时不显示（省得每张卡片都挂个 ×1）", () => {
+    expect(text("output.keycombo", { accelerator: "Tab", repeat: 3 })).toContain("×3");
+    expect(text("output.keycombo", { accelerator: "Tab" })).not.toContain("×");
+  });
+
+  it("打开网址：指定了浏览器就显示浏览器名", () => {
+    expect(text("action.openurl", { url: "https://x", browser: "Safari" })).toContain("Safari");
+    expect(text("action.openurl", { url: "https://x" })).toContain("默认浏览器");
+  });
+
+  it("快捷指令：不等它跑完要标出来；但选了取返回值时这个标记不该出现", () => {
+    expect(text("automation.shortcut", { name: "整理", wait: false })).toContain("不等它跑完");
+    expect(text("automation.shortcut", { name: "整理", wait: false, output: "replace" })).not.toContain("不等");
+  });
+
+  it("写文件：四种已存在策略都要有中文名，不能露出英文值", () => {
+    expect(text("output.writefile", { path: "a.md", ifExists: "prepend" })).toContain("插到开头");
+    expect(text("output.writefile", { path: "a.md", ifExists: "unique" })).toContain("另存新名");
+    expect(text("output.writefile", { path: "a.md" })).toContain("覆盖");
+  });
+
+  it("变换：Base64 的字段值原来会露出英文 mode 值，这里锁住", () => {
+    expect(text("utility.transform", { mode: "base64encode" })).toContain("Base64 编码");
+    expect(text("utility.transform", { mode: "reverse" })).toContain("反转字符串");
+    expect(text("utility.transform", { mode: "alnum" })).toContain("只留字母数字");
+  });
+
+  it("随机值：列表模式要报出有几项", () => {
+    expect(text("utility.random", { mode: "list", list: "面\n饭\n沙拉" })).toContain("3 项");
+  });
+
+  it("JSON Config：包裹写法能改参数和下游配置，这两件事比「设了几个变量」重要", () => {
+    const wrapped = { json: '{"alfredworkflow":{"arg":"x","variables":{"a":"1"},"config":{"url":"https://y"}}}' };
+    const t = text("utility.jsonconfig", wrapped);
+    expect(t).toContain("改参数");
+    expect(t).toContain("改下游配置");
+    expect(t).toContain("1 个");        // variables 里的数量，不是最外层的键数
   });
 });

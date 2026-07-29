@@ -4,7 +4,11 @@
 // 这四个节点的行为一半在「它自己算出什么」，另一半在「链路要不要继续、变量有没有传下去」，
 // 只测前者等于没测。链路末端挂一个 Debug 节点，它会把当时的参数写进轨迹，
 // 于是「下游有没有跑到、拿到的参数是什么」都能从轨迹里读出来。
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { WorkflowEngine } from "../electron/core/launcher/workflow";
 import type { ConfigStore } from "../electron/core/config";
 
@@ -14,6 +18,8 @@ interface NodeDef { id: string; type: string; config?: Record<string, unknown> }
 // Debug 节点的 stdout 就是它执行那一刻的参数，用来判断链路走没走到、参数变没变。
 // 记录引擎对外部动作的调用（收起/唤起面板），供「隐藏/显示主面板」两个节点断言。
 const calls = { hide: 0, show: 0 };
+// 引擎会在这个目录下给每条工作流建自己的目录（脚本节点的 cwd 与 data 目录）。
+const TMP_CFG_DIR = mkdtempSync(path.join(tmpdir(), "umbra-cfg-"));
 
 async function runChain(middle: NodeDef[], arg = "输入") {
   calls.hide = 0;
@@ -27,7 +33,9 @@ async function runChain(middle: NodeDef[], arg = "输入") {
   const connections = chain.slice(0, -1).map((from, i) => ({ from, to: chain[i + 1], port: "" }));
   const wf = { id: "wf", name: "测试", enabled: true, nodes, connections };
 
-  const cfg = { get: () => ({ launcherWorkflows: [wf] }) } as unknown as ConfigStore;
+  // dir 必须给：脚本类节点要先 ensureWorkflowDir 建工作流目录，缺了会直接抛异常，
+  // 表现成「节点没跑、反馈是空串」，看不出真正的原因。
+  const cfg = { dir: TMP_CFG_DIR, get: () => ({ launcherWorkflows: [wf] }) } as unknown as ConfigStore;
   const engine = new WorkflowEngine(cfg, {
     sendAssistant: () => {},
     hide: async () => { calls.hide++; },
@@ -296,11 +304,39 @@ describe("File Buffer 文件暂存区", () => {
   const chain = (mode: string, extra: Record<string, unknown> = {}) =>
     ({ id: `fb_${mode}`, type: "action.filebuffer", config: { mode, ...extra } });
 
+  // 收进去之前要校验文件真的在，所以这里必须用真文件，不能拿 /x/1.txt 这种假路径凑数
+  let dir = "";
+  let f1 = "";
+  let f2 = "";
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), "umbra-fb-"));
+    f1 = path.join(dir, "1.txt");
+    f2 = path.join(dir, "2.txt");
+    await writeFile(f1, "x");
+    await writeFile(f2, "x");
+  });
+  afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
+
   it("收进去的路径会去重", async () => {
     const r = await runChain([
       { id: "a", type: "action.filebuffer", config: { mode: "add" } },
-    ], "/x/1.txt\n/x/1.txt\n/x/2.txt");
+    ], `${f1}\n${f1}\n${f2}`);
     expect(r.feedback).toContain("2 个");
+  });
+
+  it("不存在的路径直接跳过，并把跳了几个说出来", async () => {
+    const r = await runChain([
+      { id: "a", type: "action.filebuffer", config: { mode: "add" } },
+    ], `${f1}\n/根本没有/这个.txt`);
+    expect(r.feedback).toContain("跳过 1 个");
+  });
+
+  it("全是不存在的路径时中断，不让幽灵路径躺进暂存区", async () => {
+    const r = await runChain([
+      { id: "a", type: "action.filebuffer", config: { mode: "add" } },
+    ], "/根本没有/a.txt\n/根本没有/b.txt");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("都不存在");
   });
 
   it("没有可收的路径时明确报错并中断", async () => {
@@ -511,5 +547,172 @@ describe("Speak 朗读 / Play Sound 提示音", () => {
       expect(r.reached).toBe(false);
       expect(r.feedback).toContain("不存在");
     } finally { Object.defineProperty(process, "platform", real); }
+  });
+});
+
+// ── 对照 Alfred 官方文档逐个核查后修掉的差异 ──────────────────────────────────
+// 这一批的共同点是「不修也能跑，但跑出来的结果和用户预期不一样」，最值得用测试钉死。
+
+describe("打开文件：多路径", () => {
+  it("多行路径要逐条打开 —— File Buffer 取出的就是多行，两个节点天生要串在一起", async () => {
+    const r = await runChain([{ id: "of", type: "action.openfile" }], "/tmp/a.txt\n/tmp/b.txt");
+    expect(r.feedback).toContain("2 个");
+  });
+
+  it("一条路径时不报「已打开 N 个」，免得单条也啰嗦", async () => {
+    const r = await runChain([{ id: "of", type: "action.openfile" }], "/tmp/a.txt");
+    expect(r.feedback).not.toContain("个");
+  });
+
+  it("没有路径就停下，不去 open 一个空串", async () => {
+    const r = await runChain([{ id: "of", type: "action.openfile", config: { path: "" } }], "");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("没有路径");
+  });
+});
+
+describe("系统通知：标题正文与空内容", () => {
+  it("正文为空时默认跳过，但链路继续 —— 空通知最招人烦", async () => {
+    const r = await runChain([{ id: "n", type: "output.notify" }], "");
+    expect(r.reached).toBe(true);          // 跳过通知不等于中断链路
+    expect(r.feedback).toContain("已跳过");
+  });
+
+  it("显式选了「空也弹」就照弹", async () => {
+    const r = await runChain([{ id: "n", type: "output.notify", config: { ifEmpty: "show" } }], "");
+    expect(r.feedback).not.toContain("已跳过");
+  });
+
+  it("通知不改参数，下游拿到的还是原来那条", async () => {
+    const r = await runChain([{ id: "n", type: "output.notify", config: { title: "构建", text: "好了" } }], "原样");
+    expect(r.finalArg).toBe("原样");
+  });
+});
+
+describe("Run Script：语言选择", () => {
+  it("选了不认识的语言要停下，而不是拿 bash 蒙一个", async () => {
+    const r = await runChain([{ id: "s", type: "action.script", config: { script: "x", language: "perl" } }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("不支持的脚本语言");
+  });
+
+  it("shebang 和下拉选的语言对不上时明确报错 —— bash 会把它当注释，然后报一个指不到原因的错", async () => {
+    const r = await runChain([{
+      id: "s", type: "action.script",
+      config: { script: "#!/usr/bin/python3\nprint(1)", language: "bash" },
+    }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("一致");
+  });
+
+  it("env 后面那个词才是真正的解释器，一致时照常放行", async () => {
+    const r = await runChain([{
+      id: "s", type: "action.script",
+      config: { script: "#!/usr/bin/env bash\necho hi", language: "bash" },
+    }]);
+    expect(r.reached).toBe(true);
+  });
+
+  it("env 形式的 shebang 也要能拦住 —— #!/usr/bin/env python3 是最常见的写法", async () => {
+    const r = await runChain([{
+      id: "s", type: "action.script",
+      config: { script: "#!/usr/bin/env python3\nprint(1)", language: "bash" },
+    }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("一致");
+  });
+
+  it("Python 真的用 Python 跑，参数从 sys.argv[1] 进去", async () => {
+    const r = await runChain([{
+      id: "s", type: "action.script",
+      config: { script: "import sys; print(sys.argv[1].upper())", language: "python3" },
+    }], "hello");
+    expect(r.finalArg).toBe("HELLO");
+  });
+});
+
+describe("JSON Config：Alfred 包裹写法", () => {
+  it("裸对象照旧当变量表（不能因为加了包裹写法就把简写弄坏）", async () => {
+    const r = await runChain([
+      { id: "j", type: "utility.jsonconfig", config: { json: '{"a":"1"}' } },
+      { id: "d2", type: "utility.debug", config: { text: "{var:a}" } },
+    ]);
+    expect(r.step("d2")?.stdout).toBe("1");
+  });
+
+  it("包裹写法能改参数和变量", async () => {
+    const r = await runChain([{
+      id: "j", type: "utility.jsonconfig",
+      config: { json: '{"alfredworkflow":{"arg":"新参数","variables":{"b":"2"}}}' },
+    }], "旧参数");
+    expect(r.finalArg).toBe("新参数");
+    expect(r.varsAtEnd().b).toBe("2");
+  });
+
+  it("config 覆写只影响紧接着的下游节点，且不写回保存的配置", async () => {
+    const r = await runChain([
+      { id: "j", type: "utility.jsonconfig", config: { json: '{"alfredworkflow":{"config":{"text":"被覆写了"}}}' } },
+      { id: "d2", type: "utility.debug", config: { text: "原配置" } },
+      // 再下一层不该继续吃这份覆写 —— 覆写只走一层
+      { id: "d3", type: "utility.debug", config: { text: "第二层" } },
+    ]);
+    expect(r.step("d2")?.stdout).toBe("被覆写了");
+    expect(r.step("d3")?.stdout).toBe("第二层");
+  });
+});
+
+describe("Transform 新增的三种变换", () => {
+  // 节点 id 不能叫 "t" —— runChain 里的触发器就叫 t，撞了之后引擎按 id 找到的是触发器，
+  // 这个节点根本不会执行，而测试会显示成「变换没生效」，非常难查。
+  const tf = (mode: string, arg: string) =>
+    runChain([{ id: "tf1", type: "utility.transform", config: { mode } }], arg).then((r) => r.finalArg);
+
+  it("反转按字符算，emoji 不会被劈成两半", async () => {
+    expect(await tf("reverse", "abc")).toBe("cba");
+    expect(await tf("reverse", "a🎉b")).toBe("b🎉a");
+  });
+
+  it("去重音只掉记号，字母还在", async () => {
+    expect(await tf("deaccent", "café naïve")).toBe("cafe naive");
+  });
+
+  it("只留字母数字要保住中文 —— 只留 ASCII 会把中文内容清空", async () => {
+    expect(await tf("alnum", "a-b_c 1!")).toBe("abc1");
+    expect(await tf("alnum", "报告：第 1 版")).toBe("报告第1版");
+  });
+});
+
+describe("Random：从列表里取", () => {
+  it("取到的一定是列表里的某一项", async () => {
+    const r = await runChain([{
+      id: "rd", type: "utility.random", config: { mode: "list", list: "面\n饭\n沙拉" },
+    }]);
+    expect(["面", "饭", "沙拉"]).toContain(r.finalArg);
+  });
+
+  it("列表空了要说清楚，不给下游一个空串", async () => {
+    const r = await runChain([{ id: "rd", type: "utility.random", config: { mode: "list", list: "  \n " } }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("列表是空的");
+  });
+});
+
+describe("发送按键：连按次数", () => {
+  it("次数被夹在 1..20，填 999 也不会真发 999 次", async () => {
+    // 非 macOS 上第一次就发不出去，会中断——这里只验证它没有因为 999 而空转很久
+    const r = await runChain([{
+      id: "k", type: "output.keycombo", config: { accelerator: "Tab", hideFirst: false, repeat: 999 },
+    }]);
+    if (process.platform === "darwin" || process.platform === "win32") return;
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("发送按键失败");
+  });
+});
+
+describe("系统命令：确认框", () => {
+  it("没勾确认就不去弹框（勾了才弹，避免每次都打断）", async () => {
+    if (process.platform === "darwin") return;
+    const r = await runChain([{ id: "sc", type: "automation.system", config: { command: "lock" } }]);
+    expect(r.feedback).toContain("macOS");   // 非 mac 上在平台守卫处就停了，说明没先去弹框
   });
 });

@@ -192,6 +192,8 @@ const APPLESCRIPT_TIMEOUT = 20_000;
 // 快捷指令可能真的要跑一会儿（发消息、处理图片），给宽一些。
 const SHORTCUT_TIMEOUT = 120_000;
 // 朗读 / 提示音的超时。这两个都是「响一下」的事，卡住就没有意义了。
+// 确认框等人点的时间。给足两分钟：弹出来时用户可能正被别的事岔开。
+const CONFIRM_TIMEOUT = 120_000;
 const SPEAK_TIMEOUT = 60_000;
 const SOUND_TIMEOUT = 30_000;
 // 单个暂存区最多攒多少个文件。攒到这个量还没处理，多半是忘了接 list/clear。
@@ -207,6 +209,21 @@ const SEARCH_ENGINES: Record<string, { label: string; url: string }> = {
   baidu: { label: "百度", url: "https://www.baidu.com/s?wd={q}" },
   github: { label: "GitHub", url: "https://github.com/search?q={q}" },
   wikipedia: { label: "维基百科", url: "https://zh.wikipedia.org/w/index.php?search={q}" },
+};
+
+// Run Script 支持的语言。每种语言「脚本怎么传、参数怎么传」都不一样，所以三件事一起登记：
+//   cmd/args  —— 解释器和它读代码的开关（脚本正文紧跟在 args 后面作为一个整参数）
+//   argv      —— 代码后面还要追加什么，才能让脚本里拿到上游参数
+//   accepts   —— 这门语言认哪些 shebang 名字，用来拦「首行写 python、下拉选 bash」这种误配
+// 各语言里取上游参数的写法：bash/zsh 用 $1，python 用 sys.argv[1]，ruby 用 ARGV[0]，
+// node 用 process.argv[1]，osascript 用 on run argv。另外环境变量 query 一直都在，都能读。
+const SCRIPT_LANGS: Record<string, { label: string; cmd: string; args: string[]; argv: (a: string) => string[]; accepts: string[] }> = {
+  bash: { label: "bash", cmd: "bash", args: ["-lc"], argv: (a) => ["umbra", a], accepts: ["bash", "sh"] },
+  zsh: { label: "zsh", cmd: "zsh", args: ["-lc"], argv: (a) => ["umbra", a], accepts: ["zsh"] },
+  python3: { label: "Python 3", cmd: "python3", args: ["-c"], argv: (a) => [a], accepts: ["python3", "python"] },
+  ruby: { label: "Ruby", cmd: "ruby", args: ["-e"], argv: (a) => [a], accepts: ["ruby"] },
+  node: { label: "Node.js", cmd: "node", args: ["-e"], argv: (a) => [a], accepts: ["node"] },
+  osascript: { label: "AppleScript（osascript）", cmd: "osascript", args: ["-e"], argv: (a) => [a], accepts: ["osascript"] },
 };
 
 // 「把命令打进终端窗口」在不同终端里要用各自的 AppleScript 方言，没法一套通吃。
@@ -338,6 +355,9 @@ export class WorkflowEngine {
   // Script Filter 输出缓存（W3 的 cache 字段）：键 = 工作流+节点+工作目录+参数+脚本正文。
   // 只在内存里放，进程退出即清空；最多 100 条，超了丢最旧的。
   private sfCache = new Map<string, { out: string; at: number; ttl: number; loose: boolean }>();
+  // Script Filter 的防抖序号：每个节点一个自增号，等待期间号变了就说明用户又敲了新字符，
+  // 这一次的结果已经没人要了，直接作废，不去起那个进程。
+  private sfSeq = new Map<string, number>();
   // rerun（W3）：脚本要求过 N 秒自动再查一次。每次查询前清零，查完由上层 takeRerun() 取走并安排定时。
   private rerunAfter = 0;
   // 文件暂存区（File Buffer）：`工作流id:节点id` → 已攒的绝对路径。
@@ -441,7 +461,12 @@ export class WorkflowEngine {
         if (argMode === "none") {
           if (q.toLowerCase() !== kw.toLowerCase()) continue;
         } else {
-          const re = new RegExp(`^${kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s+([\\s\\S]+))?$`, "i");
+          // withSpace（默认开）：关键词和参数之间要有空格。关掉后参数紧贴关键词也认 ——
+          // 计算类关键词几乎都靠这个（cal2+2、tr你好），Alfred 也是把它做成开关而不是写死。
+          const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = trig.config.withSpace === false
+            ? new RegExp(`^${esc}([\\s\\S]*)$`, "i")
+            : new RegExp(`^${esc}(?:\\s+([\\s\\S]+))?$`, "i");
           const m = q.match(re);
           if (!m) continue;
           arg = (m[1] || "").trim();
@@ -655,6 +680,17 @@ export class WorkflowEngine {
       if (hit.loose) void this.execScriptFilter(wf, node, arg, script, cwd, env, vars, key).catch(() => {});
       return this.buildScriptFilter(wf, node, arg, hit.out);
     }
+    // 防抖：没配就是 0（保持原来「按一下跑一次」的手感）。配了就先等一小会儿，
+    // 等待期间又来了新输入就把这一次丢掉 —— 否则打一个七字的词就是七个进程，
+    // 脚本一慢就把机器拖住，而前六次的结果压根没人看。
+    const wait = Math.max(0, Math.min(Number(node.config.debounceMs ?? 0) || 0, 1000));
+    if (wait > 0) {
+      const seqKey = `${wf.id}\n${node.id}`;
+      const mine = (this.sfSeq.get(seqKey) || 0) + 1;
+      this.sfSeq.set(seqKey, mine);
+      await new Promise((r) => setTimeout(r, wait));
+      if (this.sfSeq.get(seqKey) !== mine) return [];
+    }
     const r = await this.execScriptFilter(wf, node, arg, script, cwd, env, vars, key);
     return typeof r === "string" ? this.buildScriptFilter(wf, node, arg, r) : r;
   }
@@ -856,11 +892,14 @@ export class WorkflowEngine {
   // varsIn 在入口处复制一份：本节点写入的变量对自己的下游可见，但不会污染兄弟分支。
   // tr：本次运行的调试轨迹（W8），一路往下传而不是存在实例上，避免并发执行互相串台。
   // fan：当前所处的扇出批次（上游有 Split 且走「参数列表」输出时才非空），同样一路往下传给 Join 用。
-  private async runNode(wf: Workflow, nodeId: string, arg: string, varsIn: Record<string, string>, visited: Set<string>, tr: TraceRun | null = null, fan: FanCtx | null = null): Promise<string> {
+  // override：上游的 JSON Config 节点用 {"alfredworkflow":{"config":{…}}} 临时改写本节点的配置。
+  // 只对**这一次执行**生效，所以是拷一份 node 再合并，绝不去动存着的那份配置。
+  private async runNode(wf: Workflow, nodeId: string, arg: string, varsIn: Record<string, string>, visited: Set<string>, tr: TraceRun | null = null, fan: FanCtx | null = null, override: Record<string, unknown> | null = null): Promise<string> {
     if (visited.has(nodeId)) return "";  // 防环
     visited.add(nodeId);
-    const node = this.node(wf, nodeId);
-    if (!node) return "";
+    const stored = this.node(wf, nodeId);
+    if (!stored) return "";
+    const node = override ? { ...stored, config: { ...stored.config, ...override } } : stored;
     const vars = { ...varsIn };
     // 节点被停用（E6）→ 旁路：不执行自身逻辑，入参原样从默认出口继续往下传。
     if (node.disabled) {
@@ -879,6 +918,8 @@ export class WorkflowEngine {
     let outArg = arg;   // 默认把 arg 原样传给下游
     let outPort = "";   // 从哪个出口往下继续（多出口节点会改写：conditional 的 r0/else、脚本失败的 error）
     let stop = false;   // 是否就此终止本条链路（不再往下游传）
+    // JSON Config 用：要覆盖到下游节点配置上的字段（只影响紧接着的那一层）
+    let cfgOverride: Record<string, unknown> | null = null;
     // Split / Join 用：fanItems 非空表示本节点要把下游按项逐条跑一遍；
     // hold=true 表示 Join 还没收齐、这一项到此为止；fanOut 是传给下游的扇出批次（Join 合并后回到外层）。
     let fanItems: string[] | null = null;
@@ -1036,6 +1077,15 @@ export class WorkflowEngine {
           param = `${Math.min(a, b)}-${Math.max(a, b)}`;
         } else if (mode === "uuid") {
           param = "uuid";
+        } else if (mode === "list") {
+          // 从自填的列表里随机挑一项（一行一项）。占位符照常展开，所以列表本身也能是动态的。
+          const items = this.subst(String(node.config.list || ""), arg, vars)
+            .split("\n").map((x) => x.trim()).filter(Boolean);
+          if (!items.length) { feedback = "随机值：列表是空的"; stop = true; break; }
+          const picked = items[Math.floor(Math.random() * items.length)];
+          const t = String(node.config.target || "").trim();
+          if (t) vars[t] = picked; else outArg = picked;
+          break;
         } else {
           // hex / str：长度夹在 1..64，太长没意义、也怕有人手滑填个几百万
           const len = Math.max(1, Math.min(64, Math.trunc(Number(node.config.length ?? 8)) || 8));
@@ -1060,6 +1110,29 @@ export class WorkflowEngine {
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
           feedback = "JSON Config：最外层要是一个对象（{\"变量名\": \"值\"}）";
           stop = true;
+          break;
+        }
+        // 两种写法都认：
+        //   1. 裸对象 {"a":"1"} —— 每个键当一个变量（简写，最常用）
+        //   2. Alfred 包裹 {"alfredworkflow":{"arg":..,"variables":{..},"config":{..}}}
+        //      其中 config 覆盖**紧接着的下游节点**的配置字段 —— 这才是它叫 JSON Config 的由来：
+        //      能在运行时改下游节点的设置（比如按变量决定 Open URL 打开哪个地址）。
+        const wrapped = (parsed as Record<string, unknown>).alfredworkflow;
+        if (wrapped && typeof wrapped === "object" && !Array.isArray(wrapped)) {
+          const w = wrapped as Record<string, unknown>;
+          if (typeof w.arg === "string") outArg = this.subst(w.arg, arg, vars);
+          if (w.variables && typeof w.variables === "object" && !Array.isArray(w.variables)) {
+            for (const [k, v] of Object.entries(w.variables as Record<string, unknown>)) {
+              const key = k.trim();
+              if (key) vars[key] = this.subst(typeof v === "string" ? v : JSON.stringify(v), arg, vars);
+            }
+          }
+          if (w.config && typeof w.config === "object" && !Array.isArray(w.config)) {
+            cfgOverride = {};
+            for (const [k, v] of Object.entries(w.config as Record<string, unknown>)) {
+              cfgOverride[k] = typeof v === "string" ? this.subst(v, arg, vars) : v;
+            }
+          }
           break;
         }
         for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
@@ -1206,9 +1279,16 @@ export class WorkflowEngine {
           // 给系统一点时间把焦点真正交还给前台应用，不等的话按键会打空
           await new Promise((r) => setTimeout(r, Math.max(0, Math.min(Number(node.config.delayMs ?? 180), 2000))));
         }
-        const k = await simulateKeyCombo(accel);
-        if (!k.ok) { feedback = `发送按键失败：${k.error}`; stop = true; break; }
-        feedback = `已发送 ${accel} ✓`;
+        // repeat：连按几次（Tab 缩进三级、方向键连走这类）。夹在 1..20，
+        // 上限是防手滑 —— 模拟按键发不出去时没有回执，发几百次只会让人以为死机了。
+        const times = Math.max(1, Math.min(Math.trunc(Number(node.config.repeat ?? 1)) || 1, 20));
+        for (let i = 0; i < times; i++) {
+          const k = await simulateKeyCombo(accel);
+          if (!k.ok) { feedback = `发送按键失败：${k.error}`; stop = true; break; }
+          if (i < times - 1) await new Promise((r) => setTimeout(r, 40));   // 连按之间留一点间隔，不然应用会漏收
+        }
+        if (stop) break;
+        feedback = `已发送 ${accel}${times > 1 ? ` ×${times}` : ""} ✓`;
         break;
       }
 
@@ -1219,6 +1299,17 @@ export class WorkflowEngine {
         const key = String(node.config.command || "lock");
         const cmd = SYSTEM_CMDS[key];
         if (!cmd) { feedback = `系统命令：未知命令 ${key}`; stop = true; break; }
+        // 确认框：热键一按就注销、就清废纸篓，误触的代价太大且不可逆，所以给一个开关。
+        // 用系统自己的 display dialog，取消时 osascript 返回非零 —— 直接当「用户不干了」处理，
+        // 是正常退出而不是失败，所以不带错误文案。
+        if (node.config.confirm === true) {
+          const q = escapeAppleString(`确定要${cmd.label}吗？`);
+          const ok = await runAppleScript(
+            `display dialog "${q}" buttons {"取消", "确定"} default button "取消" with icon caution`,
+            CONFIRM_TIMEOUT,
+          );
+          if (ok.code !== 0 || !/确定/.test(ok.output)) { feedback = "已取消"; stop = true; break; }
+        }
         const r = await runAppleScript(cmd.mac, APPLESCRIPT_TIMEOUT);
         stdout = r.output;
         exitCode = r.code ?? undefined;
@@ -1299,10 +1390,16 @@ export class WorkflowEngine {
         const incoming = (this.subst(String(node.config.path || "{query}"), arg, vars) || arg)
           .split("\n").map((x) => expandHome(x.trim())).filter(Boolean);
         if (!incoming.length) { feedback = "暂存区：没有可收的路径"; stop = true; break; }
+        // 收之前先确认文件真的在：不校验的话，拼错的、已删掉的路径会一路躺到下游才炸，
+        // 而暂存区里看着还是「已暂存 N 个」，最难查。
+        const real: string[] = [];
+        for (const p of incoming) if (await pathExists(p)) real.push(p);
+        const missed = incoming.length - real.length;
+        if (!real.length) { feedback = `暂存区：${missed} 个路径都不存在`; stop = true; break; }
         // 去重：同一个文件反复加没有意义，还会让下游重复处理
-        const merged = [...new Set([...buf, ...incoming])].slice(0, FILE_BUFFER_MAX);
+        const merged = [...new Set([...buf, ...real])].slice(0, FILE_BUFFER_MAX);
         this.fileBuffers.set(key, merged);
-        feedback = `已暂存 ${merged.length} 个文件`;
+        feedback = `已暂存 ${merged.length} 个文件${missed ? `（跳过 ${missed} 个不存在的）` : ""}`;
         break;
       }
 
@@ -1325,9 +1422,13 @@ export class WorkflowEngine {
           break;
         }
         // 脚本的返回值（osascript 打到 stdout 的那一行）按配置决定怎么处置。
+        // 默认 replace，和 Run Script 保持一致 —— 两个语义相近的节点默认行为不一样，
+        // 用户一定会被绊；Alfred 那边脚本类对象也统一是「输出即下游参数」。
+        // 但返回值为空时保留原参数：AppleScript 很多时候本来就不返回东西，
+        // 这时把 arg 冲成空串会让下游莫名其妙地拿不到值。
         const out = r.output.trim();
-        const mode = String(node.config.output || "none");
-        if (mode === "replace") outArg = out;
+        const mode = String(node.config.output || "replace");
+        if (mode === "replace") { if (out) outArg = out; }
         else if (mode === "copy") { clipboard.writeText(out); feedback = "已复制 ✓"; }
         break;
       }
@@ -1348,6 +1449,14 @@ export class WorkflowEngine {
         // 明确不传输入时连 -i 都不给：有些快捷指令收到空输入会走另一条分支。
         const passArg = node.config.input !== false && !!arg;
         const args = ["run", name, ...(passArg ? ["-i", "-"] : []), "-o", "-"];
+        // wait=false：发出去就往下走。要拿返回值就必须等，所以选了 replace 时忽略这个开关 ——
+        // 否则会得到一个空 arg，而用户以为自己拿到了结果。
+        const wantOut = String(node.config.output || "none") === "replace";
+        if (node.config.wait === false && !wantOut) {
+          void run("shortcuts", args, { timeoutMs: SHORTCUT_TIMEOUT, stdin: passArg ? arg : undefined });
+          feedback = `已触发「${name}」（不等它跑完）`;
+          break;
+        }
         const r = await run("shortcuts", args, {
           timeoutMs: SHORTCUT_TIMEOUT,
           stdin: passArg ? arg : undefined,
@@ -1359,7 +1468,7 @@ export class WorkflowEngine {
           feedback = `快捷指令失败：${r.output.trim().split("\n").pop()?.slice(0, 80) || `退出码 ${r.code}`}`;
           stop = true; break;
         }
-        if (String(node.config.output || "none") === "replace") outArg = r.output.trim();
+        if (wantOut) outArg = r.output.trim();
         break;
       }
 
@@ -1399,14 +1508,29 @@ export class WorkflowEngine {
         await new Promise((r) => setTimeout(r, 180));
         await simulatePaste();
         break;
+      // 打开网址。可指定浏览器 —— 和「网页搜索」保持同一套字段，
+      // 不然同一个应用里两个开网页的节点行为不一致，用户得记两套。
       case "action.openurl": {
         const url = this.subst(String(node.config.url || "{query}"), arg, vars) || arg;
-        await run("open", [url]); await this.deps.hide(false); break;
+        const br = String(node.config.browser || "").trim();
+        const r = await run("open", br ? ["-a", br, url] : [url]);
+        if (r.code !== 0 && br) { feedback = `用 ${br} 打开失败：${r.output.trim().slice(0, 60)}`; stop = true; break; }
+        await this.deps.hide(false); break;
       }
+      // 打开文件：**按行拆**。上游是「文件暂存区」的取出模式时给的就是多行路径，
+      // 这两个节点天生要串在一起用；不拆的话等于把一整段多行文本当成一个路径丢给 open，必然失败。
       case "action.openfile": {
-        const p = expandHome(this.subst(String(node.config.path || "{query}"), arg, vars) || arg);
+        const paths = (this.subst(String(node.config.path || "{query}"), arg, vars) || arg)
+          .split("\n").map((x) => expandHome(x.trim())).filter(Boolean);
+        if (!paths.length) { feedback = "打开文件：没有路径"; stop = true; break; }
         const app = String(node.config.app || "");
-        await run("open", app ? ["-a", app, p] : [p]); await this.deps.hide(false); break;
+        // 指定了应用就一条 open 带上全部路径（同一个 App 里一次开完，不会开出好几个实例）；
+        // 没指定则逐个交给系统，各自按默认应用打开。
+        if (app) await run("open", ["-a", app, ...paths]);
+        else for (const p of paths) await run("open", [p]);
+        await this.deps.hide(false);
+        feedback = paths.length > 1 ? `已打开 ${paths.length} 个 ✓` : "";
+        break;
       }
       case "action.launch": {
         const paths = Array.isArray(node.config.paths) ? (node.config.paths as string[]) : [];
@@ -1432,8 +1556,25 @@ export class WorkflowEngine {
         const env: Record<string, string> = { ...workflowEnv(dir, wf.id, wf.name) };
         for (const [k, v] of Object.entries(vars)) env[k] = String(v ?? "");
         env.query = arg;
+        const langKey = String(node.config.language || "bash");
+        const lang = SCRIPT_LANGS[langKey];
+        if (!lang) { feedback = `不支持的脚本语言：${langKey}`; stop = true; break; }
+        // shebang 和下拉选的语言对不上时**明确报错**，不硬跑。
+        // 因为 bash 会把 `#!/usr/bin/env python3` 当成一行注释直接忽略，然后拿 bash 去解释 Python，
+        // 报出来的错完全指不到真正的原因 —— 这是最费时间的一类误配。
+        // 注意 `#!/usr/bin/env python3`：真正的解释器是 env **后面**那个词，
+        // 只取第一段会得到 "env"，等于这道防线对最常见的写法失效。
+        const toks = (/^#!\s*(.+)$/m.exec(script.trimStart())?.[1] || "").trim().split(/\s+/).filter(Boolean);
+        let shebangName = (toks[0] || "").split("/").pop() || "";
+        if (shebangName === "env") {
+          shebangName = (toks.slice(1).find((t) => !t.startsWith("-")) || "").split("/").pop() || "";
+        }
+        if (shebangName && !lang.accepts.includes(shebangName)) {
+          feedback = `脚本首行写的是 ${shebangName}，但语言选的是 ${lang.label} —— 改一处让它们一致`;
+          stop = true; break;
+        }
         let err = "";
-        const res = await run("bash", ["-lc", script, "umbra", arg], {
+        const res = await run(lang.cmd, [...lang.args, script, ...lang.argv(arg)], {
           timeoutMs: SCRIPT_TIMEOUT, cwd, env, onStderr: (c) => { err += c; },
         });
         const out = (res.output || "").trim();
@@ -1535,9 +1676,18 @@ export class WorkflowEngine {
         break;
       }
 
-      case "output.notify":
-        try { new Notification({ title: wf.name, body: arg }).show(); } catch { /* 无通知权限忽略 */ }
+      // 系统通知：标题与正文都可自定义（留空各自回退到工作流名 / 上游参数）。
+      // ifEmpty：正文为空时默认**不弹** —— 弹一个什么都没有的通知框是最招人烦的那种，
+      // 而它恰恰最常见（上游脚本没输出、条件没命中却接了通知）。
+      case "output.notify": {
+        const nTitle = this.subst(String(node.config.title || ""), arg, vars).trim() || wf.name;
+        const nBody = (node.config.text === undefined || node.config.text === ""
+          ? arg
+          : this.subst(String(node.config.text), arg, vars)).trim();
+        if (!nBody && node.config.ifEmpty !== "show") { feedback = "通知：内容为空，已跳过"; break; }
+        try { new Notification({ title: nTitle, body: nBody }).show(); } catch { /* 无通知权限忽略 */ }
         break;
+      }
 
       // ── 输出：写文本文件 —— 把内容落到磁盘，并把「最终写入的绝对路径」作为下游 arg ──
       // 路径规则：~ 展开；绝对路径按填的走；相对路径落到本工作流的 data 目录
@@ -1560,13 +1710,18 @@ export class WorkflowEngine {
           catch (e) { feedback = `写文件：建目录失败 ${String(e).slice(0, 40)}`; stop = true; break; }
         }
         const exists = await fs.stat(target).then(() => true).catch(() => false);
-        // 已存在时怎么办：overwrite=覆盖（默认）| append=追加 | unique=另存 name-1.txt | skip=什么都不做
+        // 已存在时怎么办：overwrite=覆盖（默认）| append=追加到末尾 | prepend=插到开头
+        //                | unique=另存 name-1.txt | skip=什么都不做
         const mode = String(node.config.ifExists || "overwrite");
         if (exists && mode === "skip") { outArg = target; feedback = "写文件：已存在，跳过"; break; }
         if (exists && mode === "unique") target = await uniquePath(target);
         try {
           if (exists && mode === "append") await fs.appendFile(target, body, "utf8");
-          else await fs.writeFile(target, body, "utf8");
+          else if (exists && mode === "prepend") {
+            // 没有「往文件头插」的系统调用，只能读回来重写。日志倒序这类场景就靠它。
+            const old = await fs.readFile(target, "utf8").catch(() => "");
+            await fs.writeFile(target, body + old, "utf8");
+          } else await fs.writeFile(target, body, "utf8");
         } catch (e) { feedback = `写文件失败：${String(e).slice(0, 60)}`; stop = true; break; }
         outArg = target;   // 下游拿到的是绝对路径，接「打开文件」「复制」都顺手
         feedback = `已写入：${path.basename(target)} ✓`;
@@ -1588,7 +1743,7 @@ export class WorkflowEngine {
         ctx.index = i;
         for (const c of this.outConns(wf, nodeId, "", outPort)) {
           // visited 传副本而不是同一个：对上游仍然防环，但下游节点允许每一项各执行一次。
-          const fb = await this.runNode(wf, c.to, fanItems[i], vars, new Set(visited), tr, ctx);
+          const fb = await this.runNode(wf, c.to, fanItems[i], vars, new Set(visited), tr, ctx, cfgOverride);
           if (fb) feedback = fb;
         }
       }
@@ -1596,7 +1751,7 @@ export class WorkflowEngine {
     }
     // 传给 outPort 出口上的所有下游（回车分支）——链式/扇出都把 arg 与变量继续传递。
     for (const c of this.outConns(wf, nodeId, "", outPort)) {
-      const fb = await this.runNode(wf, c.to, outArg, vars, visited, tr, fanOut);
+      const fb = await this.runNode(wf, c.to, outArg, vars, visited, tr, fanOut, cfgOverride);
       if (fb) feedback = fb;
     }
     return feedback;
@@ -1646,6 +1801,14 @@ export class WorkflowEngine {
       case "urldecode": { try { return decodeURIComponent(src); } catch { return src; } }
       case "base64encode": return Buffer.from(src, "utf8").toString("base64");
       case "base64decode": { try { return Buffer.from(src, "base64").toString("utf8"); } catch { return src; } }
+      // 反转按**码点**而不是 UTF-16 码元来拆：[...src] 会把 emoji、生僻字这类
+      // 占两个码元的字符当一个整体，split("") 则会把它劈成两半变成乱码。
+      case "reverse": return [...src].reverse().join("");
+      // 去重音：先拆成「基字母 + 组合记号」（NFD），再把记号那一段删掉。café → cafe
+      case "deaccent": return src.normalize("NFD").replace(/[̀-ͯ]/g, "");
+      // 去掉非字母数字。\p{L}\p{N} 认中文和各国文字，不是只留 ASCII —— 只留 ASCII 的话
+      // 中文内容会被清空，那是个静悄悄的数据丢失。
+      case "alnum": return src.replace(/[^\p{L}\p{N}]+/gu, "");
       default: return src;
     }
   }
