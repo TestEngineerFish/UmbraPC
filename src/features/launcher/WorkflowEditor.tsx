@@ -2,7 +2,7 @@
 // 画布：节点按下任意处拖动、单击选中(Delete 删)、双击配置、右键菜单；端口拉线连接；
 // 连线徽章：单击选中、双击切换修饰键、右键删除；Cmd+Z 撤销；滚轮/按钮缩放；空白拖拽平移（无限画布）。
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ComponentType, ReactNode } from "react";
+import type { ComponentType } from "react";
 import {
   IconAlert, IconBell, IconBook, IconBranch, IconBug, IconBulb, IconCalc, IconCalendar, IconChat, IconCheck,
   IconChevronDown, IconChevronRight, IconClip, IconClock, IconCloud, IconCode, IconCommand, IconCopy, IconDice,
@@ -14,6 +14,13 @@ import {
   IconRuler, IconScissors, IconSearch, IconTag, IconTarget, IconTerminal, IconText, IconTrash, IconUndo, IconUser,
   IconVolume, IconWindow, IconX,
 } from "../../components/icons";
+import {
+  Blank, BTN_SEC, CELL, CELL_MONO, CheckRow, Code, CodeRow, Dlg, FLD, FLD_MONO, Fold, Hint, HotkeyField,
+  Note, PickField, Row, RowTable, Sec, sameConfig,
+} from "./nodeform";
+import type { DlgWidth } from "./nodeform";
+import { ContextMenu } from "./menu";
+import type { MenuItem } from "./menu";
 
 // 对象清单里每一项的图标：统一是 icons.tsx 里那套线性图标组件（只吃 size，颜色跟父级 color 走）。
 type IconComp = ComponentType<{ size?: number }>;
@@ -180,6 +187,92 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
 ];
 const TYPE_META: Record<string, { label: string; icon: IconComp; kind: string }> = {};
 for (const g of CATALOG) for (const it of g.items) TYPE_META[it.type] = { label: it.label, icon: it.icon, kind: it.type.split(".")[0] };
+
+// 节点类型前缀的中文名。弹窗副标题是「分类 · 一句话」，分类就取这里。
+export const KIND_LABEL: Record<string, string> = {
+  trigger: "触发器", input: "输入", utility: "工具", action: "动作", automation: "自动化", output: "输出",
+};
+// 弹窗头部副标题：每种节点一句话，说**它到底干什么**，不是把标题换个说法重念一遍。
+// 约束是「一行放得下」——溢出会被省略号截掉，所以宁可短。
+// 对象库里的 hint 是另一回事：那是「要不要选它」的说明，可以长；这里是「已经选了，它做什么」。
+export const NODE_SUB: Record<string, string> = {
+  "trigger.keyword": "在快捷入口敲这个词就跑起来",
+  "trigger.hotkey": "任何应用里按下都能启动这条工作流",
+  "trigger.always": "每次输入都跑一遍，结果并入普通搜索",
+  "trigger.universal": "按热键抓走当前选区，拿它当参数开跑",
+  "trigger.snippet": "输入约定的缩写就触发（暂未实现）",
+  "trigger.external": "给别的程序留一个调用入口（暂未实现）",
+  "trigger.remote": "手机端点一下触发桌面（暂未实现）",
+  "trigger.fileaction": "在文件管理器里选中文件后触发（暂未实现）",
+  "trigger.contact": "从通讯录联系人触发（暂未实现）",
+
+  "input.scriptfilter": "跑一段脚本，把它吐的 JSON 变成结果列表",
+  "input.listfilter": "维护一张固定列表，按输入过滤后给出结果",
+  "input.codec": "做 Unicode / URL / Base64 编解码",
+  "input.calc": "输入算式即时求值，回车复制结果",
+  "input.units": "输入换算式即时换算，回车复制结果",
+  "input.filefilter": "按名字和类型找本机文件，选中把路径传给下游",
+  "input.appsfilter": "列出正在跑的应用，选中切换或退出它",
+  "input.dict": "把输入当一个词，回车在系统词典里打开",
+
+  "utility.args": "改写传给下游的参数，或追加一组变量",
+  "utility.conditional": "从上往下匹配，命中第一条就走那个出口",
+  "utility.transform": "对参数或某个变量做一次文本变换",
+  "utility.replace": "在参数或变量里做字符串 / 正则替换",
+  "utility.delay": "在这里停一会儿再往下走",
+  "utility.debug": "往调试抽屉打一行点，不影响链路",
+  "utility.split": "把一条参数拆成多条，或拆成一组变量",
+  "utility.join": "把上游拆出来的多条参数并回一条",
+  "utility.junction": "纯理线的中转点，数据原样透传",
+  "utility.filter": "任一条规则命中才放行，否则中断链路",
+  "utility.fileconditional": "按路径特征分流：扩展名、是不是目录、名字里有什么",
+  "utility.dialog": "弹个框问一句，按点了哪个按钮分流（暂未实现）",
+  "utility.random": "生成一个随机值，写进参数或某个变量",
+  "utility.jsonconfig": "用一段 JSON 设变量、改参数、改下游节点配置",
+  "utility.hide": "先把快捷入口面板收起来，再继续跑下游",
+  "utility.show": "把快捷入口面板重新唤起来",
+
+  "action.launch": "启动一批应用或文件",
+  "action.openfile": "用系统默认应用（或指定应用）打开文件",
+  "action.openurl": "打开一个网址",
+  "action.script": "在本机执行一段脚本，标准输出传给下游",
+  "action.copy": "把上游参数写进系统剪贴板",
+  "action.paste": "把上游参数直接粘到前台应用里",
+  "action.assistant": "把上游参数发到聊天页给秘书，不等回复",
+  "action.inspiration": "把上游参数记成一条灵感",
+  "action.ask_assistant": "问秘书并等回复，回复继续传给下游",
+  "action.create_task": "把上游参数变成一条任务交给秘书",
+  "action.device_skill": "把一个技能派发到指定设备上执行",
+  "action.reveal": "在文件管理器里定位并选中这个文件",
+  "action.terminal": "把命令打进终端窗口里，看着它跑",
+  "action.browse": "在终端里打开这个目录",
+  "action.websearch": "拿参数去搜索引擎搜一下",
+  "action.filebuffer": "把文件先攒起来，攒够了一次交给下游",
+  "action.applescript": "跑一段 AppleScript，可以拿回它的返回值",
+
+  "automation.task": "调用预置的系统自动化任务包（暂未实现）",
+  "automation.shortcut": "调用「快捷指令」App 里的一条指令",
+  "automation.system": "锁屏、睡眠、屏保这类系统操作",
+  "automation.music": "控制「音乐」App：播放、切歌、音量",
+
+  "output.notify": "弹一条系统通知",
+  "output.largetype": "把内容放大居中显示在半透明浮层里",
+  "output.textview": "把内容显示在文本视图窗口里",
+  "output.writefile": "把内容写成文件，最终路径传给下游",
+  "output.keycombo": "向前台应用发一组按键",
+  "output.speak": "用系统语音把文本念出来",
+  "output.sound": "播一段提示音",
+  "output.exttrigger": "跳去触发另一条工作流（暂未实现）",
+};
+// 弹窗宽度：默认 440（纯表单单列）。这里只登记要加宽的那些。
+// md=560：有脚本编辑区或内嵌两列表格；lg=720：一行三列以上的表格编辑器。
+export const DLG_WIDTH: Record<string, DlgWidth> = {
+  "input.scriptfilter": "md", "action.script": "md", "action.applescript": "md",
+  "action.terminal": "md", "utility.jsonconfig": "md", "utility.args": "md",
+  "utility.conditional": "md", "utility.filter": "md", "utility.fileconditional": "md",
+  "input.filefilter": "md", "action.device_skill": "md",
+  "input.listfilter": "lg",
+};
 // 画布配色：设计规范里画布是全局唯一硬编码深色的地方（深浅色主题切换时它不变），
 // 所以这些值不走 CSS 变量，集中放这一处，改配色只动这个对象。
 const CV = {
@@ -306,87 +399,6 @@ const portIndex = (n: WFNode, port?: string): number => {
 
 const uid = () => `n${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
 const clone = <T,>(w: T): T => JSON.parse(JSON.stringify(w));
-
-// ── 右键菜单（多级子菜单）──
-// count：分类行右侧的「已实现/总数」；keyHint：动作行右侧的快捷键；title：面板顶部的分区小标题。
-interface MenuItem { label?: string; icon?: ReactNode; count?: string; keyHint?: string; onClick?: () => void; sub?: MenuItem[]; danger?: boolean; sep?: boolean }
-// 菜单面板宽度（用来判断子菜单往右还是往左展开），和 min-w 保持一致。
-const MENU_W = 224;
-// 面板的落点。left 必给；top / bottom 二选一（点在下半屏时用 bottom 向上生长）；
-// maxH 是这块面板自己的高度上限，超了它自己滚。
-interface MenuAt { left: number; top?: number; bottom?: number; maxH: number }
-
-// dark=true 用画布那套硬编码深色（菜单开在深色画布上，跟着主题变会和画布打架）；
-// 否则走主题变量，给顶栏「⋯」这种开在浅色区域的菜单用。
-//
-// 关于定位：每一级面板都是 position:fixed，坐标由调用方（根级）或父级行的 getBoundingClientRect（子级）算出来。
-// 曾经的做法是给菜单套一个带 overflow-y-auto 的外层、子菜单用 absolute left-full 挂在行上，
-// 结果二级菜单被那个滚动容器裁掉了（横竖都被切，还多出一条横向滚动条）。
-// fixed 不受祖先 overflow 裁剪（祖先里没有 transform / filter，不会成为 fixed 的包含块），
-// 所以每级都 fixed 之后，每级面板都能独立带上自己的 max-height + 滚动，且不裁下一级。
-function MenuList({ items, onClose, dark, title, at }: {
-  items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string; at: MenuAt;
-}) {
-  const [open, setOpen] = useState<{ i: number; at: MenuAt } | null>(null);
-  const panel = dark
-    ? "bg-[rgba(31,28,24,.98)] border border-[#3A342B] rounded-[10px] p-1 shadow-[0_10px_30px_rgba(0,0,0,.45)] min-w-[208px] overflow-y-auto"
-    : "bg-card border border-border rounded-[10px] p-1 shadow-2xl min-w-[208px] overflow-y-auto";
-  const row = "w-full flex items-center gap-[9px] px-[9px] py-[5px] rounded-md text-[12px] text-left bg-transparent";
-  const rowTone = dark ? "text-[#D8D3CA] hover:bg-[rgba(232,89,12,.16)] hover:text-[#F0A878]" : "text-text hover:bg-orange-soft hover:text-orange-text";
-  const iconTone = dark ? "text-[#8A837A]" : "text-muted";
-  const dimTone = dark ? "text-[#6E675E]" : "text-faint";
-
-  // 悬停到带子菜单的行上：按这一行的实际位置算子菜单落点。
-  // 右边放得下就贴右侧，放不下翻到左侧；纵向与行顶齐平，并留出至少 140px 的可视高度。
-  const enter = (i: number, hasSub: boolean, e: React.MouseEvent<HTMLDivElement>) => {
-    if (!hasSub) { setOpen(null); return; }
-    const r = e.currentTarget.getBoundingClientRect();
-    const left = r.right + MENU_W + 8 <= window.innerWidth ? r.right + 2 : Math.max(8, r.left - MENU_W - 2);
-    const top = Math.max(8, Math.min(r.top - 5, window.innerHeight - 148));
-    setOpen({ i, at: { left, top, maxH: window.innerHeight - top - 8 } });
-  };
-
-  return (
-    <>
-      {/* 本级面板滚动时关掉子菜单：子菜单是 fixed 的，跟不了父级的滚动，留着会脱锚。 */}
-      <div className={panel} onScroll={() => setOpen(null)}
-        style={{ position: "fixed", left: at.left, top: at.top, bottom: at.bottom, maxHeight: at.maxH }}>
-        {title ? <div className={`px-[9px] pt-[5px] pb-[3px] text-[10px] tracking-[.06em] ${dimTone}`}>{title}</div> : null}
-        {items.map((it, i) => it.sep ? <div key={i} className={`h-px my-1 mx-1.5 ${dark ? "bg-[#332E26]" : "bg-border-soft"}`} /> : (
-          <div key={i} onMouseEnter={(e) => enter(i, !!it.sub, e)}>
-            <button className={`${row} ${it.danger ? "text-danger hover:bg-danger-soft" : rowTone}`}
-              onClick={() => { if (it.sub) return; it.onClick?.(); onClose(); }}>
-              <span className={`w-4 flex-none flex justify-center ${it.danger ? "" : iconTone}`}>{it.icon}</span>
-              <span className="flex-1 whitespace-nowrap">{it.label}</span>
-              {it.count ? <span className={`flex-none text-[10px] tabular-nums ${dimTone}`}>{it.count}</span> : null}
-              {it.keyHint ? <span className={`flex-none font-mono text-[10px] ${dimTone}`}>{it.keyHint}</span> : null}
-              {it.sub ? <span className={`flex-none ${dimTone}`}><IconChevronRight size={10} /></span> : null}
-            </button>
-          </div>
-        ))}
-      </div>
-      {/* 子菜单画在本级面板外面（同为 fixed），所以不会被本级的滚动容器裁掉。 */}
-      {open && items[open.i]?.sub ? <MenuList items={items[open.i].sub!} onClose={onClose} dark={dark} at={open.at} /> : null}
-    </>
-  );
-}
-// 根级落点：水平按视口宽度夹住（右键点在最右边时菜单不溢出）；
-// 点在下半屏时用 bottom 贴住点击位置向上生长，免得被窗口底边切掉。
-function ContextMenu({ x, y, items, onClose, dark, title }: { x: number; y: number; items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string }) {
-  const left = Math.max(8, Math.min(x, window.innerWidth - MENU_W - 8));
-  const upward = y > window.innerHeight / 2;
-  const at: MenuAt = upward
-    ? { left, bottom: window.innerHeight - y, maxH: y - 8 }
-    : { left, top: y, maxH: window.innerHeight - y - 8 };
-  return (
-    <div className="fixed inset-0 z-[70]" onMouseDown={onClose} onWheel={(e) => e.stopPropagation()}
-      onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
-      <div onMouseDown={(e) => e.stopPropagation()}>
-        <MenuList items={items} onClose={onClose} dark={dark} title={title} at={at} />
-      </div>
-    </div>
-  );
-}
 
 // ── 对象面板（E1）：可搜索的节点清单 ──
 // 双击画布空白、或按 / 、\ 唤起；↑↓ 选择、回车添加；⌥回车 额外把新节点接到当前选中节点后面。
@@ -1462,7 +1474,9 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           onClose={() => setPalette(null)} />
       ) : null}
       {editNode && cur ? (
-        <NodeConfig node={cur.nodes.find((n) => n.id === editNode)!} onClose={() => setEditNode(null)} onSave={(cfg) => { setNodeConfig(editNode, cfg); setEditNode(null); }} />
+        <NodeConfig node={cur.nodes.find((n) => n.id === editNode)!} onClose={() => setEditNode(null)}
+          onSave={(cfg) => { setNodeConfig(editNode, cfg); setEditNode(null); }}
+          onDelete={() => { delNode(editNode); setEditNode(null); }} />
       ) : null}
       {showCfg && cur ? (
         <ConfigEditor wf={cur} onClose={() => setShowCfg(false)}
@@ -1869,33 +1883,34 @@ function nodeSummary(n: WFNode): string {
   return nodeRows(n).map((r) => `${r.k} ${r.v}`).join(" · ");
 }
 
-// Launch 目标列表：左图标 + 路径（默认只读，双击可编辑）。
+// Launch 目标列表。没有「加一条」按钮 —— 空行对这个节点没意义（路径得先选出来），
+// 所以添加入口是下面两个「选 App / 选文件」，选完直接成行。
 function LaunchList({ paths, onChange }: { paths: string[]; onChange: (p: string[]) => void }) {
   const [icons, setIcons] = useState<Record<string, string>>({});
-  const [editing, setEditing] = useState<number | null>(null);
   useEffect(() => {
     for (const p of paths) if (!(p in icons)) void api.fileIcon(p).then((d) => setIcons((m) => ({ ...m, [p]: d || "" })));
   }, [paths]);
-  const setAt = (i: number, v: string) => onChange(paths.map((x, j) => (j === i ? v : x)));
   return (
-    <div className="flex flex-col gap-1.5">
-      {paths.map((p, i) => (
-        <div key={i} className="flex items-center gap-2 bg-bg border border-border rounded-lg px-[8px] py-[6px]">
-          <span className="w-[20px] h-[20px] flex items-center justify-center shrink-0">{icons[p] ? <img src={icons[p]} className="w-[18px] h-[18px]" alt="" /> : <span className="text-[13px]">📄</span>}</span>
-          {editing === i ? (
-            <input autoFocus defaultValue={p} onBlur={(e) => { setAt(i, e.target.value.trim()); setEditing(null); }} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
-              className="flex-1 bg-transparent border-b border-orange text-[12px] font-mono outline-none" />
-          ) : (
-            <span className="flex-1 truncate text-[12px] font-mono cursor-text" title="双击编辑" onDoubleClick={() => setEditing(i)}>{p}</span>
-          )}
-          <button className="text-danger text-[12px]" onClick={() => onChange(paths.filter((_, j) => j !== i))}>✕</button>
+    <RowTable<string>
+      rows={paths} onChange={onChange}
+      cols={[{ label: "路径", cls: "flex-1 min-w-0" }]}
+      emptyText="还没有目标。用下面两个按钮挑一个 App 或文件。"
+      cell={(p, i) => [
+        <div key="p" className="flex items-center gap-[8px]">
+          <span className="w-[18px] h-[18px] flex-none flex items-center justify-center">
+            {icons[p] ? <img src={icons[p]} className="w-[16px] h-[16px]" alt="" /> : <span className="text-[12px]">📄</span>}
+          </span>
+          <input className={`${CELL_MONO} flex-1 min-w-0`} value={p}
+            onChange={(e) => onChange(paths.map((x, j) => (j === i ? e.target.value : x)))} />
+        </div>,
+      ]}
+      extra={
+        <div className="flex gap-[8px] px-[10px] py-[8px] border-t border-border-soft">
+          <button className={BTN_SEC} onClick={async () => { const a = await api.pickApp(); if (a) onChange([...paths, `/Applications/${a}.app`]); }}>选 App</button>
+          <button className={BTN_SEC} onClick={async () => { const p = await api.pickPath(); if (p) onChange([...paths, p]); }}>选文件</button>
         </div>
-      ))}
-      <div className="flex gap-1.5">
-        <button className="px-[10px] py-[6px] border border-border rounded-lg text-[12px]" onClick={async () => { const a = await api.pickApp(); if (a) onChange([...paths, `/Applications/${a}.app`]); }}>＋ 选 App</button>
-        <button className="px-[10px] py-[6px] border border-border rounded-lg text-[12px]" onClick={async () => { const p = await api.pickPath(); if (p) onChange([...paths, p]); }}>＋ 选文件</button>
-      </div>
-    </div>
+      }
+    />
   );
 }
 
@@ -1987,640 +2002,800 @@ function FileRulesEditor({ rules, onChange }: { rules: FileRule[]; onChange: (r:
 }
 
 // ── 简易键值表（Args & Vars 节点用来设置变量）──
+// 不自己存 rows：直接由 config.vars 这个对象派生。原来存了一份本地 rows，
+// 结果「弹窗取消」之后本地 rows 还留着上次编辑的内容，再打开就对不上了。
 function KVEditor({ kv, onChange }: { kv: Record<string, string>; onChange: (v: Record<string, string>) => void }) {
-  const [rows, setRows] = useState<{ k: string; v: string }[]>(Object.entries(kv || {}).map(([k, v]) => ({ k, v: String(v) })));
-  const inp = "bg-bg border border-border rounded-lg px-[8px] py-[5px] text-[12px] outline-none font-mono";
-  // 每次编辑都立刻回吐给父级：空名字的行会被忽略，不写进配置。
+  const rows = Object.entries(kv || {}).map(([k, v]) => ({ k, v: String(v) }));
+  // 空名字的行不写进配置，但要留在界面上 —— 刚点「加一个变量」时名字本来就是空的，
+  // 立刻被过滤掉的话新行会当场消失。所以用一份「界面上的行」补足。
+  const [extraRows, setExtra] = useState<{ k: string; v: string }[]>([]);
+  const all = [...rows, ...extraRows];
   const push = (rs: { k: string; v: string }[]) => {
-    setRows(rs);
+    const named = rs.filter((r) => r.k.trim());
     const o: Record<string, string> = {};
-    for (const r of rs) if (r.k.trim()) o[r.k.trim()] = r.v;
+    for (const r of named) o[r.k.trim()] = r.v;
+    setExtra(rs.filter((r) => !r.k.trim()));
     onChange(o);
   };
   return (
-    <div className="flex flex-col gap-1.5">
-      {rows.map((r, i) => (
-        <div key={i} className="flex items-center gap-1.5">
-          <input className={`${inp} w-[110px]`} value={r.k} placeholder="变量名" onChange={(e) => push(rows.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))} />
-          <input className={`${inp} flex-1`} value={r.v} placeholder="值（可用 {query}）" onChange={(e) => push(rows.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))} />
-          <button className="text-danger text-[12px]" onClick={() => push(rows.filter((_, j) => j !== i))}>✕</button>
-        </div>
-      ))}
-      <button className="text-[12px] text-muted border border-dashed border-border rounded-lg px-2.5 py-1" onClick={() => push([...rows, { k: "", v: "" }])}>＋ 加一个变量</button>
-    </div>
+    <RowTable<{ k: string; v: string }>
+      rows={all} onChange={push} blank={() => ({ k: "", v: "" })} addLabel="加一个变量"
+      cols={[{ label: "变量名", cls: "flex-1 basis-[180px] min-w-0" }, { label: "值", cls: "flex-1 basis-[240px] min-w-0" }]}
+      emptyText="还没有变量。加一个之后，下游节点就能用 {var:名称} 取到它。"
+      cell={(r, i) => [
+        <input key="k" className={CELL_MONO} value={r.k} placeholder="变量名"
+          onChange={(e) => push(all.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))} />,
+        <input key="v" className={CELL} value={r.v} placeholder="值（可用 {query}）"
+          onChange={(e) => push(all.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))} />,
+      ]}
+    />
   );
 }
 
 // ── 节点配置弹窗 ──
-function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Record<string, unknown>) => void; onClose: () => void }) {
+// 节点配置弹窗。外壳与表单原语在 ./nodeform，这里只负责「哪个节点摆哪些字段」。
+//
+// 版式照 ClaudeDesign 上那份稿子：标签左置定宽 110px、说明跟在控件下方、长说明收进折叠区、
+// 底栏固定「删除节点 · 取消 · 保存」。改动只在按保存后才落到工作流，关掉前会问一句。
+function NodeConfig({ node, onSave, onClose, onDelete }: {
+  node: WFNode;
+  onSave: (c: Record<string, unknown>) => void;
+  onClose: () => void;
+  onDelete: () => void;
+}) {
   const [c, setC] = useState<Record<string, unknown>>({ ...node.config });
-  const [rec, setRec] = useState(false);
-  const meta = TYPE_META[node.type] || { label: node.type, icon: IconFile };
+  const meta = TYPE_META[node.type] || { label: node.type, icon: IconFile, kind: "" };
   const set = (k: string, v: unknown) => setC((p) => ({ ...p, [k]: v }));
-  const inp = "w-full bg-bg border border-border rounded-lg px-[10px] py-[7px] text-[12.5px] outline-none";
-  const lab = "text-[11.5px] text-muted mb-1 block";
-
-  useEffect(() => {
-    if (!rec) return;
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") { setRec(false); return; }
-      if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) return;
-      const mods: string[] = [];
-      if (e.metaKey) mods.push("Command"); if (e.ctrlKey) mods.push("Control");
-      if (e.altKey) mods.push("Alt"); if (e.shiftKey) mods.push("Shift");
-      const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
-      set("accelerator", [...mods, key].join("+")); setRec(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [rec]);
+  const s = (k: string, d = "") => String(c[k] ?? d);
+  const sub = `${KIND_LABEL[meta.kind] || ""} · ${NODE_SUB[node.type] || meta.label}`;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
-      {/* List Filter 一行要摆四个输入框，440px 挤不下，单独给它宽一点 */}
-      <div className={`${node.type === "input.listfilter" ? "w-[620px]" : "w-[440px]"} max-h-[86vh] overflow-y-auto bg-card border border-border rounded-2xl p-5 shadow-2xl`} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="flex items-center gap-2 mb-4"><span className="w-7 h-7 flex-none rounded-lg bg-orange-soft text-orange-text flex items-center justify-center"><meta.icon size={15} /></span><span className="font-semibold text-[14px]">{meta.label}</span></div>
-        <div className="flex flex-col gap-3">
-          {node.type === "trigger.keyword" ? (<>
-            <div><span className={lab}>关键词（在快捷入口输入触发）</span><input className={`${inp} font-mono`} value={String(c.keyword || "")} onChange={(e) => set("keyword", e.target.value)} placeholder="yd" /></div>
-            <div><span className={lab}>参数</span>
-              <select className={inp} value={String(c.arg || "optional")} onChange={(e) => set("arg", e.target.value)}>
-                <option value="none">无参数（仅关键词）</option><option value="optional">可选参数</option><option value="required">必填参数</option>
-              </select></div>
-            <div><span className={lab}>显示标题（可选）</span><input className={inp} value={String(c.title || "")} onChange={(e) => set("title", e.target.value)} /></div>
-            {String(c.arg || "optional") !== "none" ? (<>
-              <label className="flex items-center gap-2 text-[12px] text-muted">
-                <input type="checkbox" checked={c.withSpace !== false} onChange={(e) => set("withSpace", e.target.checked)} />关键词和参数之间要有空格
-              </label>
-              <div className="text-[11px] text-muted leading-[1.7]">关掉后参数紧贴关键词也认 —— <span className="font-mono">cal2+2</span>、<span className="font-mono">tr你好</span> 这类计算/转换关键词几乎都要关掉它。</div>
-            </>) : null}
-          </>) : null}
-          {node.type === "trigger.hotkey" ? (
-            <div><span className={lab}>全局快捷键</span>
-              <button onClick={() => setRec(true)} className={`${inp} text-left font-mono ${rec ? "border-orange" : ""}`}>{rec ? "按下快捷键…" : (String(c.accelerator || "") || "点击录制")}</button>
-              <div className="text-[11px] text-muted mt-1">触发时把当前剪贴板文本作为参数，跑「回车」分支的动作。</div>
-            </div>
-          ) : null}
-          {node.type === "trigger.universal" ? (<>
-            <div><span className={lab}>全局快捷键</span>
-              <button onClick={() => setRec(true)} className={`${inp} text-left font-mono ${rec ? "border-orange" : ""}`}>{rec ? "按下快捷键…" : (String(c.accelerator || "") || "点击录制")}</button></div>
-            <div><span className={lab}>抓什么</span>
-              <select className={inp} value={String(c.source || "auto")} onChange={(e) => set("source", e.target.value)}>
-                <option value="auto">自动（有文件用文件，否则用文本）</option><option value="text">只要选中的文本</option><option value="files">只要选中的文件路径</option>
-              </select></div>
-            <div className="text-[11px] text-muted">按下快捷键时先模拟一次 ⌘C 抓走当前选区，再把它当参数跑「回车」分支；抓完会把原来的剪贴板还回去。
-              下游还能用 {"{var:selection_type}"}（text/files）和 {"{var:selection_files}"}（每行一个路径）分开处理。
-              需要在「系统设置 → 隐私与安全性 → 辅助功能」里给 Umbra 授权，否则抓不到选区。</div>
-          </>) : null}
-          {node.type === "trigger.always" ? (
-            <div className="text-[12px] text-muted">无需关键词，任意输入都会尝试运行下游输入节点（如计算器/单位换算），结果并入普通搜索。</div>
-          ) : null}
-          {node.type === "input.scriptfilter" ? (<>
-            <div><span className={lab}>脚本（stdout 返回 Alfred JSON：{"{items:[…]}"}，$1=输入）</span>
-              <textarea className={`${inp} font-mono h-[90px] resize-y`} value={String(c.script || "")} onChange={(e) => set("script", e.target.value)} placeholder={`./runtime/txiki ./index.js "$1"`} /></div>
-            <div><span className={lab}>运行目录 cwd（可选，支持 ~）</span><input className={`${inp} font-mono`} value={String(c.cwd || "")} onChange={(e) => set("cwd", e.target.value)} /></div>
-            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.alfredFilters} onChange={(e) => set("alfredFilters", e.target.checked)} />由 Umbra 按输入过滤结果</label>
-            <div><span className={lab}>防抖（毫秒，0=每敲一下就跑）</span>
-              <input type="number" className={`${inp} font-mono`} value={String(c.debounceMs ?? 0)} onChange={(e) => set("debounceMs", e.target.value)} placeholder="0" />
-              <div className="text-[11px] text-muted mt-1 leading-[1.7]">不设的话，打一个七字的词就是七个进程 —— 脚本一慢就把机器拖住，而前六次的结果压根没人看。脚本要联网或要跑一会儿的，建议填 150–300。上限 1000。</div></div>
-          </>) : null}
-          {node.type === "input.listfilter" ? (<>
-            <div className="text-[11.5px] text-muted">不用写脚本的 Script Filter：在下面维护一张固定列表，按输入过滤后作为结果给出。选中某项时，它的「参数」会作为 arg 传给下游。</div>
-            <ListRowsEditor rows={(c.items as ListRow[]) || []} onChange={(r) => set("items", r)} />
-            <div><span className={lab}>匹配方式</span>
-              <select className={inp} value={String(c.match || "word")} onChange={(e) => set("match", e.target.value)}>
-                <option value="word">词首匹配（标题/副标题里任一词以输入开头）</option>
-                <option value="contains">任意位置包含</option>
-                <option value="none">不过滤（整表全部给出）</option>
-              </select></div>
-            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={c.learn !== false} onChange={(e) => set("learn", e.target.checked)} />参与使用频率学习（常选的项会被顶到前面）</label>
-            <div className="text-[11px] text-muted">「参数」一栏支持 {"{query}"} / {"{var:名称}"} 等占位符；图标一栏填 emoji 或图片文件的绝对路径。</div>
-          </>) : null}
-          {node.type === "input.codec" ? (
-            <div><span className={lab}>编解码类型</span>
-              <select className={inp} value={String(c.mode || "unicode")} onChange={(e) => set("mode", e.target.value)}>
-                <option value="unicode">Unicode</option><option value="url">URL</option><option value="base64">Base64</option>
-              </select></div>
-          ) : null}
-          {node.type === "input.calc" || node.type === "input.units" ? (
-            <div className="text-[12px] text-muted">{node.type === "input.calc" ? "输入算式即时求值（如 3*4+2）。" : "输入换算（如 10km to mi、72f to c）。"}回车复制结果。</div>
-          ) : null}
-          {node.type === "action.script" ? (<>
-            <div><span className={lab}>语言</span>
-              <select className={inp} value={String(c.language || "bash")} onChange={(e) => set("language", e.target.value)}>
-                <option value="bash">bash</option><option value="zsh">zsh</option>
-                <option value="python3">Python 3</option><option value="ruby">Ruby</option>
-                <option value="node">Node.js</option><option value="osascript">AppleScript（osascript）</option>
-              </select>
-              <div className="text-[11px] text-muted mt-1 leading-[1.7]">各语言里取上游参数的写法：bash/zsh 用 <span className="font-mono">$1</span>，Python 用 <span className="font-mono">sys.argv[1]</span>，Ruby 用 <span className="font-mono">ARGV[0]</span>，Node 用 <span className="font-mono">process.argv[1]</span>。环境变量 <span className="font-mono">query</span> 在哪种语言里都读得到。<br />
-                脚本首行的 shebang 和这里选的语言不一致时会直接报错停下 —— bash 会把 <span className="font-mono">#!/usr/bin/env python3</span> 当注释忽略，然后拿 bash 去解释 Python，报出来的错完全指不到真正的原因。</div></div>
-            <div><span className={lab}>脚本（$1=上游 arg，变量注入 env）</span>
-              <textarea className={`${inp} font-mono h-[80px] resize-y`} value={String(c.script || "")} onChange={(e) => set("script", e.target.value)} placeholder={`say "$1"`} /></div>
-            <div><span className={lab}>运行目录 cwd（可选）</span><input className={`${inp} font-mono`} value={String(c.cwd || "")} onChange={(e) => set("cwd", e.target.value)} /></div>
-            <div><span className={lab}>stdout 处理</span>
-              <select className={inp} value={String(c.output || "none")} onChange={(e) => set("output", e.target.value)}>
-                <option value="none">忽略（继续传给下游）</option><option value="copy">复制到剪贴板</option>
-              </select></div>
-            <div><span className={lab}>脚本失败时</span>
-              <select className={inp} value={String(c.onError || "stop")} onChange={(e) => set("onError", e.target.value)}>
-                <option value="stop">停止这条链路（默认）</option>
-                <option value="continue">忽略错误继续往下走</option>
-                <option value="branch">走「失败」出口（节点上会多一个红色端口）</option>
-              </select>
-              <div className="text-[11px] text-muted mt-1">脚本还可以输出 Alfred 风格的 JSON（{"{alfredworkflow:{arg,variables}}"}）来改写下游参数与变量。</div>
-            </div>
-          </>) : null}
-          {node.type === "action.openurl" ? (<>
-            <div><span className={lab}>网址（{"{query}"}=arg）</span><input className={`${inp} font-mono`} value={String(c.url || "")} onChange={(e) => set("url", e.target.value)} placeholder="https://example.com/?q={query}" /></div>
-            <div className="flex gap-1.5"><input className={`flex-1 ${inp}`} value={String(c.browser || "")} onChange={(e) => set("browser", e.target.value)} placeholder="用哪个浏览器打开（留空=系统默认）" />
-              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const a = await api.pickApp(); if (a) set("browser", a); }}>选择</button></div>
-          </>) : null}
-          {node.type === "action.openfile" ? (<>
-            <div className="text-[11.5px] text-muted">打开上游传入的文件/文件夹；下方可设固定路径（书签）与用哪个应用打开。</div>
-            <div className="flex gap-1.5"><input className={`flex-1 ${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query} 或固定路径（支持 ~）" />
-              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const p = await api.pickPath(); if (p) set("path", p); }}>选择</button></div>
-            <div className="flex gap-1.5"><input className={`flex-1 ${inp}`} value={String(c.app || "")} onChange={(e) => set("app", e.target.value)} placeholder="用哪个应用打开（可选）" />
-              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const a = await api.pickApp(); if (a) set("app", a); }}>选择 App</button></div>
-          </>) : null}
-          {node.type === "action.launch" ? (<>
-            <span className={lab}>要启动的 App / 文件（双击某行编辑路径）</span>
-            <LaunchList paths={(c.paths as string[]) || []} onChange={(p) => set("paths", p)} />
-            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.toggleVisibility} onChange={(e) => set("toggleVisibility", e.target.checked)} />切换可见性：若某 App 已在前台则隐藏它</label>
-          </>) : null}
-          {node.type === "utility.args" ? (<>
-            <div><span className={lab}>参数如何处理</span>
-              <select className={inp} value={String(c.argMode || "keep")} onChange={(e) => set("argMode", e.target.value)}>
-                <option value="keep">沿用上游参数</option><option value="set">用下面的模板改写</option><option value="clear">清空参数</option>
-              </select></div>
-            {String(c.argMode || "keep") === "set" ? (
-              <div><span className={lab}>新参数模板（{"{query}"}=上游参数，{"{var:名称}"}=变量）</span>
-                <input className={`${inp} font-mono`} value={String(c.text || "")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" /></div>
+    <Dlg width={DLG_WIDTH[node.type] || "sm"} icon={meta.icon} title={meta.label} sub={sub}
+      dirty={!sameConfig(c, node.config)} onClose={onClose} onSave={() => onSave(c)} onDelete={onDelete}>
+
+      {/* ── 触发器 ────────────────────────────────────────────────────────── */}
+      {node.type === "trigger.keyword" ? (<>
+        <Row label="关键词"><input className={FLD_MONO} value={s("keyword")} onChange={(e) => set("keyword", e.target.value)} placeholder="yd" /></Row>
+        <Row label="参数">
+          <select className={FLD} value={s("arg", "optional")} onChange={(e) => set("arg", e.target.value)}>
+            <option value="none">无参数（仅关键词）</option><option value="optional">可选参数</option><option value="required">必填参数</option>
+          </select>
+        </Row>
+        <Row label="显示标题" last={s("arg", "optional") === "none"}>
+          <input className={FLD} value={s("title")} onChange={(e) => set("title", e.target.value)} placeholder="可选，留空用工作流名" />
+        </Row>
+        {s("arg", "optional") !== "none" ? (
+          <CheckRow last checked={c.withSpace !== false} onChange={(v) => set("withSpace", v)}>
+            关键词和参数之间要有空格
+            <Hint>关掉后参数紧贴关键词也认 —— <Code>cal2+2</Code>、<Code>tr你好</Code> 这类计算/转换关键词几乎都要关掉它。</Hint>
+          </CheckRow>
+        ) : null}
+      </>) : null}
+
+      {node.type === "trigger.hotkey" ? (
+        <Row label="全局快捷键" top last>
+          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)}
+            hint="触发时把当前剪贴板文本作为参数，跑「回车」分支。" />
+        </Row>
+      ) : null}
+
+      {node.type === "trigger.universal" ? (<>
+        <Row label="全局快捷键" top>
+          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)} />
+        </Row>
+        <Row label="抓什么" last>
+          <select className={FLD} value={s("source", "auto")} onChange={(e) => set("source", e.target.value)}>
+            <option value="auto">自动（有文件用文件，否则用文本）</option><option value="text">只要选中的文本</option><option value="files">只要选中的文件路径</option>
+          </select>
+        </Row>
+        <Fold title="它是怎么抓到选区的">
+          按下快捷键时先模拟一次 ⌘C 抓走当前选区，再把它当参数跑「回车」分支；抓完会把原来的剪贴板还回去。<br />
+          下游还能用 <Code>{"{var:selection_type}"}</Code>（text/files）和 <Code>{"{var:selection_files}"}</Code>（每行一个路径）分开处理。<br />
+          需要在「系统设置 → 隐私与安全性 → 辅助功能」里给 Umbra 授权，否则抓不到选区。
+        </Fold>
+      </>) : null}
+
+      {node.type === "trigger.always" ? (
+        <Blank>无需关键词，任意输入都会尝试运行下游的输入节点（计算器、单位换算这类），结果并入普通搜索。<br />
+          注意它<b>不是</b>「搜不到才兜底」——每次查询都会跑一遍，所以下游的输入节点自己要能对不相干的输入返回空。</Blank>
+      ) : null}
+
+      {/* ── 输入 ──────────────────────────────────────────────────────────── */}
+      {node.type === "input.scriptfilter" ? (<>
+        <Row label="脚本" top>
+          <textarea className={`${FLD_MONO} h-[90px] resize-y`} value={s("script")} onChange={(e) => set("script", e.target.value)} placeholder={`./runtime/txiki ./index.js "$1"`} />
+          <Hint>stdout 返回 Alfred 风格 JSON（<Code>{"{items:[…]}"}</Code>），<Code>$1</Code> 是当前输入。</Hint>
+        </Row>
+        <Row label="运行目录"><input className={FLD_MONO} value={s("cwd")} onChange={(e) => set("cwd", e.target.value)} placeholder="可选，支持 ~；留空=工作流自己的目录" /></Row>
+        <Row label="防抖" top>
+          <input type="number" className={`${FLD_MONO} w-[150px]`} value={s("debounceMs", "0")} onChange={(e) => set("debounceMs", e.target.value)} />
+          <Hint>毫秒，0=每敲一下就跑。不设的话打一个七字的词就是七个进程 —— 脚本一慢就把机器拖住，而前六次的结果压根没人看。脚本要联网或要跑一会儿的建议填 150–300，上限 1000。</Hint>
+        </Row>
+        <CheckRow last checked={!!c.alfredFilters} onChange={(v) => set("alfredFilters", v)}>由 Umbra 按输入过滤结果（否则脚本自己过滤）</CheckRow>
+      </>) : null}
+
+      {node.type === "input.listfilter" ? (<>
+        <Row label="匹配方式" last>
+          <select className={FLD} value={s("match", "word")} onChange={(e) => set("match", e.target.value)}>
+            <option value="word">词首匹配（标题/副标题里任一词以输入开头）</option>
+            <option value="contains">任意位置包含</option>
+            <option value="none">不过滤（整表全部给出）</option>
+          </select>
+        </Row>
+        <CheckRow last checked={c.learn !== false} onChange={(v) => set("learn", v)}>参与使用频率学习（常选的项会被顶到前面）</CheckRow>
+        <Sec title="列表" note="拖动左侧手柄调序 · 右键行内菜单删除" />
+        <ListRowsEditor rows={(c.items as ListRow[]) || []} onChange={(r) => set("items", r)} />
+        <Fold title="这个节点怎么用">
+          不用写脚本的 Script Filter：维护一张固定列表，按输入过滤后作为结果给出。选中某项时，它的「参数」会作为 arg 传给下游。<br />
+          「参数」一栏支持 <Code>{"{query}"}</Code> / <Code>{"{var:名称}"}</Code> 等占位符；图标一栏填 emoji 或图片文件的绝对路径。
+        </Fold>
+      </>) : null}
+
+      {node.type === "input.codec" ? (
+        <Row label="编解码类型" top last>
+          <select className={FLD} value={s("mode", "unicode")} onChange={(e) => set("mode", e.target.value)}>
+            <option value="unicode">Unicode</option><option value="url">URL</option><option value="base64">Base64</option>
+          </select>
+          <Hint>编还是解按输入自动判断，不用分成两个节点。</Hint>
+        </Row>
+      ) : null}
+
+      {node.type === "input.calc" || node.type === "input.units" ? (
+        <Blank>{node.type === "input.calc" ? "输入算式即时求值（如 3*4+2）。" : "输入换算式即时换算（如 10km to mi、72f to c）。"}回车复制结果。无配置项。</Blank>
+      ) : null}
+
+      {node.type === "input.filefilter" ? (<>
+        <Row label="关键词"><input className={FLD_MONO} value={s("keyword")} onChange={(e) => set("keyword", e.target.value)} placeholder="{query}" /></Row>
+        <Row label="搜索目录" top>
+          <textarea className={`${FLD_MONO} h-[70px] resize-y`} value={s("scopes")} onChange={(e) => set("scopes", e.target.value)} placeholder={"~/Documents\n~/Downloads"} />
+          <Hint>一行一个，支持 ~。留空=全盘（仅 macOS 支持）。</Hint>
+        </Row>
+        <Row label="文件类型">
+          <select className={FLD} value={s("kind", "any")} onChange={(e) => set("kind", e.target.value)}>
+            <option value="any">全部</option><option value="folder">文件夹</option><option value="image">图片</option>
+            <option value="audio">音频</option><option value="movie">视频</option><option value="pdf">PDF</option>
+            <option value="text">文本</option><option value="archive">压缩包</option>
+          </select>
+        </Row>
+        <Row label="扩展名" top>
+          <input className={FLD_MONO} value={s("exts")} onChange={(e) => set("exts", e.target.value)} placeholder="png, jpg" />
+          <Hint>可选，逗号分隔。和上面的类型是「且」的关系。</Hint>
+        </Row>
+        <Row label="最少几个字" last>
+          <input type="number" className={`${FLD_MONO} w-[150px]`} value={s("minChars", "2")} onChange={(e) => set("minChars", e.target.value)} />
+        </Row>
+        <Fold title="搜索是怎么做的 · 选中之后能接什么">
+          <b>macOS 走 Spotlight</b>（系统索引，全盘也很快，还认它索引到的各种元数据）；其它平台没有这套索引，退回「在指定目录里现走一遍」，所以<b>必须填搜索目录</b>，而且只走有限层数、有访问量上限 —— 现走全盘会把主进程卡住。<br />
+          选中一条时把<b>绝对路径</b>传给下游，最常接的是「打开文件」「在文件管理器中显示」「在终端中打开」。⌘Y 可以直接预览选中的文件。
+        </Fold>
+      </>) : null}
+
+      {node.type === "input.appsfilter" ? (<>
+        <Row label="选中之后" last>
+          <select className={FLD} value={s("action", "switch")} onChange={(e) => set("action", e.target.value)}>
+            <option value="switch">切换到这个应用</option><option value="quit">退出这个应用</option>
+          </select>
+        </Row>
+        <Fold title="为什么只列有界面的应用">
+          <b>仅 macOS。</b>后台守护、输入法、菜单栏代理有几十个，混进来会把列表淹掉，而你想切换/退出的永远是有窗口的那些。<br />
+          不接下游时回车按上面这个设置执行；接了下游就按下游走（这时参数是应用名）。
+        </Fold>
+      </>) : null}
+
+      {node.type === "input.dict" ? (<>
+        <Row label="副标题" top last>
+          <input className={FLD} value={s("hint")} onChange={(e) => set("hint", e.target.value)} placeholder="在词典中查这个词" />
+          <Hint>可选。不接下游时回车直接开词典；接了下游就按下游走（这时参数是那个词本身）。</Hint>
+        </Row>
+        <Fold title="为什么不直接把释义显示出来">
+          取释义要调系统的 DictionaryServices 框架，我们这边（Node 主进程）没有可靠的调用途径。与其塞一个半残的假释义，不如老实把词送进词典 App —— 那本来也是查完词要去的地方。<b>仅 macOS。</b>
+        </Fold>
+      </>) : null}
+
+      {/* ── 工具 ──────────────────────────────────────────────────────────── */}
+      {node.type === "utility.args" ? (<>
+        <Row label="传给下游">
+          <select className={FLD} value={s("argMode", "keep")} onChange={(e) => set("argMode", e.target.value)}>
+            <option value="keep">原样透传上游参数</option><option value="set">用下面的模板改写</option><option value="clear">清空参数</option>
+          </select>
+        </Row>
+        {s("argMode", "keep") === "set" ? (
+          <Row label="参数模板" top last>
+            <input className={FLD_MONO} value={s("text")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" />
+            <Hint>留空则等同于原样透传。</Hint>
+          </Row>
+        ) : null}
+        <Sec title="变量" note="对本节点之后的下游可见" />
+        <KVEditor kv={(c.vars as Record<string, string>) || {}} onChange={(v) => set("vars", v)} />
+        <Fold title="可用占位符" count="5 个" open>
+          <CodeRow code="{query}">上游节点传来的参数</CodeRow>
+          <CodeRow code="{var:名称}">上面表里的变量</CodeRow>
+          <CodeRow code="{clipboard}">剪贴板当前内容</CodeRow>
+          <CodeRow code="{date}">日期，默认 YYYY-MM-DD，可写 {"{date:YYYY年MM月DD日 ddd}"}</CodeRow>
+          <CodeRow code="{random}">随机数，可写 {"{random:1-100}"} / {"{random:uuid}"} / {"{random:hex8}"}</CodeRow>
+          <div className="text-[11.5px] text-faint mt-[8px]">工作流里所有文本框通用，不只是这个节点。</div>
+        </Fold>
+      </>) : null}
+
+      {node.type === "utility.conditional" ? (<>
+        <Sec title="规则" note="从上往下匹配，命中第一条就走那个出口" />
+        <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
+        <Hint>全不中走「否则」出口。出口没连线时链路自然结束。</Hint>
+      </>) : null}
+
+      {node.type === "utility.filter" ? (<>
+        <Sec title="规则" note="任一条命中即放行" />
+        <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
+        <Hint>一条都不中就中断这条链路，下游不再执行。一条规则都不配 = 不过滤（全部放行）。</Hint>
+      </>) : null}
+
+      {node.type === "utility.fileconditional" ? (<>
+        <Row label="判定哪个路径" top last>
+          <input className={FLD_MONO} value={s("path")} onChange={(e) => set("path", e.target.value)} placeholder="{query}" />
+          <Hint>留空=上游参数。</Hint>
+        </Row>
+        <Sec title="规则" note="命中第一条就走那个出口" />
+        <FileRulesEditor rules={(c.rules as FileRule[]) || []} onChange={(r) => set("rules", r)} />
+        <Hint>只看<b>路径本身</b>（扩展名、是不是目录、名字里有什么），不读文件内容 —— 读内容既慢又要权限，按类型分流用不着。</Hint>
+      </>) : null}
+
+      {node.type === "utility.transform" ? (<>
+        <Row label="作用对象" top>
+          <input className={FLD_MONO} value={s("target")} onChange={(e) => set("target", e.target.value)} placeholder="变量名，留空则改参数" />
+          <Hint>留空=作用于参数 arg。</Hint>
+        </Row>
+        <Row label="变换方式" last>
+          <select className={FLD} value={s("mode", "upper")} onChange={(e) => set("mode", e.target.value)}>
+            <option value="upper">全部大写</option><option value="lower">全部小写</option><option value="title">首字母大写</option>
+            <option value="trim">去掉首尾空白</option><option value="urlencode">URL 编码</option><option value="urldecode">URL 解码</option>
+            <option value="base64encode">Base64 编码</option><option value="base64decode">Base64 解码</option>
+            <option value="reverse">反转字符串</option><option value="deaccent">去掉重音符号（café → cafe）</option>
+            <option value="alnum">只留字母数字（去标点空格）</option>
+          </select>
+        </Row>
+        <Fold title="几个容易踩的细节">
+          「反转」按字符算，emoji 和生僻字不会被劈成两半变乱码。<br />
+          「只留字母数字」认中文和各国文字，不是只留 ASCII —— 只留 ASCII 会把中文内容清空，那是个静悄悄的数据丢失。
+        </Fold>
+      </>) : null}
+
+      {node.type === "utility.replace" ? (<>
+        <Row label="作用对象" top>
+          <input className={FLD_MONO} value={s("target")} onChange={(e) => set("target", e.target.value)} placeholder="变量名，留空则改参数" />
+          <Hint>留空=作用于参数 arg。</Hint>
+        </Row>
+        <Row label="查找"><input className={FLD_MONO} value={s("find")} onChange={(e) => set("find", e.target.value)} /></Row>
+        <Row label="替换为"><input className={FLD_MONO} value={s("to")} onChange={(e) => set("to", e.target.value)} /></Row>
+        <CheckRow checked={!!c.regex} onChange={(v) => set("regex", v)}>按正则表达式</CheckRow>
+        <CheckRow last checked={!!c.ci} onChange={(v) => set("ci", v)}>忽略大小写</CheckRow>
+      </>) : null}
+
+      {node.type === "utility.delay" ? (
+        <Row label="延时秒数" top last>
+          <input className={`${FLD_MONO} w-[150px]`} type="number" min={0} max={60} step={0.5} value={Number(c.seconds ?? 1)} onChange={(e) => set("seconds", Number(e.target.value))} />
+          <Hint>上限 60 秒 —— 再长的等待应该拆成两条工作流，不然一条链路会挂在这里让人以为卡死了。</Hint>
+        </Row>
+      ) : null}
+
+      {node.type === "utility.debug" ? (<>
+        <Row label="打点文本" top>
+          <textarea className={`${FLD_MONO} h-[70px] resize-y`} value={s("text")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" />
+          <Hint>可用 <Code>{"{query}"}</Code>、<Code>{"{var:名称}"}</Code>、<Code>{"{variables}"}</Code>（全部变量转储）。</Hint>
+        </Row>
+        <Row label="打完之后" last>
+          <select className={FLD} value={s("after", "pass")} onChange={(e) => set("after", e.target.value)}>
+            <option value="pass">把入参原样传给下游（默认）</option>
+            <option value="replace">把打点文本作为下游参数</option>
+          </select>
+        </Row>
+        <CheckRow last checked={!!c.clear} onChange={(v) => set("clear", v)}>
+          执行到这里时先清空本工作流的调试记录
+          <Hint>文本会出现在顶栏「调试」抽屉里这个节点下面，和脚本输出同一个位置。变量名里带 key/token/password 这类词的值会自动打码。</Hint>
+        </CheckRow>
+      </>) : null}
+
+      {node.type === "utility.split" ? (<>
+        <Row label="按什么拆">
+          <div className="flex gap-[8px]">
+            <select className={FLD} value={s("with", "comma")} onChange={(e) => set("with", e.target.value)}>
+              <option value="comma">逗号 ,</option><option value="space">空格</option><option value="tab">制表符 Tab</option><option value="newline">换行</option>
+              <option value="custom">自定义…</option>
+            </select>
+            {s("with", "comma") === "custom" ? (
+              <input className={FLD_MONO} value={s("custom")} onChange={(e) => set("custom", e.target.value)} placeholder="如 ; 或 \n" />
             ) : null}
-            <div><span className={lab}>设置变量（对本节点之后的下游可见）</span>
-              <KVEditor kv={(c.vars as Record<string, string>) || {}} onChange={(v) => set("vars", v)} /></div>
-            <div className="text-[11px] text-muted leading-[1.7]">可用占位符（工作流里所有文本框通用）：<br />
-              <span className="font-mono">{"{query}"}</span> 上游参数 · <span className="font-mono">{"{var:名称}"}</span> 变量 · <span className="font-mono">{"{clipboard}"}</span> 剪贴板<br />
-              <span className="font-mono">{"{date}"}</span> 日期（默认 YYYY-MM-DD，可写 <span className="font-mono">{"{date:YYYY年MM月DD日 ddd}"}</span>）<br />
-              <span className="font-mono">{"{time}"}</span> 时间（默认 HH:mm:ss，同样可自定义格式）<br />
-              <span className="font-mono">{"{random}"}</span> 随机数（<span className="font-mono">{"{random:1-100}"}</span> 范围 · <span className="font-mono">{"{random:uuid}"}</span> · <span className="font-mono">{"{random:hex8}"}</span> · <span className="font-mono">{"{random:str6}"}</span>）
-            </div>
-          </>) : null}
-          {node.type === "utility.conditional" ? (<>
-            <div className="text-[11.5px] text-muted">从上往下逐条判断，命中哪条就走哪个出口；全不中走「否则」。出口没连线时链路自然结束。</div>
-            <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
-          </>) : null}
-          {node.type === "input.appsfilter" ? (<>
-            <div><span className={lab}>选中之后做什么</span>
-              <select className={inp} value={String(c.action || "switch")} onChange={(e) => set("action", e.target.value)}>
-                <option value="switch">切换到这个应用</option>
-                <option value="quit">退出这个应用</option>
-              </select></div>
-            <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS。</b>只列<b>有界面</b>的应用 ——
-              后台守护、输入法、菜单栏代理有几十个，混进来会把列表淹掉，而你想切换/退出的永远是有窗口的那些。<br />
-              不接下游时回车按上面这个设置执行；接了下游就按下游走（这时参数是应用名）。</div>
-          </>) : null}
-          {node.type === "utility.hide" ? (
-            <div className="text-[12px] text-muted leading-[1.7]">执行到这里先把快捷入口面板收起来，再继续跑下游。<br />
-              典型用法：下游要打开一个窗口或者发按键，不先收面板的话，新窗口会被面板挡住、按键也会发给面板自己。<br />
-              收起时会把焦点还给刚才那个应用。无配置项。</div>
+          </div>
+        </Row>
+        <CheckRow checked={c.trim !== false} onChange={(v) => set("trim", v)}>去掉每一项两端的空白</CheckRow>
+        <CheckRow checked={!!c.discardEmpty} onChange={(v) => set("discardEmpty", v)}>丢掉空项</CheckRow>
+        <Row label="输出方式" top last={s("output", "vars") === "args"}>
+          <select className={FLD} value={s("output", "vars")} onChange={(e) => set("output", e.target.value)}>
+            <option value="vars">写成变量（参数原样传给下游）</option>
+            <option value="args">作为参数列表（下游逐条执行一遍）</option>
+          </select>
+          {s("output", "vars") === "args" ? (
+            <Hint>下游会按拆出的每一项各跑一遍，串行且保持原顺序；末端接一个「Join 合并参数」就能再并回一条。一次最多 200 项，超出部分会被丢弃。</Hint>
           ) : null}
-          {node.type === "utility.show" ? (
-            <div className="text-[12px] text-muted leading-[1.7]">把快捷入口面板重新唤起，和「隐藏主面板」配套用：中间去干点活，干完把面板叫回来接着挑下一项。<br />
-              重新唤起的是空的搜索框（不恢复上一次的输入）。无配置项。</div>
-          ) : null}
-          {node.type === "output.keycombo" ? (<>
-            <div><span className={lab}>要发送的键位</span>
-              <input className={`${inp} font-mono`} value={String(c.accelerator || "")} onChange={(e) => set("accelerator", e.target.value)}
-                placeholder="Command+Shift+K" /></div>
-            <label className="flex items-center gap-2 text-[12px] text-muted">
-              <input type="checkbox" checked={c.hideFirst !== false} onChange={(e) => set("hideFirst", e.target.checked)} />发送前先收起面板（建议开着）
-            </label>
-            <div className="flex gap-2">
-              {c.hideFirst !== false ? (
-                <div className="flex-1"><span className={lab}>收起后等多久再发（毫秒）</span>
-                  <input type="number" className={`${inp} font-mono`} value={String(c.delayMs ?? 180)} onChange={(e) => set("delayMs", e.target.value)} /></div>
-              ) : null}
-              <div className="w-[130px]"><span className={lab}>连按几次</span>
-                <input type="number" className={`${inp} font-mono`} value={String(c.repeat ?? 1)} onChange={(e) => set("repeat", e.target.value)} /></div>
+        </Row>
+        {s("output", "vars") !== "args" ? (
+          <Row label="变量前缀" top last>
+            <input className={FLD_MONO} value={s("prefix")} onChange={(e) => set("prefix", e.target.value)} placeholder="split" />
+            <Hint>拆出的项写成 <Code>{`{var:${s("prefix", "split") || "split"}1}`}</Code>、<Code>{`{var:${s("prefix", "split") || "split"}2}`}</Code>…
+              另有 <Code>{`{var:${s("prefix", "split") || "split"}Count}`}</Code> 记总项数；参数本身不变。</Hint>
+          </Row>
+        ) : null}
+      </>) : null}
+
+      {node.type === "utility.join" ? (
+        <Row label="用什么连接" top last>
+          <div className="flex gap-[8px]">
+            <select className={FLD} value={s("with", "newline")} onChange={(e) => set("with", e.target.value)}>
+              <option value="comma">逗号 ,</option><option value="space">空格</option><option value="tab">制表符 Tab</option><option value="newline">换行</option>
+              <option value="custom">自定义…</option>
+            </select>
+            {s("with", "newline") === "custom" ? (
+              <input className={FLD_MONO} value={s("custom")} onChange={(e) => set("custom", e.target.value)} placeholder="如 ; 或 \n" />
+            ) : null}
+          </div>
+          <Hint>把上游「Split 拆分参数（参数列表）」扇出的多条参数收集起来，等最后一项到齐后连成一条再往下传。上游不是这种扇出时（只有单项），入参原样透传。</Hint>
+        </Row>
+      ) : null}
+
+      {node.type === "utility.junction" ? (
+        <Blank>纯理线用的中转点：多条连线先并到这里，再从这里出一条到下游，画布上就不用画一把交叉的线。<br />
+          参数、变量、出口一律原样透传，它不改任何数据，也没有配置项。</Blank>
+      ) : null}
+
+      {node.type === "utility.random" ? (<>
+        <Row label="生成什么">
+          <select className={FLD} value={s("mode", "range")} onChange={(e) => set("mode", e.target.value)}>
+            <option value="range">整数（指定范围）</option><option value="uuid">UUID</option>
+            <option value="hex">十六进制串</option><option value="str">字母数字随机串</option>
+            <option value="list">从列表里随机取一项</option>
+          </select>
+        </Row>
+        {s("mode", "range") === "list" ? (
+          <Row label="列表" top>
+            <textarea className={`${FLD} h-[80px] resize-y`} value={s("list")} onChange={(e) => set("list", e.target.value)} placeholder={"面\n饭\n沙拉"} />
+            <Hint>一行一项，支持占位符，所以列表本身也能是动态的。</Hint>
+          </Row>
+        ) : null}
+        {s("mode", "range") === "range" ? (
+          <Row label="范围">
+            <div className="flex items-center gap-[8px]">
+              <input type="number" className={FLD_MONO} value={String(c.min ?? 1)} onChange={(e) => set("min", e.target.value)} />
+              <span className="flex-none text-[12px] text-faint">到</span>
+              <input type="number" className={FLD_MONO} value={String(c.max ?? 100)} onChange={(e) => set("max", e.target.value)} />
             </div>
-            <div className="text-[11px] text-muted leading-[1.7]">键位写法和别处录快捷键一样：<span className="font-mono">Command+Shift+K</span>、
-              <span className="font-mono">Control+Return</span>、<span className="font-mono">Alt+Left</span>。功能键直接写名字（Return / Tab / Space / Escape / Delete / 方向键 / F1–F12）。<br />
-              <b>需要「辅助功能」权限</b>，没授权时会明确报出来，不会静默失败。<br />
-              不收起面板的话，按键会发给面板自己而不是你以为的那个应用 —— 所以默认开着，
-              等待的那一下是留给系统把焦点真正交还回去的时间。<br />
-              「连按几次」用来做 Tab 缩进三级、方向键连走这类，上限 20 次 —— 模拟按键发不出去时没有回执，发几百次只会让人以为死机了。</div>
-          </>) : null}
-          {node.type === "automation.system" ? (<>
-            <div><span className={lab}>命令</span>
-              <select className={inp} value={String(c.command || "lock")} onChange={(e) => set("command", e.target.value)}>
-                <option value="lock">锁定屏幕</option>
-                <option value="sleep">睡眠</option>
-                <option value="screensaver">启动屏保</option>
-                <option value="emptytrash">清空废纸篓</option>
-                <option value="hideothers">隐藏其它应用</option>
-                <option value="logout">注销当前用户</option>
-              </select></div>
-            <label className="flex items-center gap-2 text-[12px] text-muted">
-              <input type="checkbox" checked={c.confirm === true} onChange={(e) => set("confirm", e.target.checked)} />执行前弹确认框
-            </label>
-            <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS。</b>
-              这里刻意<b>没有关机和重启</b> —— 工作流误触的代价太大。<br />
-              绑了热键的话建议给「注销」「清空废纸篓」这类勾上确认框：这两件事不可逆，而热键最容易误触。点「取消」算正常结束，不报错。<br />
-              「清空废纸篓」本身还会再弹一次系统自己的确认框，不会无声删掉东西。</div>
-          </>) : null}
-          {node.type === "input.filefilter" ? (<>
-            <div><span className={lab}>关键词（按文件名匹配）</span>
-              <input className={`${inp} font-mono`} value={String(c.keyword || "")} onChange={(e) => set("keyword", e.target.value)} placeholder="{query}" /></div>
-            <div><span className={lab}>搜索目录（一行一个，支持 ~；留空=全盘）</span>
-              <textarea className={`${inp} font-mono h-[70px] resize-y`} value={String(c.scopes || "")} onChange={(e) => set("scopes", e.target.value)}
-                placeholder={"~/Documents\n~/Downloads"} /></div>
-            <div><span className={lab}>文件类型</span>
-              <select className={inp} value={String(c.kind || "any")} onChange={(e) => set("kind", e.target.value)}>
-                <option value="any">全部</option>
-                <option value="folder">文件夹</option>
-                <option value="image">图片</option>
-                <option value="audio">音频</option>
-                <option value="movie">视频</option>
-                <option value="pdf">PDF</option>
-                <option value="text">文本</option>
-                <option value="archive">压缩包</option>
-              </select></div>
-            <div><span className={lab}>扩展名（可选，逗号分隔；与上面的类型是「且」）</span>
-              <input className={`${inp} font-mono`} value={String(c.exts || "")} onChange={(e) => set("exts", e.target.value)} placeholder="png, jpg" /></div>
-            <div><span className={lab}>最少几个字才开始搜</span>
-              <input type="number" className={`${inp} font-mono`} value={String(c.minChars ?? 2)} onChange={(e) => set("minChars", e.target.value)} /></div>
-            <div className="text-[11px] text-muted leading-[1.7]">
-              <b>macOS 走 Spotlight</b>（系统索引，全盘也很快，还认它索引到的各种元数据）；
-              其它平台没有这套索引，退回「在指定目录里现走一遍」，所以<b>必须填搜索目录</b>，
-              而且只走有限层数、有访问量上限 —— 现走全盘会把主进程卡住。<br />
-              选中一条时把<b>绝对路径</b>传给下游，最常接的是「打开文件」「在文件管理器中显示」「在终端中打开」。
-              ⌘Y 可以直接预览选中的文件。
-            </div>
-          </>) : null}
-          {node.type === "utility.fileconditional" ? (<>
-            <div><span className={lab}>判定哪个路径（留空=上游参数）</span>
-              <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query}" /></div>
-            <div className="text-[11.5px] text-muted">从上往下逐条判断，命中哪条走哪个出口，全不中走「否则」。
-              只看<b>路径本身</b>（扩展名、是不是目录、名字里有什么），不读文件内容 —— 读内容既慢又要权限，按类型分流用不着。</div>
-            <FileRulesEditor rules={(c.rules as FileRule[]) || []} onChange={(r) => set("rules", r)} />
-          </>) : null}
-          {node.type === "action.reveal" ? (<>
-            <div><span className={lab}>要定位的路径</span>
-              <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query} 或固定路径（支持 ~）" /></div>
-            <div className="text-[11px] text-muted">在系统文件管理器里把窗口开到它所在的位置并选中它 —— <b>不打开文件本身</b>。路径不存在时会明确报错，不会静默打开一个空窗口。</div>
-          </>) : null}
-          {node.type === "action.browse" ? (<>
-            <div><span className={lab}>要打开的目录</span>
-              <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query} 或固定路径（支持 ~）" /></div>
-            <div><span className={lab}>用哪个终端</span>
-              <input className={inp} value={String(c.app || "")} onChange={(e) => set("app", e.target.value)} placeholder="Terminal（也可填 iTerm、Warp…）" /></div>
-            <div className="text-[11px] text-muted"><b>仅 macOS。</b>给的是文件就自动取它所在的目录 —— 说「在终端里打开这个」时想要的几乎总是所在目录，拿文件路径当工作目录只会失败。</div>
-          </>) : null}
-          {node.type === "action.filebuffer" ? (<>
-            <div><span className={lab}>这个节点做什么</span>
-              <select className={inp} value={String(c.mode || "add")} onChange={(e) => set("mode", e.target.value)}>
-                <option value="add">收：把上游的路径攒进暂存区</option>
-                <option value="list">取：把攒的全部交给下游（换行分隔）</option>
-                <option value="clear">清空暂存区</option>
-              </select></div>
-            {String(c.mode || "add") !== "clear" && String(c.mode || "add") !== "list" ? (
-              <div><span className={lab}>收哪些路径（多条用换行分隔）</span>
-                <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="{query}" /></div>
-            ) : null}
-            {String(c.mode || "add") === "list" ? (
-              <label className="flex items-center gap-2 text-[12px] text-muted">
-                <input type="checkbox" checked={c.clearAfter !== false} onChange={(e) => set("clearAfter", e.target.checked)} />取出后清空暂存区
-              </label>
-            ) : null}
-            <div className="text-[11px] text-muted leading-[1.7]">典型用法：一个工作流按「收」把文件一个个加进来，另一个工作流按「取」一次性处理掉。<br />
-              暂存区按「工作流 + 节点」分桶，<b>只在内存里，退出即清空</b> —— 它是「这几分钟挑几个文件一起处理」的临时篮子，不是长期收藏夹。重复路径会自动去重。</div>
-          </>) : null}
-          {node.type === "input.dict" ? (<>
-            <div className="text-[12px] text-muted leading-[1.7]">把输入当作一个要查的词列出来，回车在系统「词典」App 里打开它。<b>仅 macOS。</b><br />
-              这里<b>不内联释义</b>：取释义要调系统的 DictionaryServices 框架，我们这边（Node 主进程）没有可靠的调用途径，
-              与其塞一个半残的假释义，不如老实把词送进词典 App —— 那本来也是查完词要去的地方。</div>
-            <div><span className={lab}>副标题（可选）</span>
-              <input className={inp} value={String(c.hint || "")} onChange={(e) => set("hint", e.target.value)} placeholder="在词典中查这个词" /></div>
-            <div className="text-[11px] text-muted">不接下游时回车直接开词典；接了下游就按下游走（这时参数是那个词本身）。</div>
-          </>) : null}
-          {node.type === "action.applescript" ? (<>
-            <div><span className={lab}>AppleScript（可用 {"{query}"} / {"{var:名称}"}）</span>
-              <textarea className={`${inp} font-mono h-[110px] resize-y`} value={String(c.script || "")} onChange={(e) => set("script", e.target.value)}
-                placeholder={'tell application "Finder" to activate'} /></div>
-            <div><span className={lab}>脚本的返回值怎么处理</span>
-              <select className={inp} value={String(c.output || "none")} onChange={(e) => set("output", e.target.value)}>
-                <option value="none">忽略（参数原样传给下游）</option>
-                <option value="replace">作为参数传给下游</option>
-                <option value="copy">复制到剪贴板</option>
-              </select></div>
-            <div><span className={lab}>脚本失败时</span>
-              <select className={inp} value={String(c.onError || "stop")} onChange={(e) => set("onError", e.target.value)}>
-                <option value="stop">停止这条链路（默认）</option>
-                <option value="continue">忽略错误继续往下走</option>
-              </select></div>
-            <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS</b>，别的平台上会直接提示不可用并停下，不会静默什么都不做。<br />
-              脚本经标准输入送给 osascript，所以正文里带引号、换行、中文都没问题。超时 20 秒 —— AppleScript 要么秒回，要么就是弹了个框在等人。</div>
-          </>) : null}
-          {node.type === "action.terminal" ? (<>
-            <div><span className={lab}>命令（{"{query}"} = 上游参数）</span>
-              <textarea className={`${inp} font-mono h-[70px] resize-y`} value={String(c.command || "")} onChange={(e) => set("command", e.target.value)}
-                placeholder={"cd ~/Downloads && ls -la"} /></div>
-            <div><span className={lab}>用哪个终端</span>
-              <select className={inp} value={String(c.app || "Terminal")} onChange={(e) => set("app", e.target.value)}>
-                <option value="Terminal">Terminal（系统自带）</option>
-                <option value="iTerm">iTerm</option>
-              </select></div>
-            <div className="text-[11px] text-muted leading-[1.7]"><b>和 Run Script 的区别</b>：Run Script 在后台跑、拿得到 stdout；这个节点是把命令<b>打进终端窗口</b>里，你能看着它跑，但<b>输出取不回来</b>（终端在另一个进程里）。所以下游收到的还是上游那个参数，不是命令的结果。<br />
-              <b>仅 macOS</b>。只支持这两个终端 —— 别的终端要各自的 AppleScript 方言，填别的会明确报错而不是静默开个空窗口。</div>
-          </>) : null}
-          {node.type === "action.websearch" ? (<>
-            <div><span className={lab}>搜索引擎</span>
-              <select className={inp} value={String(c.engine || "google")} onChange={(e) => set("engine", e.target.value)}>
-                <option value="google">Google（默认）</option>
-                <option value="bing">Bing</option>
-                <option value="duckduckgo">DuckDuckGo</option>
-                <option value="baidu">百度</option>
-                <option value="github">GitHub</option>
-                <option value="wikipedia">维基百科</option>
-                <option value="custom">自定义地址…</option>
-              </select></div>
-            {String(c.engine || "google") === "custom" ? (
-              <div><span className={lab}>地址模板（必须含 {"{query}"} 占位符）</span>
-                <input className={`${inp} font-mono`} value={String(c.custom || "")} onChange={(e) => set("custom", e.target.value)}
-                  placeholder="https://example.com/search?q={query}" /></div>
-            ) : null}
-            <div><span className={lab}>搜什么（{"{query}"} = 上游参数，可以拼前缀）</span>
-              <input className={`${inp} font-mono`} value={String(c.query || "")} onChange={(e) => set("query", e.target.value)} placeholder="{query}" /></div>
-            <div className="flex gap-1.5"><input className={`flex-1 ${inp}`} value={String(c.browser || "")} onChange={(e) => set("browser", e.target.value)} placeholder="用哪个浏览器打开（留空=系统默认）" />
-              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const a = await api.pickApp(); if (a) set("browser", a); }}>选择</button></div>
-            <div className="text-[11px] text-muted leading-[1.7]">关键词会自动做 URL 编码，中文和空格都不用自己处理。<br />
-              引擎是<b>挂在这个节点上</b>的，不是全局设置 —— 一条工作流搜 GitHub、另一条搜百度是常态。</div>
-          </>) : null}
-          {node.type === "output.speak" ? (<>
-            <div><span className={lab}>念什么（{"{query}"} = 上游参数）</span>
-              <textarea className={`${inp} h-[60px] resize-y`} value={String(c.text || "")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" /></div>
-            <div className="flex gap-2">
-              <div className="flex-1"><span className={lab}>音色（可选，macOS）</span>
-                <input className={inp} value={String(c.voice || "")} onChange={(e) => set("voice", e.target.value)} placeholder="如 Tingting / Samantha" /></div>
-              <div className="w-[120px]"><span className={lab}>语速（0=默认）</span>
-                <input type="number" className={`${inp} font-mono`} value={String(c.rate ?? 0)} onChange={(e) => set("rate", e.target.value)} /></div>
-            </div>
-            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.wait} onChange={(e) => set("wait", e.target.checked)} />念完再往下走</label>
-            <div className="text-[11px] text-muted leading-[1.7]">macOS 用系统自带的 say，Windows 用 SAPI，两边都不用装东西；Linux 上会明确提示不可用。<br />
-              <b>默认不等它念完</b> —— 念一长段时不该把整条链路卡在这儿。语速取值 50–500，超出会被夹回来。<br />
-              音色名可以在终端跑 <span className="font-mono">say -v ?</span> 看全表。</div>
-          </>) : null}
-          {node.type === "output.sound" ? (<>
-            <div><span className={lab}>系统提示音（不填下面的文件时用这个）</span>
-              <select className={inp} value={String(c.system || "Glass")} onChange={(e) => set("system", e.target.value)}>
-                {["Glass", "Ping", "Pop", "Purr", "Submarine", "Basso", "Blow", "Bottle", "Frog", "Funk", "Hero", "Morse", "Sosumi", "Tink"].map((s) => <option key={s} value={s}>{s}</option>)}
-              </select></div>
-            <div className="flex gap-1.5"><input className={`flex-1 ${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="自定义声音文件（可选，支持 ~）" />
-              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const p = await api.pickPath(); if (p) set("path", p); }}>选择</button></div>
-            <div className="text-[11px] text-muted leading-[1.7]">macOS 用 afplay，Windows 用 SoundPlayer；<b>一律不等它放完</b> —— 提示音的意义就是不打断流程。<br />
-              文件不存在时会明确报错停下，而不是静悄悄地什么都没响（那种最难查）。<br />
-              上面这些是 macOS 自带的提示音，在 <span className="font-mono">/System/Library/Sounds</span> 里。</div>
-          </>) : null}
-          {node.type === "automation.shortcut" ? (<>
-            <div><span className={lab}>快捷指令名称（要和「快捷指令」App 里完全一致）</span>
-              <input className={inp} value={String(c.name || "")} onChange={(e) => set("name", e.target.value)} placeholder="例如：整理下载文件夹" /></div>
-            <label className="flex items-center gap-2 text-[12px] text-muted">
-              <input type="checkbox" checked={c.input !== false} onChange={(e) => set("input", e.target.checked)} />把上游参数作为输入传给它
-            </label>
-            <div><span className={lab}>它的输出怎么处理</span>
-              <select className={inp} value={String(c.output || "none")} onChange={(e) => set("output", e.target.value)}>
-                <option value="none">忽略（参数原样传给下游）</option>
-                <option value="replace">作为参数传给下游</option>
-              </select></div>
-            {String(c.output || "none") !== "replace" ? (
-              <label className="flex items-center gap-2 text-[12px] text-muted">
-                <input type="checkbox" checked={c.wait !== false} onChange={(e) => set("wait", e.target.checked)} />等它跑完再继续
-              </label>
-            ) : null}
-            <div className="text-[11px] text-muted leading-[1.7]"><b>需要 macOS 12 及以上</b>（用系统自带的 shortcuts 命令），找不到该命令时会明确提示。<br />
-              参数经标准输入传入、结果从标准输出取回，不落临时文件。超时 2 分钟 —— 快捷指令可能真要跑一会儿。<br />
-              不勾「传入输入」时连输入通道都不开：有些快捷指令收到空输入会走另一条分支。<br />
-              不勾「等它跑完」就是发出去立刻往下走，适合那种要跑好几分钟的整理类指令。要拿返回值就必须等，所以选了「作为参数传给下游」时这个开关不出现 —— 否则会拿到一个空参数还以为成功了。</div>
-          </>) : null}
-          {node.type === "automation.music" ? (<>
-            <div><span className={lab}>动作</span>
-              <select className={inp} value={String(c.command || "playpause")} onChange={(e) => set("command", e.target.value)}>
-                <option value="playpause">播放 / 暂停</option>
-                <option value="play">播放</option>
-                <option value="pause">暂停</option>
-                <option value="next">下一首</option>
-                <option value="previous">上一首</option>
-                <option value="volume">设置音量</option>
-                <option value="now">当前播放（把「歌名 — 歌手」传给下游）</option>
-              </select></div>
-            {String(c.command || "playpause") === "volume" ? (
-              <div><span className={lab}>音量（0–100）</span>
-                <input type="number" className={`${inp} font-mono`} value={String(c.volume ?? 50)} onChange={(e) => set("volume", e.target.value)} /></div>
-            ) : null}
-            <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS</b>，控制的是系统「音乐」App。<br />
-              最常见的失败是音乐 App 没开着 —— 这时会把系统原话带出来，不自己编一句模糊的提示。</div>
-          </>) : null}
-          {node.type === "utility.junction" ? (
-            <div className="text-[12px] text-muted leading-[1.7]">纯理线用的中转点：多条连线先并到这里，再从这里出一条到下游，画布上就不用画一把交叉的线。<br />
-              参数、变量、出口一律原样透传，它不改任何数据，也没有配置项。</div>
-          ) : null}
-          {node.type === "utility.filter" ? (<>
-            <div className="text-[11.5px] text-muted">逐条判断，<b>任一条命中就放行</b>；一条都不中就中断这条链路，下游不再执行。
-              一条规则都不配 = 不过滤（全部放行）。</div>
-            <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
-          </>) : null}
-          {node.type === "utility.random" ? (<>
-            <div><span className={lab}>生成什么</span>
-              <select className={inp} value={String(c.mode || "range")} onChange={(e) => set("mode", e.target.value)}>
-                <option value="range">整数（指定范围）</option>
-                <option value="uuid">UUID</option>
-                <option value="hex">十六进制串</option>
-                <option value="str">字母数字随机串</option>
-                <option value="list">从列表里随机取一项</option>
-              </select></div>
-            {String(c.mode || "range") === "list" ? (
-              <div><span className={lab}>列表（一行一项，支持占位符）</span>
-                <textarea className={`${inp} h-[80px] resize-y`} value={String(c.list || "")} onChange={(e) => set("list", e.target.value)}
-                  placeholder={"今天吃什么\n面\n饭\n沙拉"} /></div>
-            ) : null}
-            {String(c.mode || "range") === "range" ? (
-              <div className="flex items-center gap-[8px]">
-                <div className="flex-1"><span className={lab}>最小值</span>
-                  <input type="number" className={`${inp} font-mono`} value={String(c.min ?? 1)} onChange={(e) => set("min", e.target.value)} /></div>
-                <div className="flex-1"><span className={lab}>最大值</span>
-                  <input type="number" className={`${inp} font-mono`} value={String(c.max ?? 100)} onChange={(e) => set("max", e.target.value)} /></div>
-              </div>
-            ) : null}
-            {["hex", "str"].includes(String(c.mode || "range")) ? (
-              <div><span className={lab}>长度（1–64）</span>
-                <input type="number" className={`${inp} font-mono`} value={String(c.length ?? 8)} onChange={(e) => set("length", e.target.value)} /></div>
-            ) : null}
-            <div><span className={lab}>写到哪里（留空=改参数 arg）</span>
-              <input className={`${inp} font-mono`} value={String(c.target || "")} onChange={(e) => set("target", e.target.value)} placeholder="变量名，留空则改参数" /></div>
-            <div className="text-[11px] text-muted">和占位符 {"{random}"} 用的是同一套实现。只想在某个文本里插一个随机数的话，直接写占位符更省事；这个节点适合「先生成、后面多处引用」。</div>
-          </>) : null}
-          {node.type === "utility.jsonconfig" ? (<>
-            <div><span className={lab}>JSON（最外层是一个对象，键=变量名）</span>
-              <textarea className={`${inp} font-mono h-[110px] resize-y`} value={String(c.json || "")} onChange={(e) => set("json", e.target.value)}
-                placeholder={'{\n  "api": "https://example.com",\n  "keyword": "{query}"\n}'} /></div>
-            <div className="text-[11px] text-muted leading-[1.7]">一次设置多个变量，省得摆一排 Args &amp; Vars。<br />
-              值里可以用 {"{query}"} / {"{var:名称}"} 等占位符，替换在 <b>解析之后</b> 做，所以值里带引号和换行都不会撑坏 JSON。<br />
-              值不是字符串时（数字、布尔、嵌套对象）会转成字符串存 —— 变量表只存字符串。<br />
-              JSON 不合法会中断链路并提示，不会带着半份变量往下跑。<br />
-              <b>还认包裹写法</b>（这才是它叫 Config 的由来）：<span className="font-mono">{"{\"alfredworkflow\":{\"arg\":…,\"variables\":{…},\"config\":{…}}}"}</span> ——
-              其中 <span className="font-mono">config</span> 会<b>临时改写紧接着的下游节点</b>的配置字段（比如按变量决定「打开网址」去哪个地址），只对这一次执行生效，不会写回保存的配置。</div>
-          </>) : null}
-          {node.type === "utility.transform" ? (<>
-            <div><span className={lab}>作用对象（留空=作用于参数 arg）</span>
-              <input className={`${inp} font-mono`} value={String(c.target || "")} onChange={(e) => set("target", e.target.value)} placeholder="变量名，留空则改参数" /></div>
-            <div><span className={lab}>变换方式</span>
-              <select className={inp} value={String(c.mode || "upper")} onChange={(e) => set("mode", e.target.value)}>
-                <option value="upper">全部大写</option><option value="lower">全部小写</option><option value="title">首字母大写</option>
-                <option value="trim">去掉首尾空白</option><option value="urlencode">URL 编码</option><option value="urldecode">URL 解码</option>
-                <option value="base64encode">Base64 编码</option><option value="base64decode">Base64 解码</option>
-                <option value="reverse">反转字符串</option><option value="deaccent">去掉重音符号（café → cafe）</option>
-                <option value="alnum">只留字母数字（去标点空格）</option>
-              </select>
-              <div className="text-[11px] text-muted mt-1 leading-[1.7]">「反转」按字符算，emoji 和生僻字不会被劈成两半变乱码。<br />
-                「只留字母数字」认中文和各国文字，不是只留 ASCII —— 只留 ASCII 会把中文内容清空，那是个静悄悄的数据丢失。</div></div>
-          </>) : null}
-          {node.type === "utility.replace" ? (<>
-            <div><span className={lab}>作用对象（留空=作用于参数 arg）</span>
-              <input className={`${inp} font-mono`} value={String(c.target || "")} onChange={(e) => set("target", e.target.value)} placeholder="变量名，留空则改参数" /></div>
-            <div><span className={lab}>查找</span><input className={`${inp} font-mono`} value={String(c.find || "")} onChange={(e) => set("find", e.target.value)} /></div>
-            <div><span className={lab}>替换为</span><input className={`${inp} font-mono`} value={String(c.to || "")} onChange={(e) => set("to", e.target.value)} /></div>
-            <div className="flex gap-4">
-              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.regex} onChange={(e) => set("regex", e.target.checked)} />按正则表达式</label>
-              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.ci} onChange={(e) => set("ci", e.target.checked)} />忽略大小写</label>
-            </div>
-          </>) : null}
-          {node.type === "utility.delay" ? (
-            <div><span className={lab}>延时秒数（上限 60 秒）</span>
-              <input className={inp} type="number" min={0} max={60} step={0.5} value={Number(c.seconds ?? 1)} onChange={(e) => set("seconds", Number(e.target.value))} /></div>
-          ) : null}
-          {node.type === "utility.debug" ? (<>
-            <div><span className={lab}>打点文本（{"{query}"}=参数，{"{var:名称}"}=变量，{"{variables}"}=全部变量转储）</span>
-              <textarea className={`${inp} font-mono h-[70px] resize-y`} value={String(c.text ?? "")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" /></div>
-            <div><span className={lab}>打完之后</span>
-              <select className={inp} value={String(c.after || "pass")} onChange={(e) => set("after", e.target.value)}>
-                <option value="pass">把入参原样传给下游（默认）</option>
-                <option value="replace">把打点文本作为下游参数</option>
-              </select></div>
-            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.clear} onChange={(e) => set("clear", e.target.checked)} />执行到这里时先清空本工作流的调试记录</label>
-            <div className="text-[11px] text-muted">文本会出现在顶栏「🐞 调试」抽屉里这个节点下面，和脚本输出同一个位置。变量名里带 key/token/password 这类词的值会自动打码。</div>
-          </>) : null}
-          {node.type === "utility.split" ? (<>
-            <div><span className={lab}>按什么拆</span>
-              <div className="flex gap-2">
-                <select className={inp} value={String(c.with || "comma")} onChange={(e) => set("with", e.target.value)}>
-                  <option value="comma">逗号 ,</option><option value="space">空格</option><option value="tab">制表符 Tab</option><option value="newline">换行</option>
-                  <option value="custom">自定义…</option>
-                </select>
-                {String(c.with || "comma") === "custom" ? (
-                  <input className={`${inp} font-mono flex-1`} value={String(c.custom || "")} onChange={(e) => set("custom", e.target.value)} placeholder="如 ; 或 \n" />
-                ) : null}
-              </div></div>
-            <div className="flex flex-col gap-1.5">
-              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={c.trim !== false} onChange={(e) => set("trim", e.target.checked)} />去掉每一项两端的空白</label>
-              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.discardEmpty} onChange={(e) => set("discardEmpty", e.target.checked)} />丢掉空项</label>
-            </div>
-            <div><span className={lab}>输出方式</span>
-              <select className={inp} value={String(c.output || "vars")} onChange={(e) => set("output", e.target.value)}>
-                <option value="vars">写成变量（参数原样传给下游）</option>
-                <option value="args">作为参数列表（下游逐条执行一遍）</option>
-              </select></div>
-            {String(c.output || "vars") === "args" ? (
-              <div className="text-[11px] text-muted">下游会按拆出的每一项各跑一遍，串行且保持原顺序；末端接一个「Join 合并参数」就能再并回一条。一次最多 200 项，超出部分会被丢弃。</div>
-            ) : (<>
-              <div><span className={lab}>变量前缀</span>
-                <input className={`${inp} font-mono`} value={String(c.prefix || "")} onChange={(e) => set("prefix", e.target.value)} placeholder="split" /></div>
-              <div className="text-[11px] text-muted">拆出的项写成 <span className="font-mono">{`{var:${String(c.prefix || "split")}1}`}</span>、<span className="font-mono">{`{var:${String(c.prefix || "split")}2}`}</span>… 另有 <span className="font-mono">{`{var:${String(c.prefix || "split")}Count}`}</span> 记总项数；参数本身不变。</div>
-            </>)}
-          </>) : null}
-          {node.type === "utility.join" ? (<>
-            <div><span className={lab}>用什么连接</span>
-              <div className="flex gap-2">
-                <select className={inp} value={String(c.with || "newline")} onChange={(e) => set("with", e.target.value)}>
-                  <option value="comma">逗号 ,</option><option value="space">空格</option><option value="tab">制表符 Tab</option><option value="newline">换行</option>
-                  <option value="custom">自定义…</option>
-                </select>
-                {String(c.with || "newline") === "custom" ? (
-                  <input className={`${inp} font-mono flex-1`} value={String(c.custom || "")} onChange={(e) => set("custom", e.target.value)} placeholder="如 ; 或 \n" />
-                ) : null}
-              </div></div>
-            <div className="text-[11px] text-muted">把上游「Split 拆分参数（参数列表）」扇出的多条参数收集起来，等最后一项到齐后连成一条再往下传。上游不是这种扇出时（只有单项），入参原样透传。</div>
-          </>) : null}
-          {node.type === "output.writefile" ? (<>
-            <div><span className={lab}>文件名 / 路径（支持 ~、{"{query}"}、{"{date}"} 等占位符）</span>
-              <input className={`${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="notes-{date}.md" />
-              <div className="text-[11px] text-muted mt-1">填相对路径就写到本工作流的 data 目录里（脚本读得到，整包拷走时也跟着走）；要放别处就写绝对路径。</div></div>
-            <div><span className={lab}>内容（留空视为空文件）</span>
-              <textarea className={`${inp} font-mono h-[70px] resize-y`} value={String(c.content ?? "")} onChange={(e) => set("content", e.target.value)} placeholder="{query}" /></div>
-            <div><span className={lab}>文件已存在时</span>
-              <select className={inp} value={String(c.ifExists || "overwrite")} onChange={(e) => set("ifExists", e.target.value)}>
-                <option value="overwrite">覆盖</option><option value="append">追加到末尾</option>
-                <option value="prepend">插到开头（新的在上面）</option>
-                <option value="unique">另存为 名称-1.后缀</option><option value="skip">什么都不做</option>
-              </select></div>
-            <div className="flex flex-col gap-1.5">
-              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.uuid} onChange={(e) => set("uuid", e.target.checked)} />文件名后加一段 UUID（每次都是新文件）</label>
-              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={c.mkdirs !== false} onChange={(e) => set("mkdirs", e.target.checked)} />自动创建中间目录</label>
-              <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.allowEmpty} onChange={(e) => set("allowEmpty", e.target.checked)} />允许写空文件（不勾则内容为空时中止）</label>
-            </div>
-            <div className="text-[11px] text-muted">写完后，最终的绝对路径会作为参数传给下游 —— 接「打开文件」或「复制」就顺手了。</div>
-          </>) : null}
-          {node.type === "action.ask_assistant" ? (<>
-            <div><span className={lab}>发给秘书的内容（{"{query}"}=上游参数）</span>
-              <textarea className={`${inp} h-[70px] resize-y`} value={String(c.prompt || "")} onChange={(e) => set("prompt", e.target.value)} placeholder="{query}" /></div>
-            <div><span className={lab}>文本视图标题（可选）</span><input className={inp} value={String(c.title || "")} onChange={(e) => set("title", e.target.value)} placeholder="秘书" /></div>
-            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={c.show !== false} onChange={(e) => set("show", e.target.checked)} />打开文本视图展示（等待期间显示加载动画）</label>
-            <div className="text-[11px] text-muted">秘书的回复会作为参数继续传给下游节点。</div>
-          </>) : null}
-          {node.type === "action.create_task" ? (<>
-            <div><span className={lab}>任务内容（{"{query}"}=上游参数）</span>
-              <textarea className={`${inp} h-[60px] resize-y`} value={String(c.text || "")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" /></div>
-            <div><span className={lab}>发给秘书时加的前缀</span><input className={inp} value={String(c.prefix ?? "")} onChange={(e) => set("prefix", e.target.value)} placeholder="帮我建个任务：" /></div>
-            <div className="text-[11px] text-muted">说明：服务端目前没有独立的建任务接口，这里是「发给秘书 + 建任务前缀」的薄封装，真正建任务由秘书调工具完成。</div>
-          </>) : null}
-          {node.type === "action.device_skill" ? (<>
-            <div><span className={lab}>设备 ID（留空=自动挑一台有该技能的在线设备）</span>
-              <input className={`${inp} font-mono`} value={String(c.device || "")} onChange={(e) => set("device", e.target.value)} placeholder="留空自动选择" /></div>
-            <div className="flex gap-1.5">
-              <div className="flex-1"><span className={lab}>provider</span><input className={`${inp} font-mono`} value={String(c.provider || "")} onChange={(e) => set("provider", e.target.value)} placeholder="如 pc" /></div>
-              <div className="flex-1"><span className={lab}>skill</span><input className={`${inp} font-mono`} value={String(c.skill || "")} onChange={(e) => set("skill", e.target.value)} placeholder="技能名" /></div>
-            </div>
-            <div><span className={lab}>参数（JSON，{"{query}"} / {"{var:名称}"} 会按 JSON 字符串转义后插入）</span>
-              <textarea className={`${inp} font-mono h-[70px] resize-y`} value={String(c.params || "")} onChange={(e) => set("params", e.target.value)} placeholder={`{"text": "{query}"}`} /></div>
-            <div className="text-[11px] text-muted">执行结果会作为参数继续传给下游节点；派发失败会中止这条链路。</div>
-          </>) : null}
-          {node.type === "output.textview" ? (<>
-            <div><span className={lab}>标题（可选，留空用工作流名）</span><input className={inp} value={String(c.title || "")} onChange={(e) => set("title", e.target.value)} /></div>
-            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={c.markdown !== false} onChange={(e) => set("markdown", e.target.checked)} />按 Markdown 渲染</label>
-            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.append} onChange={(e) => set("append", e.target.checked)} />追加到已有内容（流式续写，不清屏）</label>
-          </>) : null}
-          {node.type === "output.notify" ? (<>
-            <div><span className={lab}>标题（留空=用工作流名）</span>
-              <input className={inp} value={String(c.title || "")} onChange={(e) => set("title", e.target.value)} placeholder="{query} / 固定文字都行" /></div>
-            <div><span className={lab}>正文（留空=直接用上游参数）</span>
-              <textarea className={`${inp} h-[60px] resize-y`} value={String(c.text ?? "")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" /></div>
-            <div><span className={lab}>正文为空时</span>
-              <select className={inp} value={String(c.ifEmpty || "skip")} onChange={(e) => set("ifEmpty", e.target.value)}>
-                <option value="skip">不弹通知（默认）</option>
-                <option value="show">照样弹一个空通知</option>
-              </select>
-              <div className="text-[11px] text-muted mt-1 leading-[1.7]">上游脚本没输出、条件没命中却接了通知 —— 这时弹一个什么都没有的框出来最招人烦，所以默认跳过。跳过算正常结束，链路继续往下走。</div></div>
-          </>) : null}
-          {["action.copy", "action.paste", "action.assistant", "action.inspiration", "output.largetype"].includes(node.type) ? (
-            <div className="text-[12px] text-muted">{node.type === "output.largetype" ? "大字显示：把上游内容放大居中显示在半透明浮层里。" : "此动作无需额外配置，直接使用上游传入的内容（arg）。"}</div>
-          ) : null}
-        </div>
-        <div className="flex justify-end gap-2 mt-5">
-          <button className="px-[14px] py-[7px] border border-border rounded-lg text-[12.5px]" onClick={onClose}>取消</button>
-          <button className="px-[14px] py-[7px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" onClick={() => onSave(c)}>保存</button>
-        </div>
-      </div>
-    </div>
+          </Row>
+        ) : null}
+        {["hex", "str"].includes(s("mode", "range")) ? (
+          <Row label="长度">
+            <input type="number" className={`${FLD_MONO} w-[150px]`} value={String(c.length ?? 8)} onChange={(e) => set("length", e.target.value)} />
+          </Row>
+        ) : null}
+        <Row label="写到哪里" top last>
+          <input className={FLD_MONO} value={s("target")} onChange={(e) => set("target", e.target.value)} placeholder="变量名，留空则改参数" />
+          <Hint>和占位符 <Code>{"{random}"}</Code> 是同一套实现。只想在某个文本里插一个随机数的话直接写占位符更省事；这个节点适合「先生成、后面多处引用」。</Hint>
+        </Row>
+      </>) : null}
+
+      {node.type === "utility.jsonconfig" ? (<>
+        <Row label="JSON" top last>
+          <textarea className={`${FLD_MONO} h-[110px] resize-y`} value={s("json")} onChange={(e) => set("json", e.target.value)}
+            placeholder={'{\n  "api": "https://example.com",\n  "keyword": "{query}"\n}'} />
+          <Hint>最外层是一个对象，键=变量名。一次设置多个变量，省得摆一排「参数与变量」。</Hint>
+        </Row>
+        <Fold title="包裹写法：改参数、改下游节点配置">
+          除了上面这种裸对象，还认 Alfred 的包裹写法：<br />
+          <Code>{'{"alfredworkflow":{"arg":…,"variables":{…},"config":{…}}}'}</Code><br />
+          其中 <Code>config</Code> 会<b>临时改写紧接着的下游节点</b>的配置字段（比如按变量决定「打开网址」去哪个地址）—— 这才是它叫 Config 的由来。只对这一次执行生效，不会写回保存的配置，也只往下影响一层。
+        </Fold>
+        <Fold title="解析与替换的顺序">
+          值里可以用 <Code>{"{query}"}</Code> / <Code>{"{var:名称}"}</Code> 等占位符，替换在<b>解析之后</b>做，所以值里带引号和换行都不会撑坏 JSON。<br />
+          值不是字符串时（数字、布尔、嵌套对象）会转成字符串存 —— 变量表只存字符串。<br />
+          JSON 不合法会中断链路并提示，不会带着半份变量往下跑。
+        </Fold>
+      </>) : null}
+
+      {node.type === "utility.hide" ? (
+        <Blank>执行到这里先把快捷入口面板收起来，再继续跑下游。<br />
+          典型用法：下游要打开一个窗口或者发按键，不先收面板的话，新窗口会被面板挡住、按键也会发给面板自己。<br />
+          收起时会把焦点还给刚才那个应用。无配置项。</Blank>
+      ) : null}
+
+      {node.type === "utility.show" ? (
+        <Blank>把快捷入口面板重新唤起，和「隐藏主面板」配套用：中间去干点活，干完把面板叫回来接着挑下一项。<br />
+          重新唤起的是空的搜索框（不恢复上一次的输入）。无配置项。</Blank>
+      ) : null}
+
+      {/* ── 动作 ──────────────────────────────────────────────────────────── */}
+      {node.type === "action.launch" ? (<>
+        <CheckRow last checked={!!c.toggleVisibility} onChange={(v) => set("toggleVisibility", v)}>切换可见性：若某 App 已在前台则隐藏它</CheckRow>
+        <Sec title="要启动的 App / 文件" note="双击某行编辑路径" />
+        <LaunchList paths={(c.paths as string[]) || []} onChange={(p) => set("paths", p)} />
+      </>) : null}
+
+      {node.type === "action.openfile" ? (<>
+        <Row label="路径" top>
+          <PickField mono value={s("path")} onChange={(v) => set("path", v)} onPick={async () => { const p = await api.pickPath(); if (p) set("path", p); }}
+            placeholder="{query} 或固定路径（支持 ~）" />
+          <Hint>多行路径会逐个打开 —— 上游接「文件暂存区」取出模式时给的就是多行。</Hint>
+        </Row>
+        <Row label="用哪个应用" top last>
+          <PickField value={s("app")} onChange={(v) => set("app", v)} onPick={async () => { const a = await api.pickApp(); if (a) set("app", a); }}
+            placeholder="留空=系统默认应用" btn="选 App" />
+          <Hint>指定了应用时多个文件会用一条命令一起打开，不会开出好几个实例。</Hint>
+        </Row>
+      </>) : null}
+
+      {node.type === "action.openurl" ? (<>
+        <Row label="网址" top>
+          <input className={FLD_MONO} value={s("url")} onChange={(e) => set("url", e.target.value)} placeholder="https://example.com/?q={query}" />
+          <Hint><Code>{"{query}"}</Code> 是上游参数。</Hint>
+        </Row>
+        <Row label="用哪个浏览器" last>
+          <PickField value={s("browser")} onChange={(v) => set("browser", v)} onPick={async () => { const a = await api.pickApp(); if (a) set("browser", a); }}
+            placeholder="留空=系统默认" />
+        </Row>
+      </>) : null}
+
+      {node.type === "action.script" ? (<>
+        <Row label="语言">
+          <select className={FLD} value={s("language", "bash")} onChange={(e) => set("language", e.target.value)}>
+            <option value="bash">bash</option><option value="zsh">zsh</option>
+            <option value="python3">Python 3</option><option value="ruby">Ruby</option>
+            <option value="node">Node.js</option><option value="osascript">AppleScript（osascript）</option>
+          </select>
+        </Row>
+        <Row label="脚本" top>
+          <textarea className={`${FLD_MONO} h-[88px] resize-y`} value={s("script")} onChange={(e) => set("script", e.target.value)} placeholder={`say "$1"`} />
+          <Hint>上游参数写作 <Code>{"{query}"}</Code>，也能从 <Code>$1</Code> / 环境变量 <Code>query</Code> 取。</Hint>
+        </Row>
+        <Row label="运行目录">
+          <PickField mono value={s("cwd")} onChange={(v) => set("cwd", v)} onPick={async () => { const p = await api.pickPath(); if (p) set("cwd", p); }}
+            placeholder="留空=工作流自己的目录" btn="选目录" />
+        </Row>
+        <Row label="stdout 处理">
+          <select className={FLD} value={s("output", "none")} onChange={(e) => set("output", e.target.value)}>
+            <option value="none">忽略（继续传给下游）</option><option value="copy">复制到剪贴板</option>
+          </select>
+        </Row>
+        <Row label="脚本失败时" last>
+          <select className={FLD} value={s("onError", "stop")} onChange={(e) => set("onError", e.target.value)}>
+            <option value="stop">停止这条链路（默认）</option>
+            <option value="continue">忽略错误继续往下走</option>
+            <option value="branch">走「失败」出口（节点上会多一个红色端口）</option>
+          </select>
+        </Row>
+        <Fold title="各语言怎么取参数 · shebang 为什么会报错">
+          bash/zsh 用 <Code>$1</Code>，Python 用 <Code>sys.argv[1]</Code>，Ruby 用 <Code>ARGV[0]</Code>，Node 用 <Code>process.argv[1]</Code>。环境变量 <Code>query</Code> 在哪种语言里都读得到。<br />
+          脚本首行的 shebang 和这里选的语言不一致时会直接报错停下 —— bash 会把 <Code>#!/usr/bin/env python3</Code> 当注释忽略，然后拿 bash 去解释 Python，报出来的错完全指不到真正的原因。<br />
+          脚本还可以输出 Alfred 风格的 JSON（<Code>{"{alfredworkflow:{arg,variables}}"}</Code>）来改写下游参数与变量。
+        </Fold>
+      </>) : null}
+
+      {node.type === "action.applescript" ? (<>
+        <Row label="脚本" top>
+          <textarea className={`${FLD_MONO} h-[110px] resize-y`} value={s("script")} onChange={(e) => set("script", e.target.value)}
+            placeholder={'tell application "Finder" to activate'} />
+          <Hint>可用 <Code>{"{query}"}</Code> / <Code>{"{var:名称}"}</Code>。</Hint>
+        </Row>
+        <Row label="返回值">
+          <select className={FLD} value={s("output", "replace")} onChange={(e) => set("output", e.target.value)}>
+            <option value="replace">作为参数传给下游（默认）</option>
+            <option value="none">忽略（参数原样传给下游）</option>
+            <option value="copy">复制到剪贴板</option>
+          </select>
+        </Row>
+        <Row label="脚本失败时" last>
+          <select className={FLD} value={s("onError", "stop")} onChange={(e) => set("onError", e.target.value)}>
+            <option value="stop">停止这条链路（默认）</option><option value="continue">忽略错误继续往下走</option>
+          </select>
+        </Row>
+        <Fold title="几个实现上的取舍">
+          <b>仅 macOS</b>，别的平台上会直接提示不可用并停下，不会静默什么都不做。<br />
+          脚本经标准输入送给 osascript，所以正文里带引号、换行、中文都没问题。超时 20 秒 —— AppleScript 要么秒回，要么就是弹了个框在等人。<br />
+          返回值为空时会保留原参数：AppleScript 很多时候本来就不返回东西，冲成空串会让下游莫名其妙拿不到值。
+        </Fold>
+      </>) : null}
+
+      {node.type === "action.terminal" ? (<>
+        <Row label="命令" top>
+          <textarea className={`${FLD_MONO} h-[70px] resize-y`} value={s("command")} onChange={(e) => set("command", e.target.value)} placeholder={"cd ~/Downloads && ls -la"} />
+          <Hint><Code>{"{query}"}</Code> 是上游参数。</Hint>
+        </Row>
+        <Row label="用哪个终端" last>
+          <select className={FLD} value={s("app", "Terminal")} onChange={(e) => set("app", e.target.value)}>
+            <option value="Terminal">Terminal（系统自带）</option><option value="iTerm">iTerm</option>
+          </select>
+        </Row>
+        <Note>下游收到的是<b>透传的上游参数</b>，不是命令的输出 —— 终端在另一个进程里，我们取不到它的输出。要拿输出请用「跑脚本」。</Note>
+        <Fold title="为什么只支持这两个终端">
+          「把命令打进终端窗口」在不同终端里要用各自的 AppleScript 方言，没法一套通吃。Terminal 是系统自带（一定有），iTerm 是最常见的替代品。填别的会明确报错，而不是静默开一个空窗口。<b>仅 macOS。</b>
+        </Fold>
+      </>) : null}
+
+      {node.type === "action.websearch" ? (<>
+        <Row label="搜索引擎">
+          <select className={FLD} value={s("engine", "google")} onChange={(e) => set("engine", e.target.value)}>
+            <option value="google">Google（默认）</option><option value="bing">Bing</option>
+            <option value="duckduckgo">DuckDuckGo</option><option value="baidu">百度</option>
+            <option value="github">GitHub</option><option value="wikipedia">维基百科</option>
+            <option value="custom">自定义地址…</option>
+          </select>
+        </Row>
+        {s("engine", "google") === "custom" ? (
+          <Row label="地址模板" top>
+            <input className={FLD_MONO} value={s("custom")} onChange={(e) => set("custom", e.target.value)} placeholder="https://example.com/search?q={query}" />
+            <Hint>必须含 <Code>{"{query}"}</Code> 占位符，否则搜什么都跳同一个页面。</Hint>
+          </Row>
+        ) : null}
+        <Row label="搜什么" top>
+          <input className={FLD_MONO} value={s("query")} onChange={(e) => set("query", e.target.value)} placeholder="{query}" />
+          <Hint>可以拼前后缀，比如 <Code>{"{query} language:ts"}</Code>。关键词会自动做 URL 编码，中文和空格都不用自己处理。</Hint>
+        </Row>
+        <Row label="用哪个浏览器" top last>
+          <PickField value={s("browser")} onChange={(v) => set("browser", v)} onPick={async () => { const a = await api.pickApp(); if (a) set("browser", a); }}
+            placeholder="留空=系统默认" />
+          <Hint>引擎是挂在这个节点上的，不是全局设置 —— 一条工作流搜 GitHub、另一条搜百度是常态。</Hint>
+        </Row>
+      </>) : null}
+
+      {node.type === "action.reveal" ? (
+        <Row label="要定位的路径" top last>
+          <PickField mono value={s("path")} onChange={(v) => set("path", v)} onPick={async () => { const p = await api.pickPath(); if (p) set("path", p); }}
+            placeholder="{query} 或固定路径（支持 ~）" />
+          <Hint>在系统文件管理器里把窗口开到它所在的位置并选中它 —— <b>不打开文件本身</b>。路径不存在时会明确报错，不会静默打开一个空窗口。</Hint>
+        </Row>
+      ) : null}
+
+      {node.type === "action.browse" ? (<>
+        <Row label="要打开的目录">
+          <PickField mono value={s("path")} onChange={(v) => set("path", v)} onPick={async () => { const p = await api.pickPath(); if (p) set("path", p); }}
+            placeholder="{query} 或固定路径（支持 ~）" />
+        </Row>
+        <Row label="用哪个终端" top last>
+          <input className={FLD} value={s("app")} onChange={(e) => set("app", e.target.value)} placeholder="Terminal（也可填 iTerm、Warp…）" />
+          <Hint><b>仅 macOS。</b>给的是文件就自动取它所在的目录 —— 说「在终端里打开这个」时想要的几乎总是所在目录，拿文件路径当工作目录只会失败。</Hint>
+        </Row>
+      </>) : null}
+
+      {node.type === "action.filebuffer" ? (<>
+        <Row label="这个节点做什么" last={s("mode", "add") === "clear"}>
+          <select className={FLD} value={s("mode", "add")} onChange={(e) => set("mode", e.target.value)}>
+            <option value="add">收：把上游的路径攒进暂存区</option>
+            <option value="list">取：把攒的全部交给下游（换行分隔）</option>
+            <option value="clear">清空暂存区</option>
+          </select>
+        </Row>
+        {s("mode", "add") === "add" ? (
+          <Row label="收哪些路径" top last>
+            <input className={FLD_MONO} value={s("path")} onChange={(e) => set("path", e.target.value)} placeholder="{query}" />
+            <Hint>多条用换行分隔。收之前会确认文件真的在，不存在的会被跳过并报出数量。</Hint>
+          </Row>
+        ) : null}
+        {s("mode", "add") === "list" ? (
+          <CheckRow last checked={c.clearAfter !== false} onChange={(v) => set("clearAfter", v)}>取出后清空暂存区</CheckRow>
+        ) : null}
+        <Fold title="暂存区存在哪、活多久">
+          按「工作流 + 节点」分桶，<b>只在内存里，退出即清空</b> —— 它是「这几分钟挑几个文件一起处理」的临时篮子，不是长期收藏夹。重复路径会自动去重，最多攒 200 个。<br />
+          典型用法：一个工作流按「收」把文件一个个加进来，另一个工作流按「取」一次性处理掉。
+        </Fold>
+      </>) : null}
+
+      {node.type === "action.ask_assistant" ? (<>
+        <Row label="发给秘书的" top>
+          <textarea className={`${FLD} h-[70px] resize-y`} value={s("prompt")} onChange={(e) => set("prompt", e.target.value)} placeholder="{query}" />
+          <Hint><Code>{"{query}"}</Code> 是上游参数。秘书的回复会作为参数继续传给下游节点。</Hint>
+        </Row>
+        <Row label="文本视图标题"><input className={FLD} value={s("title")} onChange={(e) => set("title", e.target.value)} placeholder="可选，如「秘书」" /></Row>
+        <CheckRow last checked={c.show !== false} onChange={(v) => set("show", v)}>打开文本视图展示（等待期间显示加载动画）</CheckRow>
+      </>) : null}
+
+      {node.type === "action.create_task" ? (<>
+        <Row label="任务内容" top>
+          <textarea className={`${FLD} h-[60px] resize-y`} value={s("text")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" />
+          <Hint><Code>{"{query}"}</Code> 是上游参数。</Hint>
+        </Row>
+        <Row label="前缀" top last>
+          <input className={FLD} value={s("prefix")} onChange={(e) => set("prefix", e.target.value)} placeholder="帮我建个任务：" />
+          <Hint>服务端目前没有独立的建任务接口，这里是「发给秘书 + 建任务前缀」的薄封装，真正建任务由秘书调工具完成。</Hint>
+        </Row>
+      </>) : null}
+
+      {node.type === "action.device_skill" ? (<>
+        <Row label="设备 ID" top>
+          <input className={FLD_MONO} value={s("device")} onChange={(e) => set("device", e.target.value)} placeholder="留空自动选择" />
+          <Hint>留空=自动挑一台有该技能的在线设备。</Hint>
+        </Row>
+        <Row label="技能">
+          <div className="flex items-center gap-[8px]">
+            <input className={FLD_MONO} value={s("provider")} onChange={(e) => set("provider", e.target.value)} placeholder="provider，如 pc" />
+            <span className="flex-none text-[12px] text-faint">.</span>
+            <input className={FLD_MONO} value={s("skill")} onChange={(e) => set("skill", e.target.value)} placeholder="skill 名" />
+          </div>
+        </Row>
+        <Row label="参数" top last>
+          <textarea className={`${FLD_MONO} h-[70px] resize-y`} value={s("params")} onChange={(e) => set("params", e.target.value)} placeholder={`{"text": "{query}"}`} />
+          <Hint>JSON。<Code>{"{query}"}</Code> / <Code>{"{var:名称}"}</Code> 会按 JSON 字符串转义后插入。执行结果作为参数继续传给下游；派发失败会中止链路。</Hint>
+        </Row>
+      </>) : null}
+
+      {/* ── 自动化 ────────────────────────────────────────────────────────── */}
+      {node.type === "automation.shortcut" ? (<>
+        <Row label="快捷指令名称" top>
+          <input className={FLD} value={s("name")} onChange={(e) => set("name", e.target.value)} placeholder="例如：整理下载文件夹" />
+          <Hint>要和「快捷指令」App 里完全一致。</Hint>
+        </Row>
+        <Row label="它的输出" last={String(c.output || "none") === "replace"}>
+          <select className={FLD} value={s("output", "none")} onChange={(e) => set("output", e.target.value)}>
+            <option value="none">忽略（参数原样传给下游）</option><option value="replace">作为参数传给下游</option>
+          </select>
+        </Row>
+        <CheckRow last={s("output", "none") === "replace"} checked={c.input !== false} onChange={(v) => set("input", v)}>把上游参数作为输入传给它</CheckRow>
+        {s("output", "none") !== "replace" ? (
+          <CheckRow last checked={c.wait !== false} onChange={(v) => set("wait", v)}>
+            等它跑完再继续
+            <Hint>不勾就是发出去立刻往下走，适合要跑好几分钟的整理类指令。</Hint>
+          </CheckRow>
+        ) : null}
+        <Fold title="传参方式与几个边界">
+          <b>需要 macOS 12 及以上</b>（用系统自带的 shortcuts 命令），找不到该命令时会明确提示。<br />
+          参数经标准输入传入、结果从标准输出取回，不落临时文件。超时 2 分钟 —— 快捷指令可能真要跑一会儿。<br />
+          不勾「传入输入」时连输入通道都不开：有些快捷指令收到空输入会走另一条分支。<br />
+          要拿返回值就必须等，所以选了「作为参数传给下游」时「等它跑完」这个开关不出现 —— 否则会拿到一个空参数还以为成功了。
+        </Fold>
+      </>) : null}
+
+      {node.type === "automation.system" ? (<>
+        <Row label="命令" last>
+          <select className={FLD} value={s("command", "lock")} onChange={(e) => set("command", e.target.value)}>
+            <option value="lock">锁定屏幕</option><option value="sleep">睡眠</option>
+            <option value="screensaver">启动屏保</option><option value="emptytrash">清空废纸篓</option>
+            <option value="hideothers">隐藏其它应用</option><option value="logout">注销当前用户</option>
+          </select>
+        </Row>
+        <CheckRow last checked={c.confirm === true} onChange={(v) => set("confirm", v)}>执行前弹确认框</CheckRow>
+        {["logout", "emptytrash"].includes(s("command", "lock")) && c.confirm !== true ? (
+          <Note>这一条不可逆，而绑了热键之后最容易误触。建议勾上确认框 —— 点「取消」算正常结束，不报错。</Note>
+        ) : null}
+        <Fold title="为什么没有关机和重启">
+          <b>仅 macOS。</b>关机重启这类工作流误触的代价太大，刻意没有收录。<br />
+          「清空废纸篓」本身还会再弹一次系统自己的确认框，不会无声删掉东西。
+        </Fold>
+      </>) : null}
+
+      {node.type === "automation.music" ? (<>
+        <Row label="动作" last={s("command", "playpause") !== "volume"}>
+          <select className={FLD} value={s("command", "playpause")} onChange={(e) => set("command", e.target.value)}>
+            <option value="playpause">播放 / 暂停</option><option value="play">播放</option><option value="pause">暂停</option>
+            <option value="next">下一首</option><option value="previous">上一首</option>
+            <option value="volume">设置音量</option>
+            <option value="now">当前播放（把「歌名 — 歌手」传给下游）</option>
+          </select>
+        </Row>
+        {s("command", "playpause") === "volume" ? (
+          <Row label="音量" last>
+            <input type="number" className={`${FLD_MONO} w-[150px]`} value={String(c.volume ?? 50)} onChange={(e) => set("volume", e.target.value)} placeholder="0–100" />
+          </Row>
+        ) : null}
+        <Fold title="失败时会看到什么">
+          <b>仅 macOS</b>，控制的是系统「音乐」App。最常见的失败是音乐 App 没开着 —— 这时会把系统原话带出来，不自己编一句模糊的提示。
+        </Fold>
+      </>) : null}
+
+      {/* ── 输出 ──────────────────────────────────────────────────────────── */}
+      {node.type === "output.notify" ? (<>
+        <Row label="标题" top>
+          <input className={FLD} value={s("title")} onChange={(e) => set("title", e.target.value)} placeholder="{query} / 固定文字都行" />
+          <Hint>留空=用工作流名。</Hint>
+        </Row>
+        <Row label="正文" top>
+          <textarea className={`${FLD} h-[60px] resize-y`} value={s("text")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" />
+          <Hint>留空=直接用上游参数。</Hint>
+        </Row>
+        <Row label="正文为空时" top last>
+          <select className={FLD} value={s("ifEmpty", "skip")} onChange={(e) => set("ifEmpty", e.target.value)}>
+            <option value="skip">不弹通知（默认）</option><option value="show">照样弹一个空通知</option>
+          </select>
+          <Hint>上游脚本没输出、条件没命中却接了通知 —— 这时弹一个什么都没有的框最招人烦，所以默认跳过。跳过算正常结束，链路继续往下走。</Hint>
+        </Row>
+      </>) : null}
+
+      {node.type === "output.textview" ? (<>
+        <Row label="标题" last><input className={FLD} value={s("title")} onChange={(e) => set("title", e.target.value)} placeholder="可选，留空用工作流名" /></Row>
+        <CheckRow checked={c.markdown !== false} onChange={(v) => set("markdown", v)}>按 Markdown 渲染</CheckRow>
+        <CheckRow last checked={!!c.append} onChange={(v) => set("append", v)}>追加到已有内容（流式续写，不清屏）</CheckRow>
+      </>) : null}
+
+      {node.type === "output.writefile" ? (<>
+        <Row label="文件名 / 路径" top>
+          <input className={FLD_MONO} value={s("path")} onChange={(e) => set("path", e.target.value)} placeholder="notes-{date}.md" />
+          <Hint>支持 ~ 与 <Code>{"{query}"}</Code>、<Code>{"{date}"}</Code> 等占位符。填相对路径就写到本工作流的 data 目录里（脚本读得到，整包拷走时也跟着走）；要放别处就写绝对路径。</Hint>
+        </Row>
+        <Row label="内容" top>
+          <textarea className={`${FLD_MONO} h-[70px] resize-y`} value={s("content")} onChange={(e) => set("content", e.target.value)} placeholder="{query}" />
+        </Row>
+        <Row label="已存在时" last>
+          <select className={FLD} value={s("ifExists", "overwrite")} onChange={(e) => set("ifExists", e.target.value)}>
+            <option value="overwrite">覆盖</option><option value="append">追加到末尾</option>
+            <option value="prepend">插到开头（新的在上面）</option>
+            <option value="unique">另存为 名称-1.后缀</option><option value="skip">什么都不做</option>
+          </select>
+        </Row>
+        <CheckRow checked={!!c.uuid} onChange={(v) => set("uuid", v)}>文件名后加一段 UUID（每次都是新文件）</CheckRow>
+        <CheckRow checked={c.mkdirs !== false} onChange={(v) => set("mkdirs", v)}>自动创建中间目录</CheckRow>
+        <CheckRow last checked={!!c.allowEmpty} onChange={(v) => set("allowEmpty", v)}>
+          允许写空文件（不勾则内容为空时中止）
+          <Hint>写完后，最终的绝对路径会作为参数传给下游 —— 接「打开文件」或「复制」就顺手了。</Hint>
+        </CheckRow>
+      </>) : null}
+
+      {node.type === "output.keycombo" ? (<>
+        <Row label="要发送的键位" top>
+          <input className={FLD_MONO} value={s("accelerator")} onChange={(e) => set("accelerator", e.target.value)} placeholder="Command+Shift+K" />
+          <Hint>写法和别处录快捷键一样。功能键直接写名字：Return / Tab / Space / Escape / Delete / 方向键 / F1–F12。</Hint>
+        </Row>
+        <Row label="连按几次" last={c.hideFirst === false}>
+          <input type="number" className={`${FLD_MONO} w-[150px]`} value={String(c.repeat ?? 1)} onChange={(e) => set("repeat", e.target.value)} />
+        </Row>
+        {c.hideFirst !== false ? (
+          <Row label="收起后等" top last>
+            <input type="number" className={`${FLD_MONO} w-[150px]`} value={String(c.delayMs ?? 180)} onChange={(e) => set("delayMs", e.target.value)} />
+            <Hint>毫秒。留给系统把焦点真正交还给前台应用的时间，不等的话按键会打空。</Hint>
+          </Row>
+        ) : null}
+        <CheckRow last checked={c.hideFirst !== false} onChange={(v) => set("hideFirst", v)}>发送前先收起面板（建议开着）</CheckRow>
+        <Fold title="权限、以及为什么默认要先收面板">
+          <b>需要「辅助功能」权限</b>，没授权时会明确报出来，不会静默失败。<br />
+          不收起面板的话，按键会发给面板自己而不是你以为的那个应用。<br />
+          「连按几次」用来做 Tab 缩进三级、方向键连走这类，上限 20 次 —— 模拟按键发不出去时没有回执，发几百次只会让人以为死机了。
+        </Fold>
+      </>) : null}
+
+      {node.type === "output.speak" ? (<>
+        <Row label="念什么" top>
+          <textarea className={`${FLD} h-[60px] resize-y`} value={s("text")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" />
+          <Hint><Code>{"{query}"}</Code> 是上游参数。</Hint>
+        </Row>
+        <Row label="音色" top>
+          <input className={FLD} value={s("voice")} onChange={(e) => set("voice", e.target.value)} placeholder="如 Tingting / Samantha" />
+          <Hint>可选，仅 macOS。在终端跑 <Code>say -v ?</Code> 能看全表。</Hint>
+        </Row>
+        <Row label="语速" top last>
+          <input type="number" className={`${FLD_MONO} w-[150px]`} value={String(c.rate ?? 0)} onChange={(e) => set("rate", e.target.value)} />
+          <Hint>0=系统默认。取值 50–500，超出会被夹回来。</Hint>
+        </Row>
+        <CheckRow last checked={!!c.wait} onChange={(v) => set("wait", v)}>
+          念完再往下走
+          <Hint>默认不等 —— 念一长段时不该把整条链路卡在这儿。macOS 用系统自带的 say，Windows 用 SAPI，两边都不用装东西；Linux 上会明确提示不可用。</Hint>
+        </CheckRow>
+      </>) : null}
+
+      {node.type === "output.sound" ? (<>
+        <Row label="系统提示音" top>
+          <select className={FLD} value={s("system", "Glass")} onChange={(e) => set("system", e.target.value)}>
+            {["Glass", "Ping", "Pop", "Purr", "Submarine", "Basso", "Blow", "Bottle", "Frog", "Funk", "Hero", "Morse", "Sosumi", "Tink"].map((x) => <option key={x} value={x}>{x}</option>)}
+          </select>
+          <Hint>macOS 自带，在 <Code>/System/Library/Sounds</Code> 里。不填下面的文件时用这个。</Hint>
+        </Row>
+        <Row label="自定义声音" top last>
+          <PickField mono value={s("path")} onChange={(v) => set("path", v)} onPick={async () => { const p = await api.pickPath(); if (p) set("path", p); }}
+            placeholder="可选，支持 ~" />
+          <Hint>文件不存在时会明确报错停下，而不是静悄悄地什么都没响（那种最难查）。</Hint>
+        </Row>
+        <Fold title="它永远不等声音放完">
+          macOS 用 afplay，Windows 用 SoundPlayer，<b>一律不等它放完</b> —— 提示音的意义就是不打断流程。
+        </Fold>
+      </>) : null}
+
+      {["action.copy", "action.paste", "action.assistant", "action.inspiration", "output.largetype"].includes(node.type) ? (
+        <Blank>{node.type === "output.largetype"
+          ? "把上游内容放大居中显示在半透明浮层里。"
+          : "此动作无需额外配置，直接使用上游传入的内容（arg）。"}</Blank>
+      ) : null}
+    </Dlg>
   );
 }
 
@@ -2655,16 +2830,7 @@ interface ListRow { title?: string; subtitle?: string; arg?: string; icon?: stri
 function ListRowsEditor({ rows, onChange }: { rows: ListRow[]; onChange: (r: ListRow[]) => void }) {
   const [csv, setCsv] = useState("");
   const [importing, setImporting] = useState(false);
-  const cell = "bg-bg border border-border rounded-md px-[7px] py-[5px] text-[12px] outline-none";
   const setAt = (i: number, k: keyof ListRow, v: string) => onChange(rows.map((r, j) => (j === i ? { ...r, [k]: v } : r)));
-  // 上移/下移：列表顺序就是结果顺序（没输入时整表按这个顺序出），所以得能调。
-  const move = (i: number, d: number) => {
-    const j = i + d;
-    if (j < 0 || j >= rows.length) return;
-    const next = rows.slice();
-    [next[i], next[j]] = [next[j], next[i]];
-    onChange(next);
-  };
   const doImport = (replace: boolean) => {
     // 每行按 [标题, 副标题, 参数, 图标] 取，只有一列时参数留空（执行时自动回落成标题）。
     const parsed = parseCsv(csv).map((r) => ({ title: (r[0] || "").trim(), subtitle: (r[1] || "").trim(), arg: (r[2] || "").trim(), icon: (r[3] || "").trim() }))
@@ -2674,44 +2840,41 @@ function ListRowsEditor({ rows, onChange }: { rows: ListRow[]; onChange: (r: Lis
     setCsv(""); setImporting(false);
   };
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex gap-1 text-[10.5px] text-muted px-[2px]">
-        <span className="w-[34px] shrink-0">图标</span><span className="flex-1">标题</span><span className="flex-1">副标题</span><span className="flex-1">参数（留空=用标题）</span><span className="w-[54px] shrink-0" />
-      </div>
-      <div className="max-h-[220px] overflow-y-auto flex flex-col gap-1 pr-1">
-        {rows.map((r, i) => (
-          <div key={i} className="flex gap-1 items-center">
-            <input className={`${cell} w-[34px] text-center`} value={String(r.icon || "")} onChange={(e) => setAt(i, "icon", e.target.value)} placeholder="🔹" />
-            <input className={`${cell} flex-1 min-w-0`} value={String(r.title || "")} onChange={(e) => setAt(i, "title", e.target.value)} />
-            <input className={`${cell} flex-1 min-w-0`} value={String(r.subtitle || "")} onChange={(e) => setAt(i, "subtitle", e.target.value)} />
-            <input className={`${cell} flex-1 min-w-0 font-mono`} value={String(r.arg || "")} onChange={(e) => setAt(i, "arg", e.target.value)} />
-            <div className="w-[54px] shrink-0 flex gap-[2px] justify-end">
-              <button className="w-4 flex-none bg-transparent text-[10px] text-muted hover:text-text" title="上移" onClick={() => move(i, -1)}>↑</button>
-              <button className="w-4 flex-none bg-transparent text-[10px] text-muted hover:text-text" title="下移" onClick={() => move(i, 1)}>↓</button>
-              <button className="w-4 flex-none bg-transparent text-[11px] text-muted hover:text-danger" title="删除这一项" onClick={() => onChange(rows.filter((_, j) => j !== i))}>✕</button>
+    <RowTable<ListRow>
+      rows={rows} onChange={onChange} blank={() => ({ title: "", subtitle: "", arg: "" })} addLabel="加一项"
+      scroll="max-h-[260px] overflow-y-auto"
+      cols={[
+        { label: "图标", cls: "w-[40px] flex-none" },
+        { label: "标题", cls: "flex-1 min-w-0" },
+        { label: "副标题", cls: "flex-1 min-w-0" },
+        { label: "参数", cls: "flex-1 min-w-0" },
+      ]}
+      emptyText="还没有条目。加一条之后，这个节点才会出结果。"
+      cell={(r, i) => [
+        <input key="i" className={`${CELL} text-center px-[4px]`} value={String(r.icon || "")} onChange={(e) => setAt(i, "icon", e.target.value)} placeholder="🔹" />,
+        <input key="t" className={CELL} value={String(r.title || "")} onChange={(e) => setAt(i, "title", e.target.value)} />,
+        <input key="s" className={CELL} value={String(r.subtitle || "")} onChange={(e) => setAt(i, "subtitle", e.target.value)} />,
+        <input key="a" className={CELL_MONO} value={String(r.arg || "")} onChange={(e) => setAt(i, "arg", e.target.value)} placeholder="留空=用标题" />,
+      ]}
+      extra={
+        <div className="border-t border-border-soft px-[10px] py-[8px]">
+          <button className="text-[12px] text-muted bg-transparent hover:text-orange-text" onClick={() => setImporting((v) => !v)}>
+            {importing ? "收起 CSV 导入" : "CSV 批量导入…"}
+          </button>
+          {importing ? (<>
+            <textarea className={`${CELL_MONO} h-[84px] resize-y mt-[8px]`} value={csv} onChange={(e) => setCsv(e.target.value)}
+              placeholder={"每行一项：标题,副标题,参数,图标（后三列可省）\n含逗号的字段用双引号包起来"} />
+            <div className="flex gap-[8px] mt-[8px]">
+              <button className={BTN_SEC} disabled={!csv.trim()} onClick={() => doImport(false)}>追加导入</button>
+              <button className={BTN_SEC} disabled={!csv.trim()} onClick={() => doImport(true)}>替换全部</button>
             </div>
-          </div>
-        ))}
-        {!rows.length ? <div className="text-[11.5px] text-muted py-2">还没有条目，点下面「添加一项」或用 CSV 批量导入。</div> : null}
-      </div>
-      <div className="flex gap-2">
-        <button className="px-[10px] py-[5px] border border-border rounded-lg text-[11.5px]" onClick={() => onChange([...rows, { title: "", subtitle: "", arg: "" }])}>＋ 添加一项</button>
-        <button className="px-[10px] py-[5px] border border-border rounded-lg text-[11.5px]" onClick={() => setImporting((v) => !v)}>{importing ? "收起导入" : "CSV 批量导入…"}</button>
-      </div>
-      {importing ? (<>
-        <textarea className="w-full bg-bg border border-border rounded-lg px-[10px] py-[7px] text-[12px] font-mono h-[84px] resize-y outline-none"
-          value={csv} onChange={(e) => setCsv(e.target.value)}
-          placeholder={'每行一项：标题,副标题,参数,图标（后三列可省）\n含逗号的字段用双引号包起来'} />
-        <div className="flex gap-2">
-          <button className="px-[10px] py-[5px] border border-border rounded-lg text-[11.5px]" disabled={!csv.trim()} onClick={() => doImport(false)}>追加导入</button>
-          <button className="px-[10px] py-[5px] border border-border rounded-lg text-[11.5px]" disabled={!csv.trim()} onClick={() => doImport(true)}>替换全部</button>
+          </>) : null}
         </div>
-      </>) : null}
-    </div>
+      }
+    />
   );
 }
 
-// ── 工作流变量编辑（可存密钥）──
 // ── 预制件命名框（E3）──
 // Electron 渲染进程里 window.prompt 不可用，只能自己弹一个。回车确认、Esc 取消。
 function PrefabNamer({ init, count, onOk, onClose }: { init: string; count: number; onOk: (name: string) => void; onClose: () => void }) {
@@ -2734,56 +2897,59 @@ function PrefabNamer({ init, count, onOk, onClose }: { init: string; count: numb
   );
 }
 
+// ── 工作流变量编辑（可存密钥）──
+// 和节点弹窗共用一套壳：宽度 560、底栏确认制、有改动时关掉先问一句。
 function VarsEditor({ vars, onSave, onClose }: { vars: Record<string, string>; onSave: (v: Record<string, string>) => void; onClose: () => void }) {
   const [rows, setRows] = useState<{ k: string; v: string }[]>(Object.entries(vars).map(([k, v]) => ({ k, v })));
   // 手动「临时显形」的行下标：只影响当前这次弹框，关掉再打开又变回密文。
-  const [shown, setShown] = useState<Set<number>>(new Set());
-  const inp = "bg-bg border border-border rounded-lg px-[9px] py-[6px] text-[12.5px] outline-none font-mono";
+  // 存的是名字而不是下标 —— 拖动调序之后下标会串，显形的就变成另一行了。
+  const [shown, setShown] = useState<Set<string>>(new Set());
   const secret = (k: string) => /key|secret|token|pass/i.test(k);
-  const toggleShow = (i: number) =>
-    setShown((s) => {
-      const n = new Set(s);
-      if (n.has(i)) n.delete(i);
-      else n.add(i);
-      return n;
-    });
+  const toggle = (k: string) => setShown((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });
+  const asObj = (rs: { k: string; v: string }[]) => {
+    const o: Record<string, string> = {};
+    for (const r of rs) if (r.k.trim()) o[r.k.trim()] = r.v;
+    return o;
+  };
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
-      <div className="w-[460px] bg-card border border-border rounded-2xl p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="font-semibold text-[14px] mb-1">工作流变量</div>
-        <div className="text-[11.5px] text-muted mb-3">注入脚本环境变量；可存 appKey / secret 等密钥（仅本地，不上传）。脚本里用 {"{var:名称}"} 或直接读同名环境变量。</div>
-        <div className="flex flex-col gap-2 mb-3">
-          {rows.map((r, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <input className={`${inp} w-[130px]`} value={r.k} placeholder="名称" onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))} />
-              <input className={`${inp} flex-1`} type={secret(r.k) && !shown.has(i) ? "password" : "text"} value={r.v} placeholder="值" onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))} />
+    <Dlg width="md" icon={IconTag} title="工作流变量" sub="注入脚本环境变量，可存 appKey / secret 等密钥"
+      dirty={!sameConfig(asObj(rows), vars)} onClose={onClose} onSave={() => onSave(asObj(rows))}>
+      <div className="pt-[13px]">
+        <RowTable<{ k: string; v: string }>
+          rows={rows} onChange={setRows} blank={() => ({ k: "", v: "" })} addLabel="加一行"
+          cols={[{ label: "名称", cls: "flex-1 basis-[160px] min-w-0" }, { label: "值", cls: "flex-1 basis-[260px] min-w-0" }]}
+          emptyText="还没有变量。脚本里用 {var:名称} 或直接读同名环境变量。"
+          cell={(r, i) => [
+            <input key="k" className={CELL_MONO} value={r.k} placeholder="名称"
+              onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, k: e.target.value } : x)))} />,
+            <div key="v" className="flex items-center gap-[6px]">
+              <input className={`${CELL_MONO} flex-1 min-w-0`} value={r.v} placeholder="值"
+                type={secret(r.k) && !shown.has(r.k) ? "password" : "text"}
+                onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))} />
               {/* 只有被判定为密钥的行才需要显隐切换；其余行本来就是明文 */}
               {secret(r.k) ? (
-                <button className="text-muted text-[13px] leading-none w-[20px]" title={shown.has(i) ? "隐藏" : "显示"} onClick={() => toggleShow(i)}>
-                  {shown.has(i) ? "🙈" : "👁"}
+                <button className="w-[22px] flex-none flex justify-center text-muted hover:text-text"
+                  title={shown.has(r.k) ? "隐藏" : "显示"} onClick={() => toggle(r.k)}>
+                  {shown.has(r.k) ? <IconEyeOff size={13} /> : <IconEye size={13} />}
                 </button>
-              ) : (
-                <span className="w-[20px]" />
-              )}
-              <button className="text-danger text-[12px]" onClick={() => { setRows(rows.filter((_, j) => j !== i)); setShown(new Set()); }}>✕</button>
-            </div>
-          ))}
-        </div>
-        <button className="text-[12.5px] text-muted border border-dashed border-border rounded-lg px-3 py-1.5" onClick={() => setRows([...rows, { k: "", v: "" }])}>＋ 加一行</button>
-        <div className="flex justify-end gap-2 mt-5">
-          <button className="px-[14px] py-[7px] border border-border rounded-lg text-[12.5px]" onClick={onClose}>取消</button>
-          <button className="px-[14px] py-[7px] bg-orange text-white rounded-lg text-[12.5px] font-semibold"
-            onClick={() => { const v: Record<string, string> = {}; for (const r of rows) if (r.k.trim()) v[r.k.trim()] = r.v; onSave(v); }}>保存</button>
-        </div>
+              ) : <span className="w-[22px] flex-none" />}
+            </div>,
+          ]}
+        />
+        <Hint>名字里带 key / secret / token / pass 的行会自动按密文显示。仅存在本地，不上传。</Hint>
       </div>
-    </div>
+    </Dlg>
   );
 }
 
 // ── 工作流配置项（W10 Configuration 分层）──
-// 上半张表是「作者视角」：声明有哪些配置项（键名/显示名/类型/默认值/说明）。
-// 下半是「使用者视角」：直接在同一行把值填了。值统一写回 variables，脚本里 {var:键名} 照旧。
-// password 类型的值不进工作流 JSON：保存时先塞进密码保险箱，variables 里只留 vault://... 引用。
+// 设计稿把它拆成两张表，这个拆分是有意义的：
+//   上表「声明」是**作者视角** —— 这条工作流对外暴露哪些可填项（键名/显示名/类型/默认值/说明）；
+//   下表「取值」是**使用者视角** —— 在这台机器上这些项各填什么。
+// 原来两者挤在同一行里（上半行声明、下半行填值），结果是「改结构」和「填值」两种完全不同的
+// 操作混在一起，谁也看不清自己在改哪一层。
+// 值统一写回 variables，脚本里 {var:键名} 照旧。password 类型的值不进工作流 JSON：
+// 保存时先塞进密码保险箱，variables 里只留 vault://... 引用。
 function ConfigEditor({ wf, onSave, onClose }: {
   wf: WF;
   onSave: (fields: WFConfigField[], vals: Record<string, string>) => void;
@@ -2793,19 +2959,24 @@ function ConfigEditor({ wf, onSave, onClose }: {
   const [vals, setVals] = useState<Record<string, string>>(() => ({ ...(wf.variables || {}) }));
   // 密钥输入框里新敲的明文（还没存进保险箱）。undefined = 没动过，保持原引用。
   const [pw, setPw] = useState<Record<string, string>>({});
+  const [shown, setShown] = useState<Set<string>>(new Set());
   const [unlocked, setUnlocked] = useState(true);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
-  useEffect(() => { void api.vaultUnlocked().then(setUnlocked).catch(() => setUnlocked(false)); }, []);
+  const check = () => void api.vaultUnlocked().then(setUnlocked).catch(() => setUnlocked(false));
+  useEffect(check, []);
 
-  const inp = "bg-bg border border-border rounded-lg px-[9px] py-[6px] text-[12.5px] outline-none";
   const patch = (i: number, p: Partial<WFConfigField>) => setFields(fields.map((f, j) => (j === i ? { ...f, ...p } : f)));
   const setVal = (k: string, v: string) => setVals({ ...vals, [k]: v });
+  const named = fields.filter((f) => f.key.trim());
+  // 有没有真要写进保险箱的密钥。只有这时保险箱锁着才是**阻塞性**问题 ——
+  // 只改声明不填密钥的话，锁着也能正常保存，不该拿一个红条吓人。
+  const needVault = named.some((f) => f.type === "password" && pw[f.key]);
 
   // 保存：先把改过的密钥逐个存进保险箱换回引用，任何一步失败就整体中止（不留半截状态）。
   const save = async () => {
     setBusy(true); setErr("");
-    const list = fields.filter((f) => f.key.trim()).map((f) => ({ ...f, key: f.key.trim(), label: (f.label || "").trim() || f.key.trim() }));
+    const list = named.map((f) => ({ ...f, key: f.key.trim(), label: (f.label || "").trim() || f.key.trim() }));
     const v = { ...vals };
     for (const f of list) {
       const plain = pw[f.key];
@@ -2820,84 +2991,100 @@ function ConfigEditor({ wf, onSave, onClose }: {
     onSave(list, v);
   };
 
+  const dirty = JSON.stringify(fields) !== JSON.stringify(wf.config || [])
+    || !sameConfig(vals, wf.variables || {})
+    || Object.values(pw).some(Boolean);
+
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
-      <div className="w-[620px] max-h-[80vh] overflow-auto bg-card border border-border rounded-2xl p-5 shadow-2xl" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="font-semibold text-[14px] mb-1">工作流配置</div>
-        <div className="text-[11.5px] text-muted mb-3 leading-[1.6]">
-          声明这个工作流需要人填的东西，填出来的值同样按 {"{var:键名}"} / 同名环境变量注入。
-          「密钥」类型的值只存进密码保险箱，工作流 JSON（含导出文件）里只有一条引用，不含明文。
-        </div>
-        {!unlocked ? (
-          <div className="text-[11.5px] text-orange border border-orange/40 bg-orange/10 rounded-lg px-3 py-2 mb-3">
-            密码保险箱当前是锁定的：可以照常改声明，但新填的密钥要先解锁保险箱才能保存。
-          </div>
-        ) : null}
+    <Dlg width="lg" icon={IconGear} title="工作流配置项" sub="上表定义这条工作流对外暴露什么，下表填这台机器上的值"
+      dirty={dirty} onClose={onClose} onSave={() => { if (!busy) void save(); }}>
 
-        <div className="flex flex-col gap-2.5 mb-3">
-          {fields.map((f, i) => {
-            const bound = String(vals[f.key] || "").startsWith("vault://");
-            return (
-              <div key={i} className="border border-border rounded-xl p-2.5 flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <input className={`${inp} w-[120px] font-mono`} value={f.key} placeholder="键名" onChange={(e) => patch(i, { key: e.target.value })} />
-                  <input className={`${inp} w-[110px]`} value={f.label} placeholder="显示名" onChange={(e) => patch(i, { label: e.target.value })} />
-                  <select className={`${inp} w-[86px]`} value={f.type} onChange={(e) => patch(i, { type: e.target.value as WFConfigField["type"] })}>
-                    <option value="text">文本</option>
-                    <option value="password">密钥</option>
-                    <option value="file">路径</option>
-                    <option value="select">下拉</option>
-                    <option value="checkbox">开关</option>
-                  </select>
-                  <input className={`${inp} flex-1`} value={f.help || ""} placeholder="说明（可选）" onChange={(e) => patch(i, { help: e.target.value })} />
-                  <button className="text-danger text-[12px] px-1" title="删除该配置项" onClick={() => setFields(fields.filter((_, j) => j !== i))}>✕</button>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11.5px] text-muted w-[36px] shrink-0">值</span>
-                  {f.type === "password" ? (
-                    <input className={`${inp} flex-1`} type="password" value={pw[f.key] ?? ""}
-                      placeholder={bound ? "已存入保险箱（留空=不改，输入=覆盖）" : "输入后保存即存进保险箱"}
-                      onChange={(e) => setPw({ ...pw, [f.key]: e.target.value })} />
-                  ) : f.type === "checkbox" ? (
-                    <label className="flex items-center gap-1.5 text-[12px] text-muted flex-1">
-                      <input type="checkbox" checked={(vals[f.key] ?? f.default ?? "") === "1"} onChange={(e) => setVal(f.key, e.target.checked ? "1" : "")} />
-                      开启时值为 1，关闭时为空
-                    </label>
-                  ) : f.type === "select" ? (
-                    <select className={`${inp} flex-1`} value={vals[f.key] ?? f.default ?? ""} onChange={(e) => setVal(f.key, e.target.value)}>
-                      <option value="">（未选）</option>
-                      {(f.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  ) : (
-                    <input className={`${inp} flex-1`} value={vals[f.key] ?? ""} placeholder={f.default ? `默认：${f.default}` : "值"} onChange={(e) => setVal(f.key, e.target.value)} />
-                  )}
-                  {f.type === "file" ? (
-                    <button className="px-[10px] py-[6px] border border-border rounded-lg text-[12px] shrink-0"
-                      onClick={async () => { const p = await api.pickPath(); if (p) setVal(f.key, p); }}>选择</button>
-                  ) : null}
-                  {f.type === "select" ? (
-                    <input className={`${inp} w-[180px] shrink-0`} value={(f.options || []).join(",")} placeholder="候选项，逗号分隔"
-                      onChange={(e) => patch(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />
-                  ) : f.type !== "password" ? (
-                    <input className={`${inp} w-[120px] shrink-0`} value={f.default || ""} placeholder="默认值"
-                      onChange={(e) => patch(i, { default: e.target.value })} />
-                  ) : null}
-                </div>
+      <Sec title="声明 · 作者填" note={`${named.length} 项`} />
+      <RowTable<WFConfigField>
+        rows={fields} onChange={setFields} blank={() => ({ key: "", label: "", type: "text" })} addLabel="加一项"
+        cols={[
+          { label: "键名", cls: "flex-1 basis-[120px] min-w-0" },
+          { label: "显示名", cls: "flex-1 basis-[110px] min-w-0" },
+          { label: "类型", cls: "w-[92px] flex-none" },
+          { label: "默认值", cls: "flex-1 basis-[130px] min-w-0" },
+          { label: "说明", cls: "flex-1 basis-[150px] min-w-0" },
+        ]}
+        emptyText="还没有配置项。加一条之后，这条工作流就有了对外可填的参数。"
+        cell={(f, i) => [
+          <input key="k" className={CELL_MONO} value={f.key} placeholder="键名" onChange={(e) => patch(i, { key: e.target.value })} />,
+          <input key="l" className={CELL} value={f.label} placeholder="显示名" onChange={(e) => patch(i, { label: e.target.value })} />,
+          <select key="t" className={CELL} value={f.type} onChange={(e) => patch(i, { type: e.target.value as WFConfigField["type"] })}>
+            <option value="text">文本</option><option value="password">密钥</option><option value="file">路径</option>
+            <option value="select">下拉</option><option value="checkbox">开关</option>
+          </select>,
+          // 密钥不设默认值（默认的密钥没有意义，还容易被顺手写进导出文件）；
+          // 下拉的这一格改填候选项 —— 没有候选项的下拉是个空壳，比默认值重要。
+          f.type === "password"
+            ? <span key="d" className="text-[11.5px] text-faint">不设默认值</span>
+            : f.type === "select"
+              ? <input key="d" className={CELL} value={(f.options || []).join(",")} placeholder="候选项，逗号分隔"
+                  onChange={(e) => patch(i, { options: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })} />
+              : <input key="d" className={CELL} value={f.default || ""} placeholder="默认值" onChange={(e) => patch(i, { default: e.target.value })} />,
+          <input key="h" className={CELL} value={f.help || ""} placeholder="可选" onChange={(e) => patch(i, { help: e.target.value })} />,
+        ]}
+      />
+
+      <Sec title="取值 · 这台机器上生效" note={named.length ? undefined : "先在上表加一项"} />
+      {named.map((f) => {
+        const bound = String(vals[f.key] || "").startsWith("vault://");
+        return (
+          <Row key={f.key} label={f.label || f.key} top={!!f.help}>
+            {f.type === "password" ? (
+              <div className="flex items-center gap-[6px]">
+                <input className={`${FLD} flex-1 min-w-0`} type={shown.has(f.key) ? "text" : "password"} value={pw[f.key] ?? ""}
+                  placeholder={bound ? "已存入保险箱（留空=不改，输入=覆盖）" : "输入后保存即存进保险箱"}
+                  onChange={(e) => setPw({ ...pw, [f.key]: e.target.value })} />
+                <button className="w-[22px] flex-none flex justify-center text-muted hover:text-text"
+                  title={shown.has(f.key) ? "隐藏" : "显示"}
+                  onClick={() => setShown((s) => { const n = new Set(s); if (n.has(f.key)) n.delete(f.key); else n.add(f.key); return n; })}>
+                  {shown.has(f.key) ? <IconEyeOff size={13} /> : <IconEye size={13} />}
+                </button>
               </div>
-            );
-          })}
-        </div>
+            ) : f.type === "checkbox" ? (
+              <label className="flex items-center gap-[8px] text-[12.5px] text-muted cursor-pointer">
+                <input type="checkbox" className="accent-orange w-[14px] h-[14px] m-0"
+                  checked={(vals[f.key] ?? f.default ?? "") === "1"} onChange={(e) => setVal(f.key, e.target.checked ? "1" : "")} />
+                开启时值为 1，关闭时为空
+              </label>
+            ) : f.type === "select" ? (
+              <select className={FLD} value={vals[f.key] ?? f.default ?? ""} onChange={(e) => setVal(f.key, e.target.value)}>
+                <option value="">（未选）</option>
+                {(f.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
+              </select>
+            ) : f.type === "file" ? (
+              <PickField value={vals[f.key] ?? ""} onChange={(v) => setVal(f.key, v)} mono
+                onPick={async () => { const p = await api.pickPath(); if (p) setVal(f.key, p); }} placeholder={f.default ? `默认：${f.default}` : "路径"} />
+            ) : (
+              <input className={FLD} value={vals[f.key] ?? ""} placeholder={f.default ? `默认：${f.default}` : "值"} onChange={(e) => setVal(f.key, e.target.value)} />
+            )}
+            {f.help ? <Hint>{f.help}</Hint> : null}
+          </Row>
+        );
+      })}
 
-        <button className="text-[12.5px] text-muted border border-dashed border-border rounded-lg px-3 py-1.5"
-          onClick={() => setFields([...fields, { key: "", label: "", type: "text" }])}>＋ 加一项</button>
-        {err ? <div className="text-[12px] text-danger mt-3">{err}</div> : null}
-        <div className="flex justify-end gap-2 mt-5">
-          <button className="px-[14px] py-[7px] border border-border rounded-lg text-[12.5px]" onClick={onClose}>取消</button>
-          <button className="px-[14px] py-[7px] bg-orange text-white rounded-lg text-[12.5px] font-semibold" disabled={busy} onClick={() => void save()}>
-            {busy ? "保存中…" : "保存"}
-          </button>
-        </div>
-      </div>
-    </div>
+      {/* 保险箱锁着只在「真要写密钥」时才是阻塞性的，所以红条也只在那时出现 */}
+      {!unlocked && needVault ? (
+        <Note kind="danger">
+          密码保险箱锁着，密钥类型的值现在存不进去。去主窗口解锁保险箱后，点这里重新检查。
+          <button className="ml-[8px] underline bg-transparent text-danger" onClick={check}>重新检查</button>
+        </Note>
+      ) : null}
+      {!unlocked && !needVault ? (
+        <Note>密码保险箱当前是锁定的：改声明、填普通值都不受影响，只有新填的密钥要先解锁才存得进去。</Note>
+      ) : null}
+      {err ? <Note kind="danger">{err}</Note> : null}
+      {busy ? <Hint>正在存入保险箱…</Hint> : null}
+
+      <Fold title="这些值最后去了哪">
+        填出来的值按 <Code>{"{var:键名}"}</Code> 或同名环境变量注入，和「工作流变量」是同一套通道。<br />
+        「密钥」类型的值只存进密码保险箱，工作流 JSON（含导出文件）里只有一条 <Code>vault://</Code> 引用，不含明文。<br />
+        清空一个已绑定的密钥等于解除绑定 —— 保险箱里那条记录会留着，要彻底删得去保险箱里删。
+      </Fold>
+    </Dlg>
   );
 }
