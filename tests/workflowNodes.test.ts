@@ -12,7 +12,12 @@ interface NodeDef { id: string; type: string; config?: Record<string, unknown> }
 
 // 造一条「关键词触发 → …中间节点… → Debug」的工作流并跑一遍，返回这次运行的轨迹。
 // Debug 节点的 stdout 就是它执行那一刻的参数，用来判断链路走没走到、参数变没变。
+// 记录引擎对外部动作的调用（收起/唤起面板），供「隐藏/显示主面板」两个节点断言。
+const calls = { hide: 0, show: 0 };
+
 async function runChain(middle: NodeDef[], arg = "输入") {
+  calls.hide = 0;
+  calls.show = 0;
   const nodes = [
     { id: "t", type: "trigger.keyword", x: 0, y: 0, config: { keyword: "k" } },
     ...middle.map((n) => ({ ...n, x: 0, y: 0, config: n.config || {} })),
@@ -25,8 +30,9 @@ async function runChain(middle: NodeDef[], arg = "输入") {
   const cfg = { get: () => ({ launcherWorkflows: [wf] }) } as unknown as ConfigStore;
   const engine = new WorkflowEngine(cfg, {
     sendAssistant: () => {},
-    hide: async () => {},
+    hide: async () => { calls.hide++; },
     showLargeType: () => {},
+    showPanel: async () => { calls.show++; },
     showTextView: () => {},
     getSecret: () => null,
   } as never);
@@ -334,5 +340,176 @@ describe("Reveal / Browse 的路径守卫", () => {
     const r = await runChain([{ id: "br", type: "action.browse", config: {} }], "/tmp");
     expect(r.reached).toBe(false);
     expect(r.feedback).toContain("macOS");
+  });
+});
+
+// ── 窗口系统组 ──────────────────────────────────────────────────────────────
+describe("隐藏 / 显示主面板", () => {
+  it("隐藏主面板真的去收面板了，并且链路继续", async () => {
+    const r = await runChain([{ id: "h", type: "utility.hide" }], "透传");
+    expect(calls.hide).toBeGreaterThan(0);
+    expect(r.reached).toBe(true);
+    expect(r.finalArg).toBe("透传");   // 它不改数据
+  });
+
+  it("显示主面板真的去唤起面板了", async () => {
+    const r = await runChain([{ id: "s", type: "utility.show" }], "透传");
+    expect(calls.show).toBeGreaterThan(0);
+    expect(r.reached).toBe(true);
+  });
+});
+
+describe("Dispatch Key Combo 发送按键", () => {
+  it("没录键位就停下，不去乱按", async () => {
+    const r = await runChain([{ id: "k", type: "output.keycombo", config: { accelerator: "" } }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("没录键位");
+  });
+
+  it("默认会先收起面板 —— 不收的话按键发给的是面板自己", async () => {
+    await runChain([{ id: "k", type: "output.keycombo", config: { accelerator: "Command+K", delayMs: 0 } }]);
+    expect(calls.hide).toBeGreaterThan(0);
+  });
+
+  it("关掉「先收起面板」就真的不收", async () => {
+    await runChain([{ id: "k", type: "output.keycombo", config: { accelerator: "Command+K", hideFirst: false } }]);
+    expect(calls.hide).toBe(0);
+  });
+
+  it("发不出去时要把原因带出来（当前系统不支持 / 没有辅助功能权限）", async () => {
+    if (process.platform === "darwin" || process.platform === "win32") return;
+    const r = await runChain([{ id: "k", type: "output.keycombo", config: { accelerator: "Command+K", hideFirst: false } }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("发送按键失败");
+  });
+});
+
+describe("System Command 系统命令", () => {
+  it("非 macOS 上明确提示并中断", async () => {
+    if (process.platform === "darwin") return;
+    const r = await runChain([{ id: "sc", type: "automation.system", config: { command: "lock" } }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("macOS");
+  });
+
+  it("未知命令要停下，而不是蒙一个执行", async () => {
+    const real = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
+      const r = await runChain([{ id: "sc", type: "automation.system", config: { command: "关机吧" } }]);
+      expect(r.reached).toBe(false);
+      expect(r.feedback).toContain("未知命令");
+    } finally {
+      Object.defineProperty(process, "platform", real);
+    }
+  });
+});
+
+describe("Terminal Command 终端命令", () => {
+  it("非 macOS 上明确提示并中断", async () => {
+    if (process.platform === "darwin") return;
+    const r = await runChain([{ id: "tm", type: "action.terminal", config: { command: "ls" } }]);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("macOS");
+  });
+
+  it("命令为空就停下，不去开一个空终端窗口", async () => {
+    const real = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
+      const r = await runChain([{ id: "tm", type: "action.terminal", config: { command: "  " } }]);
+      expect(r.reached).toBe(false);
+      expect(r.feedback).toContain("命令为空");
+    } finally { Object.defineProperty(process, "platform", real); }
+  });
+
+  it("不认识的终端要明说不支持，而不是静默什么都不做", async () => {
+    const real = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
+      const r = await runChain([{ id: "tm", type: "action.terminal", config: { command: "ls", app: "Warp" } }]);
+      expect(r.reached).toBe(false);
+      expect(r.feedback).toContain("不支持的终端");
+    } finally { Object.defineProperty(process, "platform", real); }
+  });
+});
+
+describe("Web Search 网页搜索", () => {
+  // 每条用例前清一次，免得断言读到上一条留下的地址
+  const opened = async (middle: NodeDef[], arg?: string) => {
+    const { openedUrls } = await import("./stubs/electron");
+    openedUrls.length = 0;
+    const r = await runChain(middle, arg);
+    return { ...r, urls: [...openedUrls] };
+  };
+
+  it("默认走 Google，关键词做 URL 编码", async () => {
+    const r = await opened([{ id: "ws", type: "action.websearch" }], "企业微信 下载");
+    expect(r.reached).toBe(true);
+    expect(r.urls[0]).toBe("https://www.google.com/search?q=" + encodeURIComponent("企业微信 下载"));
+  });
+
+  it("换引擎就换地址，搜索词还能拼前后缀", async () => {
+    const r = await opened([{
+      id: "ws", type: "action.websearch",
+      config: { engine: "github", query: "{query} language:ts" },
+    }], "workflow");
+    expect(r.urls[0]).toContain("github.com/search?q=");
+    expect(r.urls[0]).toContain(encodeURIComponent("workflow language:ts"));
+  });
+
+  it("没有关键词就不搜 —— 否则跳到一个空搜索页，看着像搜过了", async () => {
+    const r = await opened([{ id: "ws", type: "action.websearch" }], "");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("没有关键词");
+    expect(r.urls.length).toBe(0);
+  });
+
+  it("自定义地址少了占位符要拦下：不然搜什么都跳同一个页面", async () => {
+    const r = await opened([{
+      id: "ws", type: "action.websearch",
+      config: { engine: "custom", custom: "https://example.com/" },
+    }], "x");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("占位符");
+  });
+
+  it("未知引擎要停下，不去蒙一个", async () => {
+    const r = await opened([{ id: "ws", type: "action.websearch", config: { engine: "yahoo" } }], "x");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("未知搜索引擎");
+  });
+
+  it("搜完继续往下走，参数不变（它是个动作，不是取数）", async () => {
+    const r = await opened([{ id: "ws", type: "action.websearch" }], "原样");
+    expect(r.finalArg).toBe("原样");
+  });
+});
+
+describe("Speak 朗读 / Play Sound 提示音", () => {
+  it("没内容就不念", async () => {
+    const r = await runChain([{ id: "sp", type: "output.speak", config: { text: "" } }], "");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("没有内容");
+  });
+
+  it("Linux 上明确说不可用，而不是静默无声", async () => {
+    if (process.platform === "darwin" || process.platform === "win32") return;
+    const r = await runChain([{ id: "sp", type: "output.speak" }], "念一句");
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("macOS");
+    const s = await runChain([{ id: "sd", type: "output.sound" }]);
+    expect(s.reached).toBe(false);
+    expect(s.feedback).toContain("macOS");
+  });
+
+  it("声音文件不存在时报错停下 —— 静悄悄没响是最难查的那种", async () => {
+    const real = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    try {
+      const r = await runChain([{ id: "sd", type: "output.sound", config: { path: "/根本没有这个文件.aiff" } }]);
+      expect(r.reached).toBe(false);
+      expect(r.feedback).toContain("不存在");
+    } finally { Object.defineProperty(process, "platform", real); }
   });
 });

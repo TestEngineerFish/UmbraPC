@@ -51,14 +51,21 @@ const DEMO: Record<string, Cfg> = {
   "action.reveal": { path: "~/Desktop/a.txt" },
   "action.browse": { path: "~/Projects", app: "iTerm" },
   "action.filebuffer": { mode: "list", clearAfter: false },
+  "input.appsfilter": { action: "quit" },
+  "output.keycombo": { accelerator: "Command+Shift+K", hideFirst: false },
+  "automation.system": { command: "emptytrash" },
+  "action.terminal": { command: "cd ~/Downloads && ls -la", app: "iTerm" },
+  "action.websearch": { engine: "github", query: "{query} language:ts", browser: "Safari" },
+  "output.speak": { text: "跑完了", voice: "Tingting", rate: 220, wait: true },
+  "output.sound": { system: "Submarine" },
 };
 
 const ALL = CATALOG.flatMap((g) => g.items.map((i) => ({ type: i.type, soon: !!i.soon })));
 
 describe("对象库覆盖", () => {
-  it("62 种节点，17 种置灰、45 种可添加", () => {
+  it("62 种节点，8 种置灰、54 种可添加", () => {
     expect(ALL.length).toBe(62);
-    expect(ALL.filter((x) => x.soon).length).toBe(17);
+    expect(ALL.filter((x) => x.soon).length).toBe(8);
   });
 
   it.each(ALL.map((x) => [x.type, x.soon] as [string, boolean]))("%s 的摘要成形", (type, soon) => {
@@ -135,12 +142,49 @@ describe("值真的读进去了（不是永远显示占位）", () => {
     expect(text("action.filebuffer")).toContain("收进暂存区");
   });
 
+  it("窗口系统组：键位、命令、切换还是退出都要读出来", () => {
+    expect(text("input.appsfilter", DEMO["input.appsfilter"])).toContain("退出这个应用");
+    expect(text("input.appsfilter")).toContain("切换到这个应用");
+    const kc = text("output.keycombo", DEMO["output.keycombo"]);
+    expect(kc).toContain("Command+Shift+K");
+    expect(kc).toContain("不收起面板");
+    expect(text("output.keycombo")).toContain("先收起面板");
+    expect(text("output.keycombo")).toContain("未录键位");
+    expect(text("automation.system", DEMO["automation.system"])).toContain("清空废纸篓");
+    expect(text("automation.system")).toContain("锁定屏幕");
+  });
+
   it("macOS 专属组：名称、返回值处理、动作都要读出来", () => {
     expect(text("action.applescript", DEMO["action.applescript"])).toContain("作为参数传给下游");
     expect(text("automation.shortcut", DEMO["automation.shortcut"])).toContain("整理下载文件夹");
     expect(text("automation.shortcut", DEMO["automation.shortcut"])).toContain("不传");
     expect(text("automation.music", DEMO["automation.music"])).toContain("设置音量 30");
     expect(text("automation.music")).toContain("播放 / 暂停");
+  });
+
+  it("终端命令：要把「输出取不回来」这句写在卡片上", () => {
+    const t = text("action.terminal", DEMO["action.terminal"]);
+    expect(t).toContain("iTerm");
+    expect(t).toContain("输出取不回来");
+    expect(text("action.terminal")).toContain("Terminal");
+  });
+
+  it("网页搜索：引擎显示中文名，自定义时改显示地址", () => {
+    expect(text("action.websearch", DEMO["action.websearch"])).toContain("GitHub");
+    expect(text("action.websearch", DEMO["action.websearch"])).toContain("language:ts");
+    expect(text("action.websearch")).toContain("Google");                 // 不配时默认 Google
+    expect(text("action.websearch", { engine: "custom" })).toContain("未填地址");
+    expect(text("action.websearch", { engine: "custom", custom: "https://x/?q={query}" })).toContain("https://x");
+  });
+
+  it("朗读与提示音：音色、等不等、声音来源都要读出来", () => {
+    const sp = text("output.speak", DEMO["output.speak"]);
+    expect(sp).toContain("Tingting");
+    expect(sp).toContain("念完再往下");
+    expect(text("output.speak")).toContain("系统默认");
+    expect(text("output.sound", DEMO["output.sound"])).toContain("Submarine");
+    expect(text("output.sound")).toContain("Glass");                       // 不配时默认 Glass
+    expect(text("output.sound", { path: "~/a.wav" })).toContain("~/a.wav");
   });
 
   it("JSON Config：不合法的 JSON 在卡片上就说，别等运行才报错", () => {

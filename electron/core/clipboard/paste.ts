@@ -112,3 +112,89 @@ export async function simulatePaste(): Promise<boolean> {
   }
   return false;
 }
+
+// ── 任意按键组合 ────────────────────────────────────────────────────────────
+// 工作流的「发送按键」节点用。键位串沿用应用里录快捷键的那套格式（Command+Shift+K），
+// 用户在别处录到什么就能在这里填什么，不用再学一套写法。
+//
+// macOS 上分两条路：单个可打印字符走 keystroke，功能键走 key code。
+// 这是 System Events 的硬约束 —— keystroke "Return" 会真的把 R-e-t-u-r-n 六个字母打出去。
+const MAC_KEY_CODES: Record<string, number> = {
+  return: 36, enter: 36, tab: 48, space: 49, delete: 51, backspace: 51,
+  escape: 53, esc: 53, left: 123, right: 124, down: 125, up: 126,
+  home: 115, end: 119, pageup: 116, pagedown: 121, forwarddelete: 117,
+  f1: 122, f2: 120, f3: 99, f4: 118, f5: 96, f6: 97, f7: 98, f8: 100,
+  f9: 101, f10: 109, f11: 103, f12: 111,
+};
+// Windows 的 SendKeys 写法：修饰键是符号前缀，功能键是花括号名。
+const WIN_MODS: Record<string, string> = { command: "^", control: "^", alt: "%", shift: "+" };
+const WIN_KEYS: Record<string, string> = {
+  return: "{ENTER}", enter: "{ENTER}", tab: "{TAB}", space: " ", delete: "{BACKSPACE}",
+  backspace: "{BACKSPACE}", escape: "{ESC}", esc: "{ESC}", left: "{LEFT}", right: "{RIGHT}",
+  down: "{DOWN}", up: "{UP}", home: "{HOME}", end: "{END}", pageup: "{PGUP}", pagedown: "{PGDN}",
+  forwarddelete: "{DEL}",
+};
+
+// 把 "Command+Shift+K" 拆成修饰键集合与主键。主键统一小写。
+// 单独抽出来是为了能单测：拆错一个键位，表现是「按了没反应」，最难查。
+export function parseAccelerator(accel: string): { mods: string[]; key: string } | null {
+  const parts = String(accel || "").split("+").map((s) => s.trim()).filter(Boolean);
+  if (!parts.length) return null;
+  const key = (parts.pop() || "").toLowerCase();
+  if (!key) return null;
+  const mods: string[] = [];
+  for (const p of parts) {
+    const m = p.toLowerCase();
+    // CommandOrControl / Cmd / Opt 这些别名都归一，Electron 的录制器会产出其中几种
+    const norm = m === "cmd" || m === "commandorcontrol" ? "command"
+      : m === "opt" || m === "option" ? "alt"
+      : m === "ctrl" ? "control" : m;
+    if (["command", "control", "alt", "shift"].includes(norm) && !mods.includes(norm)) mods.push(norm);
+  }
+  return { mods, key };
+}
+
+// 向前台应用发一组按键。返回 {ok, error}：失败原因要能带给用户看
+// —— 「按了没反应」和「没有辅助功能权限」在界面上必须能区分开。
+export async function simulateKeyCombo(accel: string): Promise<{ ok: boolean; error: string }> {
+  const parsed = parseAccelerator(accel);
+  if (!parsed) return { ok: false, error: "键位为空或格式不对" };
+  const { mods, key } = parsed;
+  try {
+    if (process.platform === "darwin") {
+      const { systemPreferences } = await import("electron");
+      if (!systemPreferences.isTrustedAccessibilityClient(false)) {
+        return { ok: false, error: "没有辅助功能权限，无法向其它应用发送按键" };
+      }
+      const code = MAC_KEY_CODES[key];
+      // 只有单个字符能走 keystroke；多字符又不在功能键表里的，说明填了个我们不认识的键
+      if (code === undefined && [...key].length !== 1) {
+        return { ok: false, error: `不认识的按键：${key}` };
+      }
+      const using = mods.length ? ` using {${mods.map((m) => `${m} down`).join(", ")}}` : "";
+      const body = code !== undefined
+        ? `key code ${code}${using}`
+        : `keystroke "${key.replace(/["\\]/g, "\\$&")}"${using}`;
+      await new Promise<void>((resolve, reject) => {
+        execFile("osascript", ["-e", `tell application "System Events" to ${body}`], { timeout: 4000 },
+          (e) => (e ? reject(e) : resolve()));
+      });
+      return { ok: true, error: "" };
+    }
+    if (process.platform === "win32") {
+      const prefix = mods.map((m) => WIN_MODS[m] || "").join("");
+      const main = WIN_KEYS[key] || ([...key].length === 1 ? key : "");
+      if (!main) return { ok: false, error: `不认识的按键：${key}` };
+      const seq = prefix + main;
+      await new Promise<void>((resolve, reject) => {
+        execFile("powershell",
+          ["-NoProfile", "-Command", `Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait("${seq}")`],
+          { timeout: 4000 }, (e) => (e ? reject(e) : resolve()));
+      });
+      return { ok: true, error: "" };
+    }
+  } catch (e) {
+    return { ok: false, error: String(e instanceof Error ? e.message : e).slice(0, 120) };
+  }
+  return { ok: false, error: "当前系统不支持模拟按键" };
+}

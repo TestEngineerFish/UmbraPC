@@ -85,6 +85,7 @@ export class LauncherManager {
     this.engine = new WorkflowEngine(cfg, {
       sendAssistant: (t) => this.chatSender?.(t),
       hide: (rf) => this.hide(rf),
+      showPanel: () => this.show(),
       showLargeType: (t) => { void this.showLargeType(t); },
       showTextView: (p) => { void this.showTextView(p); },
       getSecret: (ref) => this.secretDeps?.getSecret(ref) ?? null,

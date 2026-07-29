@@ -8,7 +8,7 @@ import { ConfigStore, expandHome, httpBase, Workflow, WorkflowNode } from "../co
 import { httpFetch } from "../http";
 import { run, which, type RunResult } from "../shared/util";
 import { describe as describeFile, parseExts, searchFiles, type FileHit, type FileKind } from "./filesearch";
-import { simulatePaste, simulateCopy } from "../clipboard/paste";
+import { simulatePaste, simulateCopy, simulateKeyCombo } from "../clipboard/paste";
 import { readClipboardFiles } from "../clipboard/watcher";
 import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } from "./tools";
 import { ensureWorkflowDir, workflowEnv, resolveCwd } from "./workspace";
@@ -70,6 +70,9 @@ export interface TextViewPayload {
 export interface WorkflowDeps {
   sendAssistant: (text: string) => void;         // 复用「发给秘书」链路
   hide: (returnFocus: boolean) => Promise<void>; // 关闭启动器
+  // 重新唤起启动器面板（「显示主面板」节点用）。和 hide 配套：链路中间先收起面板去干活，
+  // 干完再把面板叫回来接着挑下一项。
+  showPanel: () => Promise<void>;
   showLargeType: (text: string) => void;         // 大字显示浮层
   showTextView: (p: TextViewPayload) => void;    // 文本视图浮层（可 Markdown、可流式追加）
   // 取密码保险箱里的明文（W10 的 password 配置项）。保险箱锁着/引用失效返回 null。
@@ -188,10 +191,72 @@ const MAC_ONLY = "这个节点只在 macOS 上可用";
 const APPLESCRIPT_TIMEOUT = 20_000;
 // 快捷指令可能真的要跑一会儿（发消息、处理图片），给宽一些。
 const SHORTCUT_TIMEOUT = 120_000;
+// 朗读 / 提示音的超时。这两个都是「响一下」的事，卡住就没有意义了。
+const SPEAK_TIMEOUT = 60_000;
+const SOUND_TIMEOUT = 30_000;
 // 单个暂存区最多攒多少个文件。攒到这个量还没处理，多半是忘了接 list/clear。
 const FILE_BUFFER_MAX = 200;
+
+// 网页搜索的引擎表。{q} 是**已 URL 编码**的查询词。
+// 引擎挂在节点上而不是做成全局设置项 —— Alfred 也是这么摆的，而且一个工作流搜 GitHub、
+// 另一个搜百度是常态，全局唯一反而不够用。
+const SEARCH_ENGINES: Record<string, { label: string; url: string }> = {
+  google: { label: "Google", url: "https://www.google.com/search?q={q}" },
+  bing: { label: "Bing", url: "https://www.bing.com/search?q={q}" },
+  duckduckgo: { label: "DuckDuckGo", url: "https://duckduckgo.com/?q={q}" },
+  baidu: { label: "百度", url: "https://www.baidu.com/s?wd={q}" },
+  github: { label: "GitHub", url: "https://github.com/search?q={q}" },
+  wikipedia: { label: "维基百科", url: "https://zh.wikipedia.org/w/index.php?search={q}" },
+};
+
+// 「把命令打进终端窗口」在不同终端里要用各自的 AppleScript 方言，没法一套通吃。
+// 只支持这两个：Terminal 是系统自带（一定有），iTerm 是最常见的替代品。
+// 填别的终端会明确报「不支持」，而不是静默打开一个空窗口。
+const TERMINAL_SCRIPTS: Record<string, (cmd: string) => string> = {
+  Terminal: (cmd) => `tell application "Terminal"\n activate\n do script "${cmd}"\nend tell`,
+  iTerm: (cmd) => `tell application "iTerm"\n activate\n set w to (create window with default profile)\n tell current session of w to write text "${cmd}"\nend tell`,
+};
+// AppleScript 字符串里要转义反斜杠和双引号，否则命令里带任何一个都会把脚本撑坏。
+function escapeAppleString(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+// System Command 能做的事。只收录**说得清、后果明确**的那几个 ——
+// 关机、重启这类不进来：工作流误触的代价太大，真要做也该走确认弹窗那条路。
+// script 里的 osascript 都不需要额外权限（清废纸篓会弹系统自己的确认框）。
+const SYSTEM_CMDS: Record<string, { label: string; mac: string; needsDarwin: true }> = {
+  lock: { label: "锁定屏幕", mac: 'tell application "System Events" to keystroke "q" using {command down, control down}', needsDarwin: true },
+  sleep: { label: "睡眠", mac: 'tell application "System Events" to sleep', needsDarwin: true },
+  screensaver: { label: "启动屏保", mac: 'tell application "System Events" to start current screen saver', needsDarwin: true },
+  emptytrash: { label: "清空废纸篓", mac: 'tell application "Finder" to empty trash', needsDarwin: true },
+  hideothers: { label: "隐藏其它应用", mac: 'tell application "System Events" to set visible of (every process whose visible is true and frontmost is false) to false', needsDarwin: true },
+  logout: { label: "注销当前用户", mac: 'tell application "System Events" to log out', needsDarwin: true },
+};
 function macOnly(): string | null {
   return process.platform === "darwin" ? null : MAC_ONLY;
+}
+
+// 列出当前在跑的、有界面的应用名。只取 background only = false 的那些 ——
+// 后台守护/输入法/菜单栏代理有几十个，混进来会把列表淹掉，而用户要切的永远是有窗口的。
+async function listRunningApps(): Promise<string[]> {
+  if (process.platform !== "darwin") return [];
+  const r = await runAppleScript(
+    'tell application "System Events" to get name of every process whose background only is false',
+    6_000,
+  );
+  if (r.code !== 0) return [];
+  // osascript 返回的是「A, B, C」这种逗号分隔的一行
+  return r.output.split(",").map((s) => s.trim()).filter(Boolean).sort((a, b) => a.localeCompare(b));
+}
+
+// 切换到某个应用，或退出它。名字里的引号要转义，否则 AppleScript 会被截断。
+async function controlApp(name: string, quit: boolean): Promise<string> {
+  const bad = macOnly();
+  if (bad) return bad;
+  const safe = name.replace(/["\\]/g, "\\$&");
+  const r = await runAppleScript(`tell application "${safe}" to ${quit ? "quit" : "activate"}`, 8_000);
+  if (r.code !== 0) return `${quit ? "退出" : "切换"}「${name}」失败：${r.output.trim().slice(0, 60)}`;
+  return quit ? `已退出 ${name} ✓` : `已切换到 ${name} ✓`;
 }
 
 // 在系统词典里查一个词。dict:// 是 macOS 的词典 URL scheme，open 一下就会唤起词典 App。
@@ -423,6 +488,7 @@ export class WorkflowEngine {
       case "input.units": return this.runCompute(wf, node, arg, "units");
       case "input.dict": return this.runDict(wf, node, arg);
       case "input.filefilter": return this.runFileFilter(wf, node, arg);
+      case "input.appsfilter": return this.runRunningApps(wf, node, arg);
       default: return null;
     }
   }
@@ -534,6 +600,33 @@ export class WorkflowEngine {
       }, mods, { rank: i });
       // 图标按真实文件取（loadIcon 认路径），取不到就退回工作流自己的图标
       r.icon = this.loadIcon(h.path, wf.icon || (h.dir ? "📁" : "📄"));
+      return r;
+    });
+  }
+
+  // 内置输入：Running Apps —— 列出当前在跑的应用，供切换或退出。
+  //
+  // 取列表走 System Events 的进程表，并且只要 `background only is false` 的 ——
+  // 后台进程（各种守护、输入法、菜单栏代理）几十个，混进来只会把列表淹掉，
+  // 而用户想切换/退出的永远是有窗口的那些。
+  // 选中一条时 arg 是**应用名**；没接下游时由「节点自带默认动作」按配置切换或退出它。
+  private async runRunningApps(wf: Workflow, node: WorkflowNode, arg: string): Promise<LauncherResult[]> {
+    if (process.platform !== "darwin") return [];
+    const names = await listRunningApps();
+    if (!names.length) return [];
+    const q = (arg || "").trim().toLowerCase();
+    const hit = q ? names.filter((n) => n.toLowerCase().includes(q)) : names;
+    const quit = String(node.config.action || "switch") === "quit";
+    const mods = this.branchMods(wf, node.id);
+    const limit = Math.max(1, Math.min(Number(this.cfg.get().launcherMaxResults) || 12, 50));
+    return hit.slice(0, limit).map((name, i) => {
+      const r = this.itemResult(wf, node.id, {
+        title: name,
+        subtitle: quit ? "回车退出这个应用" : "回车切换到这个应用",
+        arg: name,
+        uid: name,   // 学习键用应用名：常切的那个下次会被顶上来
+      }, mods, { rank: i });
+      r.icon = wf.icon || (quit ? "🚪" : "🪟");
       return r;
     });
   }
@@ -740,6 +833,9 @@ export class WorkflowEngine {
       // 目前只有词典查询一个（它单独存在就有意义，不该逼用户再挂一个「打开网址」）。
       const self = this.node(wf, c.srcNodeId);
       if (self?.type === "input.dict") return openDictionary(arg);
+      if (self?.type === "input.appsfilter") {
+        return controlApp(arg, String(self.config.action || "switch") === "quit");
+      }
       const { clipboard } = await import("electron");
       clipboard.writeText(arg);
       return "已复制 ✓";
@@ -979,6 +1075,158 @@ export class WorkflowEngine {
       case "utility.delay": {
         const ms = Math.max(0, Math.min(Number(node.config.seconds || 0) * 1000, 60000));
         if (ms) await new Promise((r) => setTimeout(r, ms));
+        break;
+      }
+
+      // ── Terminal Command —— 把命令**打进终端窗口**（区别于后台跑的 Run Script）──
+      // Alfred 对这两个的分工说得很清楚：要拿命令的输出、或者不想开终端，就用 Run Script；
+      // 这个节点是「我要看着它跑」。所以**下游收到的是透传的参数，不是终端的输出** ——
+      // 终端里的东西在另一个进程里，我们根本拿不到。
+      case "action.terminal": {
+        const bad = macOnly();
+        if (bad) { feedback = bad; stop = true; break; }
+        const cmd = this.subst(String(node.config.command || "{query}"), arg, vars).trim();
+        if (!cmd) { feedback = "终端命令：命令为空"; stop = true; break; }
+        const app = String(node.config.app || "Terminal").trim() || "Terminal";
+        const make = TERMINAL_SCRIPTS[app];
+        if (!make) {
+          feedback = `不支持的终端：${app}（只支持 Terminal 与 iTerm —— 别的终端要各自的 AppleScript 方言）`;
+          stop = true; break;
+        }
+        const r = await runAppleScript(make(escapeAppleString(cmd)), APPLESCRIPT_TIMEOUT);
+        if (r.code !== 0) {
+          feedback = `打开终端失败：${r.output.trim().split("\n").pop()?.slice(0, 80) || `退出码 ${r.code}`}`;
+          stop = true; break;
+        }
+        feedback = `已在 ${app} 中执行 ✓`;
+        break;   // outArg 不动：下游拿到的是透传的参数
+      }
+
+      // ── Web Search —— 用选定的搜索引擎搜一下 ──
+      case "action.websearch": {
+        const q = this.subst(String(node.config.query || "{query}"), arg, vars).trim();
+        if (!q) { feedback = "网页搜索：没有关键词"; stop = true; break; }
+        const key = String(node.config.engine || "google");
+        const tpl = key === "custom"
+          ? String(node.config.custom || "").trim()
+          : (SEARCH_ENGINES[key]?.url || "");
+        if (!tpl) { feedback = key === "custom" ? "网页搜索：没填自定义地址" : `未知搜索引擎：${key}`; stop = true; break; }
+        if (!tpl.includes("{q}") && !tpl.includes("{query}")) {
+          feedback = "自定义地址里要有 {query} 占位符，否则搜什么都跳同一个页面";
+          stop = true; break;
+        }
+        const url = tpl.replace(/\{q(uery)?\}/g, encodeURIComponent(q));
+        const browser = String(node.config.browser || "").trim();
+        const { shell } = await import("electron");
+        if (browser) {
+          // 指定了浏览器就用 open -a 交给它；没指定走系统默认浏览器
+          const r = await run("open", ["-a", browser, url], { timeoutMs: 8_000 });
+          if (r.code !== 0) { feedback = `用 ${browser} 打开失败：${r.output.trim().slice(0, 60)}`; stop = true; break; }
+        } else {
+          await shell.openExternal(url);
+        }
+        feedback = `已搜索「${q.slice(0, 20)}」✓`;
+        break;
+      }
+
+      // ── Speak —— 把文本念出来 ──
+      // macOS 用系统自带的 say，Windows 用 PowerShell 的 SAPI。两边都不用装东西。
+      case "output.speak": {
+        const text = this.subst(String(node.config.text || "{query}"), arg, vars).trim();
+        if (!text) { feedback = "朗读：没有内容"; stop = true; break; }
+        const wait = node.config.wait === true;   // 默认不等：念一长段时不该把链路卡住
+        if (process.platform === "darwin") {
+          const args: string[] = [];
+          const voice = String(node.config.voice || "").trim();
+          if (voice) args.push("-v", voice);
+          const rate = Number(node.config.rate || 0);
+          if (rate > 0) args.push("-r", String(Math.max(50, Math.min(rate, 500))));
+          args.push(text);
+          if (wait) {
+            const r = await run("say", args, { timeoutMs: SPEAK_TIMEOUT });
+            if (r.code !== 0) { feedback = `朗读失败：${r.output.trim().slice(0, 60)}`; stop = true; break; }
+          } else {
+            void run("say", args, { timeoutMs: SPEAK_TIMEOUT });
+          }
+        } else if (process.platform === "win32") {
+          const safe = text.replace(/'/g, "''");
+          const ps = `Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('${safe}')`;
+          if (wait) await run("powershell", ["-NoProfile", "-Command", ps], { timeoutMs: SPEAK_TIMEOUT });
+          else void run("powershell", ["-NoProfile", "-Command", ps], { timeoutMs: SPEAK_TIMEOUT });
+        } else {
+          feedback = "朗读只在 macOS 与 Windows 上可用";
+          stop = true; break;
+        }
+        feedback = "已朗读 ✓";
+        break;
+      }
+
+      // ── Play Sound —— 播一段提示音 ──
+      // 不填路径时播系统提示音；填了就播那个文件。一律不等它放完（提示音的意义就是不打断流程）。
+      case "output.sound": {
+        const raw = this.subst(String(node.config.path || ""), arg, vars).trim();
+        if (process.platform === "darwin") {
+          const target = raw
+            ? expandHome(raw)
+            : `/System/Library/Sounds/${String(node.config.system || "Glass")}.aiff`;
+          if (!await pathExists(target)) { feedback = `声音文件不存在：${target}`; stop = true; break; }
+          void run("afplay", [target], { timeoutMs: SOUND_TIMEOUT });
+        } else if (process.platform === "win32") {
+          const target = raw ? expandHome(raw) : "";
+          const ps = target
+            ? `(New-Object Media.SoundPlayer '${target.replace(/'/g, "''")}').PlaySync()`
+            : "[System.Media.SystemSounds]::Asterisk.Play()";
+          void run("powershell", ["-NoProfile", "-Command", ps], { timeoutMs: SOUND_TIMEOUT });
+        } else {
+          feedback = "播放提示音只在 macOS 与 Windows 上可用";
+          stop = true; break;
+        }
+        feedback = "已播放 ✓";
+        break;
+      }
+
+      // ── 窗口：隐藏 / 显示主面板 ──
+      // 「主面板」= 快捷入口那个浮层。链路中间先收起它去干活（不然新开的窗口会被它挡住），
+      // 干完再叫回来接着挑下一项。hide 的 returnFocus=true：把焦点还给刚才那个应用。
+      case "utility.hide":
+        await this.deps.hide(true);
+        break;
+      case "utility.show":
+        await this.deps.showPanel();
+        break;
+
+      // ── 窗口：Dispatch Key Combo —— 向前台应用发一组按键 ──
+      // 键位串用应用里录快捷键的同一套格式（Command+Shift+K），用户不用再学一套写法。
+      // 发之前默认先收起面板：不收的话按键会发给面板自己，而不是用户以为的那个应用。
+      case "output.keycombo": {
+        const accel = this.subst(String(node.config.accelerator || ""), arg, vars).trim();
+        if (!accel) { feedback = "发送按键：没录键位"; stop = true; break; }
+        if (node.config.hideFirst !== false) {
+          await this.deps.hide(true);
+          // 给系统一点时间把焦点真正交还给前台应用，不等的话按键会打空
+          await new Promise((r) => setTimeout(r, Math.max(0, Math.min(Number(node.config.delayMs ?? 180), 2000))));
+        }
+        const k = await simulateKeyCombo(accel);
+        if (!k.ok) { feedback = `发送按键失败：${k.error}`; stop = true; break; }
+        feedback = `已发送 ${accel} ✓`;
+        break;
+      }
+
+      // ── 窗口：System Command —— 锁屏 / 睡眠 / 清废纸篓这类系统操作 ──
+      case "automation.system": {
+        const bad = macOnly();
+        if (bad) { feedback = bad; stop = true; break; }
+        const key = String(node.config.command || "lock");
+        const cmd = SYSTEM_CMDS[key];
+        if (!cmd) { feedback = `系统命令：未知命令 ${key}`; stop = true; break; }
+        const r = await runAppleScript(cmd.mac, APPLESCRIPT_TIMEOUT);
+        stdout = r.output;
+        exitCode = r.code ?? undefined;
+        if (r.code !== 0) {
+          feedback = `${cmd.label}失败：${r.output.trim().split("\n").pop()?.slice(0, 80) || `退出码 ${r.code}`}`;
+          stop = true; break;
+        }
+        feedback = `${cmd.label} ✓`;
         break;
       }
 

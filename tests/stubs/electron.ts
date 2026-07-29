@@ -7,7 +7,13 @@ export const net = {
 export const app = { getPath: () => "/tmp" };
 export const ipcMain = { handle: () => {}, on: () => {} };
 export const clipboard = { readText: () => "", writeText: () => {} };
-export const shell = { openPath: () => Promise.resolve("") };
+// 记下每一次 openExternal 的地址：网页搜索节点的价值全在「拼出来的地址对不对」，
+// 不记下来就只能测报错分支，最该测的那条反而测不到。
+export const openedUrls: string[] = [];
+export const shell = {
+  openPath: () => Promise.resolve(""),
+  openExternal: (u: string) => { openedUrls.push(u); return Promise.resolve(); },
+};
 export const systemPreferences = { canPromptTouchID: () => false };
 export const safeStorage = { isEncryptionAvailable: () => false };
 export const BrowserWindow = class {};

@@ -119,7 +119,7 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "input.calc", label: "计算器", icon: IconCalc },
     { type: "input.units", label: "单位换算", icon: IconRuler },
     { type: "input.filefilter", label: "File Filter 文件过滤器", icon: IconFolder, hint: "按关键词、目录范围和文件类型搜本地文件并列出来。macOS 走 Spotlight，其余平台需限定目录。" },
-    { type: "input.appsfilter", label: "Running Apps 运行中应用", icon: IconWindow, soon: true, hint: "列出当前运行的应用供切换/退出。要接系统窗口信息，暂未实现。" },
+    { type: "input.appsfilter", label: "Running Apps 运行中应用", icon: IconWindow, hint: "列出当前在跑的应用，回车切换或退出。仅 macOS。" },
     { type: "input.dict", label: "Dictionary 词典查询", icon: IconBook, hint: "把输入送进 macOS 的词典 App 查词。仅 macOS。" },
   ] },
   { cat: "工具 Utilities", icon: IconGear, items: [
@@ -137,8 +137,8 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "utility.dialog", label: "Dialog Conditional 对话框", icon: IconAlert, soon: true, hint: "弹个框问用户，按点了哪个按钮分流。UI 规范还没定。" },
     { type: "utility.random", label: "Random 随机值", icon: IconDice, hint: "生成随机数 / UUID / 随机串，写进参数或变量。" },
     { type: "utility.jsonconfig", label: "JSON Config 配置", icon: IconFile, hint: "用一段 JSON 一次性设置多个变量。" },
-    { type: "utility.hide", label: "隐藏主面板", icon: IconEyeOff, soon: true, hint: "执行到这里先把主面板收起来再继续。等窗口控制接口补齐。" },
-    { type: "utility.show", label: "显示主面板", icon: IconEye, soon: true, hint: "把主面板重新唤起，和「隐藏主面板」配套。" },
+    { type: "utility.hide", label: "隐藏主面板", icon: IconEyeOff, hint: "执行到这里先把快捷入口面板收起来再继续（新窗口就不会被它挡住）。" },
+    { type: "utility.show", label: "显示主面板", icon: IconEye, hint: "把快捷入口面板重新唤起，和「隐藏主面板」配套。" },
   ] },
   { cat: "动作 Actions", icon: IconRocket, items: [
     { type: "action.launch", label: "Launch Apps / Files 启动", icon: IconRocket },
@@ -153,16 +153,16 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "action.create_task", label: "建任务", icon: IconCalendar },
     { type: "action.device_skill", label: "设备技能派发", icon: IconCloud },
     { type: "action.reveal", label: "Reveal in Finder 在文件管理器中显示", icon: IconSearch, hint: "在系统文件管理器里定位并选中这个文件（不打开它）。" },
-    { type: "action.terminal", label: "Terminal Command 终端命令", icon: IconTerminal, soon: true, hint: "把命令送到系统终端里执行（区别于后台跑的 Run Script）。" },
+    { type: "action.terminal", label: "Terminal Command 终端命令", icon: IconTerminal, hint: "把命令打进终端窗口里、看着它跑。要拿命令的输出请用 Run Script —— 终端在另一个进程里，我们取不到它的输出。仅 macOS。" },
     { type: "action.browse", label: "Browse in Terminal 在终端中打开目录", icon: IconTerminal, hint: "在终端里打开这个目录；给的是文件就取它所在的目录。仅 macOS。" },
-    { type: "action.websearch", label: "Web Search 默认网页搜索", icon: IconGlobe, soon: true, hint: "用默认搜索引擎搜关键词。等搜索引擎设置项落地。" },
+    { type: "action.websearch", label: "Web Search 网页搜索", icon: IconGlobe, hint: "拿参数去搜索引擎搜一下。默认 Google，可改成 Bing/百度/GitHub 等，也可自己填地址模板。" },
     { type: "action.filebuffer", label: "File Buffer 文件暂存区", icon: IconGrid, hint: "把文件先攒起来，攒够了一次性交给下游。只在内存里，退出即清空。" },
     { type: "action.applescript", label: "Run AppleScript", icon: IconTerminal, hint: "跑一段 AppleScript，可拿回它的返回值。仅 macOS。" },
   ] },
   { cat: "自动化 Automations", icon: IconClock, items: [
     { type: "automation.task", label: "Automation Task 自动化任务", icon: IconGear, soon: true, hint: "调用预置的系统自动化任务包。我们打算用「设备技能」来对应，先占位。" },
     { type: "automation.shortcut", label: "Run Shortcut 运行快捷指令", icon: IconGear, hint: "调用「快捷指令」App 里的一条指令，可传入参数、取回结果。需 macOS 12+。" },
-    { type: "automation.system", label: "System Command 系统命令", icon: IconWindow, soon: true, hint: "锁屏、睡眠、清废纸篓这类系统操作。要逐条对齐各平台实现。" },
+    { type: "automation.system", label: "System Command 系统命令", icon: IconCommand, hint: "锁屏、睡眠、屏保、清废纸篓这类系统操作。仅 macOS。" },
     { type: "automation.music", label: "Music Command 音乐控制", icon: IconMusic, hint: "控制「音乐」App：播放/暂停、切歌、音量、看当前播放。仅 macOS。" },
   ] },
   { cat: "输出 Outputs", icon: IconBell, items: [
@@ -170,9 +170,9 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "output.largetype", label: "Large Type 大字显示", icon: IconBook },
     { type: "output.textview", label: "Text View 文本视图", icon: IconFile },
     { type: "output.writefile", label: "Write Text File 写文本文件", icon: IconDownload },
-    { type: "output.keycombo", label: "Dispatch Key Combo 发送按键", icon: IconKeyboard, soon: true, hint: "向前台应用发一组按键。要系统辅助功能权限。" },
-    { type: "output.speak", label: "Speak 朗读", icon: IconVolume, soon: true, hint: "把参数念出来。等接系统 TTS。" },
-    { type: "output.sound", label: "Play Sound 播放提示音", icon: IconMusic, soon: true, hint: "播一段提示音。" },
+    { type: "output.keycombo", label: "Dispatch Key Combo 发送按键", icon: IconKeyboard, hint: "向前台应用发一组按键。需要辅助功能权限。" },
+    { type: "output.speak", label: "Speak 朗读", icon: IconVolume, hint: "用系统语音把文本念出来（macOS 的 say / Windows 的 SAPI），不用装任何东西。" },
+    { type: "output.sound", label: "Play Sound 播放提示音", icon: IconMusic, hint: "播一段提示音，用来给长链路收个尾。不填路径就用系统自带的提示音。" },
     { type: "output.exttrigger", label: "Call External Trigger 调用外部触发", icon: IconRefresh, soon: true, hint: "从这条工作流跳去触发另一条工作流。等 External 触发做完配套。" },
   ] },
 ];
@@ -268,6 +268,10 @@ function defaultConfig(type: string): Record<string, unknown> {
     case "action.openurl": return { url: "{query}" };
     case "action.openfile": return { path: "{query}", app: "" };
     case "action.launch": return { paths: [], toggleVisibility: false };
+    case "action.terminal": return { command: "{query}", app: "Terminal" };
+    case "action.websearch": return { engine: "google", query: "{query}", custom: "", browser: "" };
+    case "output.speak": return { text: "{query}", voice: "", rate: 0, wait: false };
+    case "output.sound": return { path: "", system: "Glass" };
     default: return {};
   }
 }
@@ -1479,6 +1483,11 @@ const DELIM_LABEL: Record<string, string> = { comma: "逗号", space: "空格", 
 // 音乐控制的命令名。键要和主进程 workflow.ts 里 MUSIC_CMDS 的键一一对应 ——
 // 两处对不上时卡片会显示原始键名（不至于崩，但一眼能看出是谁漏了）。
 // 文件类别的中文名。键要和主进程 filesearch.ts 里 KIND_UTI 的键一一对应。
+// 系统命令的中文名。键要和主进程 workflow.ts 里 SYSTEM_CMDS 的键一一对应。
+const SYSTEM_LABEL: Record<string, string> = {
+  lock: "锁定屏幕", sleep: "睡眠", screensaver: "启动屏保",
+  emptytrash: "清空废纸篓", hideothers: "隐藏其它应用", logout: "注销当前用户",
+};
 const FILE_KIND_LABEL: Record<string, string> = {
   any: "全部", folder: "文件夹", image: "图片", audio: "音频",
   movie: "视频", pdf: "PDF", text: "文本", archive: "压缩包",
@@ -1486,6 +1495,12 @@ const FILE_KIND_LABEL: Record<string, string> = {
 const MUSIC_LABEL: Record<string, string> = {
   playpause: "播放 / 暂停", play: "播放", pause: "暂停",
   next: "下一首", previous: "上一首", volume: "设置音量", now: "当前播放",
+};
+// 搜索引擎的显示名。键要和主进程 workflow.ts 里 SEARCH_ENGINES 的键一一对应；
+// custom 只在这边有，主进程那边是靠 config.custom 走的另一条分支。
+const SEARCH_ENGINE_LABEL: Record<string, string> = {
+  google: "Google", bing: "Bing", duckduckgo: "DuckDuckGo",
+  baidu: "百度", github: "GitHub", wikipedia: "维基百科", custom: "自定义地址",
 };
 const TRANSFORM_LABEL: Record<string, string> = {
   upper: "全部大写", lower: "全部小写", title: "首字母大写", trim: "去掉首尾空白",
@@ -1561,6 +1576,26 @@ export function nodeRows(n: WFNode): SumRow[] {
     case "input.codec": return [
       { k: "类型", v: { url: "URL", base64: "Base64" }[c.mode || "unicode"] || "Unicode" },
       { k: "方向", v: "按输入自动判断编/解码" },
+    ];
+    case "input.appsfilter": return [
+      { k: "列出", v: "当前在跑、有界面的应用" },
+      { k: "回车", v: String(c.action || "switch") === "quit" ? "退出这个应用" : "切换到这个应用" },
+    ];
+    case "utility.hide": return [
+      { k: "动作", v: "收起快捷入口面板" },
+      { k: "焦点", v: "还给刚才那个应用" },
+    ];
+    case "utility.show": return [
+      { k: "动作", v: "重新唤起快捷入口面板" },
+      { k: "配套", v: "和「隐藏主面板」成对用" },
+    ];
+    case "output.keycombo": return [
+      { k: "按键", v: val(c.accelerator, "未录键位"), mono: true },
+      { k: "发送前", v: cfg.hideFirst === false ? "不收起面板" : "先收起面板" },
+    ];
+    case "automation.system": return [
+      { k: "命令", v: SYSTEM_LABEL[String(c.command || "lock")] || String(c.command) },
+      { k: "范围", v: "系统级（仅 macOS）" },
     ];
     case "input.filefilter": {
       const scopes = String(c.scopes || "").split("\n").map((x) => x.trim()).filter(Boolean);
@@ -1722,6 +1757,19 @@ export function nodeRows(n: WFNode): SumRow[] {
         { k: "目标", v: "「音乐」App（仅 macOS）" },
       ];
     }
+    case "action.terminal": return [
+      { k: "命令", v: cut(val(c.command, "{query}"), 26), mono: true },
+      { k: "终端", v: `${val(c.app, "Terminal")}（输出取不回来）` },
+    ];
+    case "action.websearch": {
+      const key = String(c.engine || "google");
+      return [
+        { k: "引擎", v: SEARCH_ENGINE_LABEL[key] || key },
+        key === "custom"
+          ? { k: "地址", v: cut(val(c.custom, "未填地址"), 26), mono: true }
+          : { k: "搜什么", v: cut(val(c.query, "{query}"), 26), mono: true },
+      ];
+    }
     case "action.copy": return [
       { k: "内容", v: "上游参数 {query}", mono: true },
       { k: "去向", v: "系统剪贴板" },
@@ -1767,6 +1815,14 @@ export function nodeRows(n: WFNode): SumRow[] {
     case "output.writefile": return [
       { k: "文件", v: cut(val(c.path, "未设文件名"), 26), mono: true },
       { k: "已存在时", v: c.ifExists === "append" ? "追加" : c.ifExists === "skip" ? "跳过" : "覆盖" },
+    ];
+    case "output.speak": return [
+      { k: "念什么", v: cut(val(c.text, "{query}"), 26), mono: true },
+      { k: "声音", v: `${val(c.voice, "系统默认")}${c.wait ? " · 念完再往下" : ""}` },
+    ];
+    case "output.sound": return [
+      { k: "声音", v: c.path ? cut(String(c.path), 26) : `系统提示音 ${val(c.system, "Glass")}`, mono: !!c.path },
+      { k: "时机", v: "不等它放完，直接往下走" },
     ];
 
     // 兜底：类型不在上面（理论上不会发生，除非新加了对象忘了补这里）。
@@ -2063,6 +2119,56 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
             <div className="text-[11.5px] text-muted">从上往下逐条判断，命中哪条就走哪个出口；全不中走「否则」。出口没连线时链路自然结束。</div>
             <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
           </>) : null}
+          {node.type === "input.appsfilter" ? (<>
+            <div><span className={lab}>选中之后做什么</span>
+              <select className={inp} value={String(c.action || "switch")} onChange={(e) => set("action", e.target.value)}>
+                <option value="switch">切换到这个应用</option>
+                <option value="quit">退出这个应用</option>
+              </select></div>
+            <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS。</b>只列<b>有界面</b>的应用 ——
+              后台守护、输入法、菜单栏代理有几十个，混进来会把列表淹掉，而你想切换/退出的永远是有窗口的那些。<br />
+              不接下游时回车按上面这个设置执行；接了下游就按下游走（这时参数是应用名）。</div>
+          </>) : null}
+          {node.type === "utility.hide" ? (
+            <div className="text-[12px] text-muted leading-[1.7]">执行到这里先把快捷入口面板收起来，再继续跑下游。<br />
+              典型用法：下游要打开一个窗口或者发按键，不先收面板的话，新窗口会被面板挡住、按键也会发给面板自己。<br />
+              收起时会把焦点还给刚才那个应用。无配置项。</div>
+          ) : null}
+          {node.type === "utility.show" ? (
+            <div className="text-[12px] text-muted leading-[1.7]">把快捷入口面板重新唤起，和「隐藏主面板」配套用：中间去干点活，干完把面板叫回来接着挑下一项。<br />
+              重新唤起的是空的搜索框（不恢复上一次的输入）。无配置项。</div>
+          ) : null}
+          {node.type === "output.keycombo" ? (<>
+            <div><span className={lab}>要发送的键位</span>
+              <input className={`${inp} font-mono`} value={String(c.accelerator || "")} onChange={(e) => set("accelerator", e.target.value)}
+                placeholder="Command+Shift+K" /></div>
+            <label className="flex items-center gap-2 text-[12px] text-muted">
+              <input type="checkbox" checked={c.hideFirst !== false} onChange={(e) => set("hideFirst", e.target.checked)} />发送前先收起面板（建议开着）
+            </label>
+            {c.hideFirst !== false ? (
+              <div><span className={lab}>收起后等多久再发（毫秒）</span>
+                <input type="number" className={`${inp} font-mono`} value={String(c.delayMs ?? 180)} onChange={(e) => set("delayMs", e.target.value)} /></div>
+            ) : null}
+            <div className="text-[11px] text-muted leading-[1.7]">键位写法和别处录快捷键一样：<span className="font-mono">Command+Shift+K</span>、
+              <span className="font-mono">Control+Return</span>、<span className="font-mono">Alt+Left</span>。功能键直接写名字（Return / Tab / Space / Escape / Delete / 方向键 / F1–F12）。<br />
+              <b>需要「辅助功能」权限</b>，没授权时会明确报出来，不会静默失败。<br />
+              不收起面板的话，按键会发给面板自己而不是你以为的那个应用 —— 所以默认开着，
+              等待的那一下是留给系统把焦点真正交还回去的时间。</div>
+          </>) : null}
+          {node.type === "automation.system" ? (<>
+            <div><span className={lab}>命令</span>
+              <select className={inp} value={String(c.command || "lock")} onChange={(e) => set("command", e.target.value)}>
+                <option value="lock">锁定屏幕</option>
+                <option value="sleep">睡眠</option>
+                <option value="screensaver">启动屏保</option>
+                <option value="emptytrash">清空废纸篓</option>
+                <option value="hideothers">隐藏其它应用</option>
+                <option value="logout">注销当前用户</option>
+              </select></div>
+            <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS。</b>
+              这里刻意<b>没有关机和重启</b> —— 工作流误触的代价太大，真需要的话应该走带确认弹窗的那条路。<br />
+              「清空废纸篓」会弹系统自己的确认框，不会无声删掉东西。</div>
+          </>) : null}
           {node.type === "input.filefilter" ? (<>
             <div><span className={lab}>关键词（按文件名匹配）</span>
               <input className={`${inp} font-mono`} value={String(c.keyword || "")} onChange={(e) => set("keyword", e.target.value)} placeholder="{query}" /></div>
@@ -2155,6 +2261,66 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
               </select></div>
             <div className="text-[11px] text-muted leading-[1.7]"><b>仅 macOS</b>，别的平台上会直接提示不可用并停下，不会静默什么都不做。<br />
               脚本经标准输入送给 osascript，所以正文里带引号、换行、中文都没问题。超时 20 秒 —— AppleScript 要么秒回，要么就是弹了个框在等人。</div>
+          </>) : null}
+          {node.type === "action.terminal" ? (<>
+            <div><span className={lab}>命令（{"{query}"} = 上游参数）</span>
+              <textarea className={`${inp} font-mono h-[70px] resize-y`} value={String(c.command || "")} onChange={(e) => set("command", e.target.value)}
+                placeholder={"cd ~/Downloads && ls -la"} /></div>
+            <div><span className={lab}>用哪个终端</span>
+              <select className={inp} value={String(c.app || "Terminal")} onChange={(e) => set("app", e.target.value)}>
+                <option value="Terminal">Terminal（系统自带）</option>
+                <option value="iTerm">iTerm</option>
+              </select></div>
+            <div className="text-[11px] text-muted leading-[1.7]"><b>和 Run Script 的区别</b>：Run Script 在后台跑、拿得到 stdout；这个节点是把命令<b>打进终端窗口</b>里，你能看着它跑，但<b>输出取不回来</b>（终端在另一个进程里）。所以下游收到的还是上游那个参数，不是命令的结果。<br />
+              <b>仅 macOS</b>。只支持这两个终端 —— 别的终端要各自的 AppleScript 方言，填别的会明确报错而不是静默开个空窗口。</div>
+          </>) : null}
+          {node.type === "action.websearch" ? (<>
+            <div><span className={lab}>搜索引擎</span>
+              <select className={inp} value={String(c.engine || "google")} onChange={(e) => set("engine", e.target.value)}>
+                <option value="google">Google（默认）</option>
+                <option value="bing">Bing</option>
+                <option value="duckduckgo">DuckDuckGo</option>
+                <option value="baidu">百度</option>
+                <option value="github">GitHub</option>
+                <option value="wikipedia">维基百科</option>
+                <option value="custom">自定义地址…</option>
+              </select></div>
+            {String(c.engine || "google") === "custom" ? (
+              <div><span className={lab}>地址模板（必须含 {"{query}"} 占位符）</span>
+                <input className={`${inp} font-mono`} value={String(c.custom || "")} onChange={(e) => set("custom", e.target.value)}
+                  placeholder="https://example.com/search?q={query}" /></div>
+            ) : null}
+            <div><span className={lab}>搜什么（{"{query}"} = 上游参数，可以拼前缀）</span>
+              <input className={`${inp} font-mono`} value={String(c.query || "")} onChange={(e) => set("query", e.target.value)} placeholder="{query}" /></div>
+            <div className="flex gap-1.5"><input className={`flex-1 ${inp}`} value={String(c.browser || "")} onChange={(e) => set("browser", e.target.value)} placeholder="用哪个浏览器打开（留空=系统默认）" />
+              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const a = await api.pickApp(); if (a) set("browser", a); }}>选择</button></div>
+            <div className="text-[11px] text-muted leading-[1.7]">关键词会自动做 URL 编码，中文和空格都不用自己处理。<br />
+              引擎是<b>挂在这个节点上</b>的，不是全局设置 —— 一条工作流搜 GitHub、另一条搜百度是常态。</div>
+          </>) : null}
+          {node.type === "output.speak" ? (<>
+            <div><span className={lab}>念什么（{"{query}"} = 上游参数）</span>
+              <textarea className={`${inp} h-[60px] resize-y`} value={String(c.text || "")} onChange={(e) => set("text", e.target.value)} placeholder="{query}" /></div>
+            <div className="flex gap-2">
+              <div className="flex-1"><span className={lab}>音色（可选，macOS）</span>
+                <input className={inp} value={String(c.voice || "")} onChange={(e) => set("voice", e.target.value)} placeholder="如 Tingting / Samantha" /></div>
+              <div className="w-[120px]"><span className={lab}>语速（0=默认）</span>
+                <input type="number" className={`${inp} font-mono`} value={String(c.rate ?? 0)} onChange={(e) => set("rate", e.target.value)} /></div>
+            </div>
+            <label className="flex items-center gap-2 text-[12px] text-muted"><input type="checkbox" checked={!!c.wait} onChange={(e) => set("wait", e.target.checked)} />念完再往下走</label>
+            <div className="text-[11px] text-muted leading-[1.7]">macOS 用系统自带的 say，Windows 用 SAPI，两边都不用装东西；Linux 上会明确提示不可用。<br />
+              <b>默认不等它念完</b> —— 念一长段时不该把整条链路卡在这儿。语速取值 50–500，超出会被夹回来。<br />
+              音色名可以在终端跑 <span className="font-mono">say -v ?</span> 看全表。</div>
+          </>) : null}
+          {node.type === "output.sound" ? (<>
+            <div><span className={lab}>系统提示音（不填下面的文件时用这个）</span>
+              <select className={inp} value={String(c.system || "Glass")} onChange={(e) => set("system", e.target.value)}>
+                {["Glass", "Ping", "Pop", "Purr", "Submarine", "Basso", "Blow", "Bottle", "Frog", "Funk", "Hero", "Morse", "Sosumi", "Tink"].map((s) => <option key={s} value={s}>{s}</option>)}
+              </select></div>
+            <div className="flex gap-1.5"><input className={`flex-1 ${inp} font-mono`} value={String(c.path || "")} onChange={(e) => set("path", e.target.value)} placeholder="自定义声音文件（可选，支持 ~）" />
+              <button className="px-[10px] border border-border rounded-lg text-[12px]" onClick={async () => { const p = await api.pickPath(); if (p) set("path", p); }}>选择</button></div>
+            <div className="text-[11px] text-muted leading-[1.7]">macOS 用 afplay，Windows 用 SoundPlayer；<b>一律不等它放完</b> —— 提示音的意义就是不打断流程。<br />
+              文件不存在时会明确报错停下，而不是静悄悄地什么都没响（那种最难查）。<br />
+              上面这些是 macOS 自带的提示音，在 <span className="font-mono">/System/Library/Sounds</span> 里。</div>
           </>) : null}
           {node.type === "automation.shortcut" ? (<>
             <div><span className={lab}>快捷指令名称（要和「快捷指令」App 里完全一致）</span>
