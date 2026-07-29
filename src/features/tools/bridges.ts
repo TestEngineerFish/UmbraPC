@@ -7,7 +7,15 @@ export interface LauncherFolder { name: string; path: string; app?: string }
 // 自定义脚本项：关键字触发，可选是否要输入、结果是否回写剪贴板。
 export interface LauncherScript { name: string; keyword?: string; command: string; icon?: string; needsInput?: boolean; output?: "copy" | "none" }
 // 常用语：名称 + 内容，可选关键字直达。
-export interface Phrase { id: string; name: string; content: string; keyword?: string }
+export interface Phrase { id: string; name: string; content: string; keyword?: string; updatedAt?: number }
+
+// 常用语云端同步状态（设置页展示「上次同步 / 失败原因」用）。
+export interface PhraseSyncState {
+  syncing: boolean;
+  lastAt: number;       // 上次成功同步的时间戳，0=从没成功过
+  lastError: string;    // 上次失败原因，空串=没失败
+  configured: boolean;  // 是否配好了服务器地址与 token
+}
 
 // 快捷入口主进程桥。
 export interface LauncherAPI {
@@ -25,6 +33,9 @@ export interface LauncherAPI {
   openWorkflowDir(wfId: string): Promise<{ ok: boolean; dir: string; error: string }>;
   getPhrases(): Promise<Phrase[]>;
   setPhrases(phrases: Phrase[]): Promise<void>;
+  phrasesSyncNow(): Promise<boolean>;
+  phrasesSyncState(): Promise<PhraseSyncState>;
+  onPhrasesChanged(cb: (list: Phrase[]) => void): () => void;
 }
 
 // 剪贴板历史分类保留时长（小时，0=永久保留）。

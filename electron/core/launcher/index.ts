@@ -5,10 +5,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
 import { ConfigStore, expandHome, LauncherFolder, LauncherScript, Phrase, Workflow, WorkflowPrefab } from "../config";
+import { PhraseSync, collectTombs, stampUpdated } from "./phrases-sync";
 import { ClipStore } from "../clipboard/store";
 import { writeToClipboard, simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
+import { suppressAppActivate } from "../activation";
+import { anyStrongMatch, bestMatch, frecency, frecencyBoost, lookupUsage, noteUsage, pruneUsage, type UsageEntry } from "./rank";
+import { readBundleNames, searchableNames, type BundleNames } from "./appinfo";
 import { WorkflowEngine, migrateScriptsToWorkflows, migrateFolders, seedBuiltinTools, NO_BRANCH } from "./workflow";
 import type { TextViewPayload } from "./workflow";
 import { ensureWorkflowDir } from "./workspace";
@@ -24,7 +28,8 @@ export interface LauncherResult {
   subtitle?: string;
   icon?: string;           // data URL / emoji
   source: string;          // 来源 provider（app/folder/clipboard/workflow）
-  score: number;           // 合并排序用
+  score: number;           // 合并排序用（来源基准分 + 匹配质量；frecency 在 finalize 里再加）
+  match?: number;          // 纯匹配质量分，仅用于同分时的第二级排序
   action: LauncherAction;  // 主动作（回车执行）
   mods?: string[];         // 工作流结果的修饰键分支（如 ["cmd"]），供渲染层提示 ⌘ 分支
   // 使用频率学习用的稳定标识。工作流结果的 id 是一次性 token，每次查询都在变，
@@ -56,7 +61,8 @@ export class LauncherManager {
   private shownAt = 0;  // 唤起时刻：刚弹出瞬间的失焦（主窗口被激活抢焦）要忽略，避免立刻收起/来回切换
   private cache = new Map<string, LauncherResult>();  // 本次查询结果，供 run 回查
   private lastQuery = "";                              // 本次查询词，供 run 记录使用频率
-  private usage: Record<string, { c: number; t: number }> = {};  // 使用频率学习：`${query}\n${id}` → {次数,最近}
+  // 使用习惯学习：`${查询词前缀}\n${id}` → {次数, 最近时间}。前缀分桶见 rank.ts 的说明。
+  private usage: Record<string, UsageEntry> = {};
   private usageFile: string;
   private engine: WorkflowEngine;  // 工作流执行引擎
   private wfWin: Electron.BrowserWindow | null = null;  // 工作流编排 独立窗口
@@ -69,9 +75,12 @@ export class LauncherManager {
   private textLoading = false;                             // 文本视图正在等远程回复：此时失焦不自动收起
   private secretDeps: VaultBridge | null = null;   // 密码保险箱桥（W10 的 password 配置项）
   private rerunTimer: NodeJS.Timeout | undefined;          // Script Filter 的 rerun 定时器（W3）
+  private phraseSync: PhraseSync;                          // 常用语云端同步（按条目合并 + 删除墓碑）
 
   constructor(private cfg: ConfigStore, private clipStore: ClipStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
     this.usageFile = path.join(userData, "launcher-usage.json");
+    // 同步结果落地后广播，让设置页和快捷入口面板都拿到最新的常用语。
+    this.phraseSync = new PhraseSync(cfg, () => this.broadcastPhrases());
     this.engine = new WorkflowEngine(cfg, {
       sendAssistant: (t) => this.chatSender?.(t),
       hide: (rf) => this.hide(rf),
@@ -97,21 +106,31 @@ export class LauncherManager {
     try { this.usage = JSON.parse(await fs.readFile(this.usageFile, "utf-8")); } catch { this.usage = {}; }
     // 预热：启动时就把浮层窗建好并加载渲染层（藏着），首次唤起即可秒开，避免忽快忽慢。
     try { await this.ensurePanel(); } catch { /* 预热失败不影响后续按需创建 */ }
+    // 应用目录 + 包内名字索引也提前建好（要读几百个 Info.plist，别摊到第一次搜索上）。
+    void this.listAppDirs().catch(() => { /* 建不起来就退回按文件名搜 */ });
+    // 常用语云端同步：启动拉一次，之后按周期拉；本地改动由 setPhrases 触发推送。
+    this.phraseSync.start();
     // 全局快捷键由 main.ts 统一注册（见 registerShortcut）。
   }
 
-  // 使用频率学习：同一 query 下选过的项自动加权置顶。
-  private usageKey(q: string, id: string): string { return `${q.trim().toLowerCase()}\n${id}`; }
-  private boost(q: string, id: string): number {
-    const u = this.usage[this.usageKey(q, id)];
-    if (!u) return 0;
-    return Math.min(u.c * 25, 200) + (Date.now() - u.t < 7 * 864e5 ? 20 : 0);
+  // 常用语被云端同步改写后广播给所有窗口，设置页/面板不用轮询也能刷新。
+  private async broadcastPhrases(): Promise<void> {
+    const { BrowserWindow } = await import("electron");
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (!w.isDestroyed()) w.webContents.send("launcher:phrases:changed", this.cfg.get().phrases || []);
+    }
   }
-  private noteUse(key: string): void {
-    if (!this.lastQuery) return;
-    const k = this.usageKey(this.lastQuery, key);
-    const u = this.usage[k] || { c: 0, t: 0 };
-    this.usage[k] = { c: u.c + 1, t: Date.now() };
+
+  // 使用习惯加权：frecency（次数 × 时近乘子）再用 ln 压成有界加分，见 rank.ts。
+  private boost(q: string, id: string): number {
+    return frecencyBoost(frecency(lookupUsage(this.usage, q, id), Date.now()));
+  }
+  // 记一次使用。查询词的每个前缀都记一份，所以「打 sour 选了 SourceTree」
+  // 之后只打一个 s 也能把它顶到第一位。空查询也记（前缀 "" 即全局桶）。
+  private noteUse(id: string): void {
+    const now = Date.now();
+    noteUsage(this.usage, this.lastQuery, id, now);
+    pruneUsage(this.usage, now);
     fs.mkdir(path.dirname(this.usageFile), { recursive: true })
       .then(() => fs.writeFile(this.usageFile, JSON.stringify(this.usage), "utf-8")).catch(() => {});
   }
@@ -169,6 +188,9 @@ export class LauncherManager {
       win.setPosition(Math.round(wa.x + (wa.width - w) / 2), Math.round(wa.y + wa.height * 0.22));
     } catch { win.center(); }
     this.shownAt = Date.now();
+    // show()/focus() 会顺带激活整个 app，触发 main.ts 的 app.on("activate")。
+    // 那个回调是给「点 Dock 图标」用的，跑到这里只会 dock.show() + 把主窗口拽到前台抢焦点。
+    suppressAppActivate();
     win.show();
     win.focus();
     win.webContents.send("launcher:shown");
@@ -273,27 +295,35 @@ export class LauncherManager {
     const ql = q.toLowerCase();
     const phrases = this.cfg.get().phrases || [];
     return phrases
-      .map((p, i): LauncherResult | null => {
+      .map((p): LauncherResult | null => {
         const kw = (p.keyword || "").toLowerCase();
-        const nameHit = (p.name || "").toLowerCase().includes(ql);
-        const kwHit = kw && (kw === ql || kw.startsWith(ql));
-        const contentHit = (p.content || "").toLowerCase().includes(ql);
-        if (!nameHit && !kwHit && !contentHit) return null;
-        const score = 130 + (kwHit ? 60 : nameHit ? 30 : 0) - i;  // 靠前的略高
+        const kwHit = !!kw && (kw === ql || kw.startsWith(ql));
+        // 命中判定交给模糊匹配，但同样只认词首级别的匹配，免得正文里散落几个字母就冒出来。
+        // 关键词是「直达」语义，永远保留；用过的条目也豁免。
+        if (!kwHit
+            && !anyStrongMatch(q, [p.name, p.content])
+            && this.boost(q, `phrase:${p.id}`) <= 0) return null;
+        const m = Math.max(0, bestMatch(q, [p.name, p.keyword, p.content]));
+        const score = 100 + Math.round(m * 0.55) + (kwHit ? 35 : 0);
         return {
           id: `phrase:${p.id}`, title: p.name || p.content.slice(0, 40),
           subtitle: `常用语 · 回车插入 · ${p.content.replace(/\s+/g, " ").slice(0, 50)}`,
-          icon: "💬", source: "phrase", score,
+          icon: "💬", source: "phrase", score, match: m,
           action: { kind: "paste_text", payload: { text: p.content } },
         };
       })
       .filter((r): r is LauncherResult => r !== null);
   }
 
-  // 使用频率加权 + 排序 + 截断 + 缓存。
+  // 使用习惯加权 + 排序 + 截断 + 缓存。
+  // 排序三级：总分（来源基准 + 匹配质量 + frecency）→ 纯匹配质量 → 标题字典序。
+  // 最后一级是为了让「分数完全打平」的情况有个稳定、可预期的顺序，而不是随провider返回顺序漂。
   private finalize(q: string, results: LauncherResult[]): LauncherResult[] {
     for (const r of results) if (!r.noLearn) r.score += this.boost(q, r.learnId || r.id);
-    results.sort((a, b) => b.score - a.score);
+    results.sort((a, b) =>
+      b.score - a.score
+      || (b.match ?? 0) - (a.match ?? 0)
+      || a.title.localeCompare(b.title));
     // 展示条数跟随设置（launcherMaxResults），上限 50 条防止列表失控。
     const max = Math.max(1, Math.min(Number(this.cfg.get().launcherMaxResults) || 12, 50));
     const top = results.slice(0, max);
@@ -316,20 +346,45 @@ export class LauncherManager {
       this.mdfindApps(q).catch(() => [] as string[]),
       this.scanApps(q).catch(() => [] as string[]),
     ]);
-    const paths = [...new Set([...byScan, ...byIndex])].slice(0, 6); // 目录扫描的结果更可信，排前面
+    // 候选池要够大：以前这里直接 slice(0,6)，而 scanApps 是按「前缀优先 + 名字短优先」排的，
+    // 于是打一个 s，Safari / Slack / Siri 这些短名字先把 6 个位置占满，
+    // SourceTree 连进入打分环节的机会都没有 —— 「常用的软件打首字母排第一」自然永远做不到。
+    // 现在放到 40 个候选，先用模糊匹配 + 使用习惯排完序，再只给前 8 名取图标（取图标才是慢的那步）。
+    const paths = [...new Set([...byScan, ...byIndex])].slice(0, 40);
 
     const ql = q.toLowerCase();
+    // Spotlight 这一路命中的一律放行：它索引到的某个字段确实匹配了这次查询，
+    // 哪怕本地的名字都对不上（别名、本地化名等我们读不到的字段）。
+    const fromSpotlight = new Set(byIndex);
+    const scored = paths.map((p) => {
+      const names = this.appNames(p);
+      // 标题优先用包内展示名（企业微信.app 显示成 WeCom），回落文件名；副标题始终是完整路径。
+      const name = this.appTitle(p);
+      let m = bestMatch(q, names);
+      const spotlight = fromSpotlight.has(p);
+      // 本地名字都对不上、但 Spotlight 认它：给一个中档保底分，
+      // 排在真·词首匹配之后、其它一切之前，而不是锁死 0 分被截断掉。
+      if (m < 0) m = spotlight ? 100 : 0;
+      const lowers = names.map((n) => n.toLowerCase());
+      if (lowers.includes(ql)) m += 60;                          // 完全同名一定压住其它
+      else if (lowers.some((n) => n.startsWith(ql))) m += 25;    // 前缀次之
+      const keep = spotlight || anyStrongMatch(q, names) || this.boost(q, `app:${p}`) > 0;
+      return { p, name, base: 100 + Math.round(m * 0.55), match: m, keep };
+    }).filter((x) => x.keep);
+    // 先按「基准分 + 使用习惯」排，再截断取图标。
+    scored.sort((a, b) =>
+      (b.base + this.boost(q, `app:${b.p}`)) - (a.base + this.boost(q, `app:${a.p}`))
+      || b.match - a.match
+      || a.name.localeCompare(b.name));
+
     const out: LauncherResult[] = [];
-    for (const p of paths) {
-      const name = path.basename(p).replace(/\.app$/i, "");
-      const lower = name.toLowerCase();
-      // 完全相同 > 前缀 > 包含；文件名里搜不到但 Spotlight 命中的（别名/包名）分最低。
-      const hit = lower === ql ? 60 : lower.startsWith(ql) ? 40 : lower.includes(ql) ? 20 : 0;
+    for (const it of scored.slice(0, 8)) {
       let icon = "";
-      try { icon = await getAppIcon(p); } catch { /* 图标失败不阻塞 */ }
+      try { icon = await getAppIcon(it.p); } catch { /* 图标失败不阻塞 */ }
       out.push({
-        id: `app:${p}`, title: name, subtitle: p, icon: icon || "📦", source: "app", score: 100 + hit,
-        action: { kind: "open_app", payload: { path: p } },
+        id: `app:${it.p}`, title: it.name, subtitle: it.p, icon: icon || "📦", source: "app",
+        score: it.base, match: it.match,
+        action: { kind: "open_app", payload: { path: it.p } },
       });
     }
     return out;
@@ -354,7 +409,22 @@ export class LauncherManager {
 
   // 兜底：直接扫应用目录，按**文件名**匹配。
   // Spotlight 索引抽风 / 字段对不上时，这条路照样能找到「企业微信.app」。
-  private appDirCache: { at: number; paths: string[] } = { at: 0, paths: [] };
+  // 应用目录缓存。
+  // info 是「路径 → 包内名字」：很多应用的**文件名和展示名不是一回事**，
+  // 比如 /Applications/企业微信.app 的 CFBundleDisplayName 是 WeCom，
+  // 只按文件名搜，打 we 就永远找不到它 —— Alfred / Spotlight 能找到，正是因为它们认的是包里的名字。
+  // 这份数据直接读 Info.plist（见 appinfo.ts），不依赖 Spotlight，也就不会因为索引状态而静默失效。
+  private appDirCache: { at: number; paths: string[]; info: Map<string, BundleNames> } =
+    { at: 0, paths: [], info: new Map() };
+  // 路径 → 参与匹配的全部名字（文件名 / 展示名 / 短名 / bundle id 尾段）
+  private appNames(p: string): string[] {
+    return searchableNames(p, this.appDirCache.info.get(p) || {});
+  }
+  // 路径 → 列表里显示的标题：优先包内展示名（企业微信.app 显示成 WeCom），回落文件名。
+  private appTitle(p: string): string {
+    const b = this.appDirCache.info.get(p);
+    return (b?.display || b?.name || "").trim() || path.basename(p).replace(/\.app$/i, "");
+  }
 
   private async listAppDirs(): Promise<string[]> {
     const now = Date.now();
@@ -368,43 +438,82 @@ export class LauncherManager {
       "/System/Applications/Utilities",
       path.join(os.homedir(), "Applications"),
     ];
+    // 多扫一层子目录：不少应用（尤其国内的套装）装在 /Applications/<厂商>/xxx.app 下，
+    // 只扫顶层会整个漏掉。再深就不值当了，会把 .app 内部的嵌套包也翻出来。
     const found: string[] = [];
     for (const root of roots) {
       try {
-        for (const e of await fs.readdir(root)) {
-          if (e.endsWith(".app")) found.push(path.join(root, e));
+        for (const e of await fs.readdir(root, { withFileTypes: true })) {
+          const full = path.join(root, e.name);
+          if (e.name.endsWith(".app")) { found.push(full); continue; }
+          if (!e.isDirectory() || e.name.startsWith(".")) continue;
+          try {
+            for (const sub of await fs.readdir(full)) {
+              if (sub.endsWith(".app")) found.push(path.join(full, sub));
+            }
+          } catch { /* 子目录读不了就跳过 */ }
         }
       } catch {
         /* 目录不存在 */
       }
     }
-    this.appDirCache = { at: now, paths: found };
+    this.appDirCache = { at: now, paths: found, info: await this.readAllBundleNames(found) };
     return found;
   }
 
+  // 批量读包内名字。纯文件读取，几百个包也就几十毫秒，而且 5 分钟才重建一次。
+  // 分批并发，别一次甩几百个 open 出去把 fd 打满。
+  private async readAllBundleNames(paths: string[]): Promise<Map<string, BundleNames>> {
+    const map = new Map<string, BundleNames>();
+    if (process.platform !== "darwin") return map;
+    const BATCH = 32;
+    for (let i = 0; i < paths.length; i += BATCH) {
+      const slice = paths.slice(i, i + BATCH);
+      const got = await Promise.all(slice.map((p) => readBundleNames(p)));
+      slice.forEach((p, k) => map.set(p, got[k]));
+    }
+    return map;
+  }
+
+  // 目录扫描候选：判定从「包含」放宽到「子序列」，这样 st→SourceTree、wc→WeChat 也能进候选池。
+  // 这里只负责初筛 + 粗排，精排（含使用习惯）在 searchApps 里做。
   private async scanApps(q: string): Promise<string[]> {
-    const ql = q.toLowerCase();
     const all = await this.listAppDirs();
-    return all
-      .filter((p) => path.basename(p).replace(/\.app$/i, "").toLowerCase().includes(ql))
-      .sort((a, b) => {
-        const an = path.basename(a).toLowerCase();
-        const bn = path.basename(b).toLowerCase();
-        return Number(bn.startsWith(ql)) - Number(an.startsWith(ql)) || an.length - bn.length;
-      });
+    const hits: { p: string; m: number; n: string }[] = [];
+    for (const p of all) {
+      // 文件名 / 展示名 / 短名 / bundle id 尾段全试一遍，取最高分。
+      // 企业微信.app 就是靠展示名 WeCom（或 id 尾段 WeWorkMac）被 we 命中的。
+      const names = this.appNames(p);
+      const m = bestMatch(q, names);
+      if (m < 0) continue;
+      // 字符散落在词中间的弱匹配（we ↔ Unsplash Wallpapers）直接不出现，
+      // 但用户真用过的条目豁免——他既然这么搜过并选中，就说明这条对他有意义。
+      if (!anyStrongMatch(q, names) && this.boost(q, `app:${p}`) <= 0) continue;
+      hits.push({ p, m, n: (names[0] || "").toLowerCase() });
+    }
+    // 粗排时也把使用习惯算进来，免得候选池截断again 把常用项挡在门外。
+    hits.sort((a, b) =>
+      (b.m + this.boost(q, `app:${b.p}`)) - (a.m + this.boost(q, `app:${a.p}`))
+      || a.n.length - b.n.length);
+    return hits.map((h) => h.p);
   }
 
   // Provider③：剪贴板历史（搜索文本，回车粘贴）。
   private searchClipboard(q: string): LauncherResult[] {
     if (q.length < 1) return [];
-    const items = this.clipStore.list("text", q).slice(0, 5);
-    return items.map((it): LauncherResult => ({
-      id: `clip:${it.id}`,
-      title: (it.preview || it.content || "").slice(0, 80),
-      subtitle: "剪贴板 · 回车粘贴",
-      icon: "📋", source: "clipboard", score: 60,
-      action: { kind: "paste_clip", payload: { id: it.id } },
-    }));
+    const items = this.clipStore.list("text", q).slice(0, 8);
+    return items.map((it): LauncherResult => {
+      const title = (it.preview || it.content || "").slice(0, 80);
+      const m = Math.max(0, bestMatch(q, [title]));
+      return {
+        id: `clip:${it.id}`,
+        title,
+        subtitle: "剪贴板 · 回车粘贴",
+        // 剪贴板条目基准分刻意压低：同样能匹配上时，启动应用几乎总是用户更想要的。
+        icon: "📋", source: "clipboard", score: 55 + Math.round(m * 0.35), match: m,
+        action: { kind: "paste_clip", payload: { id: it.id } },
+      };
+    });
   }
 
   // 「发给秘书」：把当前输入直接发到 PC 聊天主会话（跳转聊天页 + 发送）。由 main.ts 注入回调。
@@ -570,7 +679,21 @@ export class LauncherManager {
     ipcMain.handle("launcher:clearTrace", () => { this.engine.trace.clear(); });
     // 常用语读写（设置页管理）。
     ipcMain.handle("launcher:getPhrases", () => this.cfg.get().phrases || []);
-    ipcMain.handle("launcher:setPhrases", (_e, phrases: Phrase[]) => this.cfg.save({ phrases: Array.isArray(phrases) ? phrases : [] }));
+    // 保存常用语：顺带盖改动时间戳、收集删除墓碑，再排一次云端推送。
+    // 时间戳只盖在「内容真的变了」的条目上——无脑全盖会让本机的所有条目在合并时
+    // 无理由地赢过别的设备。
+    ipcMain.handle("launcher:setPhrases", async (_e, phrases: Phrase[]) => {
+      const next = Array.isArray(phrases) ? phrases : [];
+      const prev = this.cfg.get().phrases || [];
+      await this.cfg.save({
+        phrases: stampUpdated(next, prev),
+        phrasesDeleted: collectTombs(next, prev, this.cfg.get().phrasesDeleted || []),
+      });
+      this.phraseSync.schedulePush();
+    });
+    // 常用语同步：设置页的「立即同步」按钮 + 状态展示。
+    ipcMain.handle("launcher:phrasesSyncNow", () => this.phraseSync.sync());
+    ipcMain.handle("launcher:phrasesSyncState", () => this.phraseSync.getState());
     // 大字显示浮层：渲染层 ready 时索取文本；渲染完成后再显示窗口（去残影）；关闭时隐藏。
     ipcMain.handle("largetype:ready", () => this.pendingLarge);
     ipcMain.handle("largetype:rendered", () => {

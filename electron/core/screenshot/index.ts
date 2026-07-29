@@ -6,6 +6,7 @@ import { ConfigStore } from "../config";
 import { mt } from "../../i18n";
 import { ocrImage, translateImage } from "./ocr";
 import { StickerManager } from "./stickers";
+import { suppressAppActivate } from "../activation";
 
 interface CaptureResult {
   dataUrl: string;
@@ -164,6 +165,7 @@ export class ScreenshotManager {
     }
     if (!this.overlay || this.overlay.isDestroyed() || !this.lastCapture) return;
     this.overlay.setBounds(this.lastCapture.bounds);
+    suppressAppActivate(); // 同上：别让覆盖窗的激活把主窗口拽出来
     this.overlay.show();
     this.overlay.focus();
   }

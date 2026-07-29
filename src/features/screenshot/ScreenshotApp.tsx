@@ -92,6 +92,14 @@ export function App() {
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
   const sampleRef = useRef<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; ratio: number } | null>(null);
   const cursorRef = useRef<Point>({ x: 0, y: 0 });
+  // 鼠标是否已经动过：刚进截屏、还没动之前整屏压一层遮罩提示「已进入截屏」，
+  // 一动就撤掉（微信 PC 端就是这个手感），免得遮罩挡着取景。
+  const movedRef = useRef(false);
+  // 窗口刚出现在光标底下时，Chromium 可能补发一条位置没变的 mousemove。
+  // 所以记下第一条的坐标，真的挪开几像素才算「动过」，否则遮罩会一闪而过。
+  const firstPtRef = useRef<Point | null>(null);
+  // redraw 定义在下面，这里只能经 ref 调用（写进依赖数组会在初始化前求值，踩 TDZ）。
+  const redrawRef = useRef<() => void>(() => {});
   const clipRef = useRef<Obj[]>([]); // 图形剪贴板（复制/粘贴，仅本窗口内）
   const histRef = useRef<Obj[][]>([]); // 撤销栈（对象数组快照）
 
@@ -163,6 +171,8 @@ export function App() {
     clipRef.current = [];
     mosaicBaseRef.current = null;
     sampleRef.current = null;
+    movedRef.current = false;
+    firstPtRef.current = null;
     setImgSrc("");
     requestAnimationFrame(() => setImgSrc(cap.dataUrl));
   }, []);
@@ -214,6 +224,13 @@ export function App() {
   useEffect(() => {
     const onMoveCursor = (e: MouseEvent) => {
       cursorRef.current = { x: e.clientX, y: e.clientY };
+      if (!movedRef.current) {
+        if (!firstPtRef.current) { firstPtRef.current = { x: e.clientX, y: e.clientY }; return; }
+        const d = Math.abs(e.clientX - firstPtRef.current.x) + Math.abs(e.clientY - firstPtRef.current.y);
+        if (d < 4) return;
+        movedRef.current = true;
+        redrawRef.current(); // 撤掉「还没动过」的那层整屏遮罩
+      }
     };
     window.addEventListener("mousemove", onMoveCursor);
     return () => window.removeEventListener("mousemove", onMoveCursor);
@@ -240,6 +257,12 @@ export function App() {
     ctx.clearRect(0, 0, W, H);
 
     const sel = g.current.mode === "select" ? currentSel() : st.current.selection;
+    // 还没框选、鼠标也还没动过：整屏一层浅遮罩，告诉用户截屏已经开着了。
+    // 比选区遮罩浅一档（0.28 vs 0.45），既能看清底下的画面，又一眼知道进了截屏态。
+    if (!sel && !movedRef.current && st.current.phase === "select") {
+      ctx.fillStyle = "rgba(0,0,0,0.28)";
+      ctx.fillRect(0, 0, W, H);
+    }
     if (sel) {
       ctx.save();
       ctx.fillStyle = "rgba(0,0,0,0.45)";
@@ -360,6 +383,8 @@ export function App() {
     }
     ctx.restore();
   }
+
+  redrawRef.current = redraw;
 
   useEffect(() => {
     redraw();

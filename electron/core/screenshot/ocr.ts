@@ -5,6 +5,7 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { mt, getMainLocale } from "../../i18n";
+import { httpFetch } from "../http";
 
 export interface OcrResult {
   ok: boolean;
@@ -99,7 +100,7 @@ export async function translateImage(dataUrl: string, apiKey: string): Promise<T
   const target = targetLang(source) === "en" ? mt("electron.translatePromptEn", undefined, loc) : mt("electron.translatePromptZh", undefined, loc);
   const prompt = `把下面的文本翻译成${target}，只输出译文，保持原有分行，不要任何解释或额外内容：\n\n${source}`;
   try {
-    const resp = await fetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
+    const resp = await httpFetch("https://open.bigmodel.cn/api/paas/v4/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({ model: "glm-4-flash", messages: [{ role: "user", content: prompt }], temperature: 0.2 }),

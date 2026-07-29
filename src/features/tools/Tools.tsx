@@ -7,7 +7,7 @@ import { ClipboardTool } from "./ClipboardTool";
 import { ScreenshotTool } from "./ScreenshotTool";
 import { LauncherTool } from "./LauncherTool";
 import { WorkflowTool } from "./WorkflowTool";
-import { PhrasesTool } from "./PhrasesTool";
+import { PhrasesTool, PhrasesSyncStatus } from "./PhrasesTool";
 import { VaultTool } from "./VaultTool";
 import { hasClip, hasShot, hasLauncher, hasVault } from "./bridges";
 import * as legacy from "../../app/shell";
@@ -124,6 +124,10 @@ export function Tools() {
                 <h1 className="m-0 text-[16px] font-semibold leading-tight">{t(meta?.labelKey || "nav.tools")}</h1>
                 <div className="text-[12.5px] text-muted mt-[2px]">{t(meta?.descKey || "")}</div>
               </div>
+              {/* 标题行右上角的页面级动作位：目前只有常用语用到（同步状态 + 立即同步）。
+                  放这儿而不是塞进列表头，是因为它管的是整页数据，不属于某一张卡片。 */}
+              <div className="flex-1" />
+              {active === "phrases" ? <div className="flex-none self-center"><PhrasesSyncStatus /></div> : null}
             </div>
             {active === "clipboard" ? <ClipboardTool /> : null}
             {active === "screenshot" ? <ScreenshotTool /> : null}

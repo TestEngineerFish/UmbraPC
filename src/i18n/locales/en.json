@@ -28,8 +28,15 @@
     "launcherPreview": "What it looks like",
     "previewFolder": "Folder",
     "phraseCount": "{{n}}",
-    "phraseListHint": "Click a row to edit · drag the handle to reorder",
-    "dragToReorder": "Drag to reorder"
+    "phraseListHint": "Click to edit · drag the handle to reorder · right-click to delete",
+    "dragToReorder": "Drag to reorder",
+    "phraseSyncNow": "Sync now",
+    "phraseSyncOff": "No server configured — local only",
+    "phraseSyncing": "Syncing…",
+    "phraseSyncFailed": "Sync failed: {{err}}",
+    "phraseSyncNever": "Not synced yet",
+    "phraseSyncJustNow": "Synced just now",
+    "phraseSyncAgo": "Synced {{n}}m ago"
   },
   "workspaces": {
     "countLine": "{{n}} total · {{auto}} auto-created",
@@ -344,7 +351,7 @@
     "phraseName": "Name",
     "phraseKeyword": "Keyword",
     "phraseContent": "Content (text to insert)",
-    "phrasesHint": "Search by name/keyword/content in the launcher; Enter inserts the content into the front app (needs Accessibility, else copy only). Reorder with ▲▼.",
+    "phrasesHint": "Search by name/keyword/content in the launcher; Enter inserts the content into the front app (needs Accessibility, else copy only). Click a row to edit, drag the handle to reorder, right-click to delete. Changes sync to the cloud across your devices (stored in plain text — put secrets in the Password Vault).",
     "vault": "Password Vault",
     "vaultDesc": "Zero-knowledge encrypted passwords / IDs / important files (master password; can pop out to its own window)",
     "vaultOpen": "Open in a separate window",

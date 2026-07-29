@@ -9,6 +9,7 @@ import { ConfigStore, UmbraConfig } from "./core/config";
 import { TaskExecutor } from "./core/device/client";
 import { requestStop } from "./core/computer";
 import { initRpc } from "./core/shared/rpc";
+import { isAppActivateSuppressed } from "./core/activation";
 import { ClipboardManager } from "./core/clipboard";
 import { ScreenshotManager } from "./core/screenshot";
 import { LauncherManager } from "./core/launcher";
@@ -468,7 +469,12 @@ app.whenReady().then(async () => {
 
   // 点 Dock 图标：唤起主窗口（不能靠 getAllWindows().length===0 判断，
   // 剪贴板/截图的隐藏窗口会让它恒 >0）。
-  app.on("activate", () => showMainWindow());
+  // 悬浮面板自己 show() 时 macOS 也会激活 app 并触发这里，那种情况要跳过——
+  // 否则会 dock.show() + 把主窗口拽到前台，既慢又抢走面板的键盘焦点。
+  app.on("activate", () => {
+    if (isAppActivateSuppressed()) return;
+    showMainWindow();
+  });
 });
 
 

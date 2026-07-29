@@ -5,6 +5,7 @@ import { ClipWatcher } from "./watcher";
 import { writeToClipboard, simulatePaste } from "./paste";
 import { getAppIcon } from "./source-app";
 import { ConfigStore, ClipKeep } from "../config";
+import { suppressAppActivate } from "../activation";
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|bmp|webp)$/i;
 // 过期清理的巡检间隔：保留时长最细一档是 24 小时，半小时扫一次足够，也不会白烧 CPU。
@@ -140,6 +141,9 @@ export class ClipboardManager {
     } catch {
       win.center();
     }
+    // show()/focus() 会顺带激活整个 app，触发 main.ts 的 app.on("activate")。
+    // 那个回调是给「点 Dock 图标」用的，跑到这里只会 dock.show() + 把主窗口拽到前台抢焦点。
+    suppressAppActivate();
     win.show();
     win.focus();
     win.webContents.send("clipboard:panel:shown", this.panelCategory);

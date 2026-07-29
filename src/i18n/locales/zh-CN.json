@@ -28,8 +28,15 @@
     "launcherPreview": "按下后长这样",
     "previewFolder": "文件夹",
     "phraseCount": "{{n}} 条",
-    "phraseListHint": "点行可编辑 · 左侧手柄拖拽调序",
-    "dragToReorder": "按住拖拽调整顺序"
+    "phraseListHint": "点行可编辑 · 拖左侧手柄调序 · 右键删除",
+    "dragToReorder": "按住拖拽调整顺序",
+    "phraseSyncNow": "立即同步",
+    "phraseSyncOff": "未配置服务器，仅本机",
+    "phraseSyncing": "同步中…",
+    "phraseSyncFailed": "同步失败：{{err}}",
+    "phraseSyncNever": "尚未同步",
+    "phraseSyncJustNow": "刚刚同步",
+    "phraseSyncAgo": "{{n}} 分钟前同步"
   },
   "workspaces": {
     "countLine": "共 {{n}} 个 · {{auto}} 个自动创建",
@@ -344,7 +351,7 @@
     "phraseName": "名称",
     "phraseKeyword": "关键词",
     "phraseContent": "内容（插入的文本）",
-    "phrasesHint": "在快捷入口输入名称/关键词/内容即可搜到，回车把内容插入到前台应用（需辅助功能权限，否则仅复制）。用左侧 ▲▼ 调整排序。",
+    "phrasesHint": "在快捷入口输入名称/关键词/内容即可搜到，回车把内容插入到前台应用（需辅助功能权限，否则仅复制）。点行编辑、拖住左侧手柄整条调序、右键删除；改动会自动同步到云端，多台设备共用一份（内容为明文存储，密钥类请放密码保险箱）。",
     "vault": "密码保险箱",
     "vaultDesc": "零知识加密的账号密码 / 证件 / 重要文件管理（主密码解锁，可拉到独立窗口）",
     "vaultOpen": "在独立窗口中打开",

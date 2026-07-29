@@ -242,3 +242,52 @@ export function ConfirmDialog({ title, message, confirmText, danger, busy, onCon
     </Modal>
   );
 }
+
+// ── 右键菜单 ────────────────────────────────────────────────────────────────
+// 贴着光标弹出的小菜单（列表行的删除等破坏性操作放这里，不必在每行常驻一个按钮）。
+// 自己夹在视口内：贴着右边/下边弹时翻到另一侧，免得菜单被窗口边裁掉。
+export interface MenuAction {
+  label: string;
+  onClick: () => void;
+  danger?: boolean;   // 破坏性操作，标红
+}
+const MENU_W = 148;
+export function ContextMenu({ x, y, items, onClose }: {
+  x: number; y: number; items: MenuAction[]; onClose: () => void;
+}) {
+  const boxRef = useRef<HTMLDivElement>(null);
+  // 点菜单外面 / 按 Esc / 滚动都收起。用 capture 是为了先于页面自身的点击处理跑到，
+  // 但**必须把菜单内部排掉**：否则按在菜单项上时菜单先被卸载，click 压根不会发生
+  // （表现就是「点删除没反应」）。在 mousedown 阶段用 contains 判，比 stopPropagation 可靠——
+  // 后者只挡冒泡，挡不住已经在捕获阶段跑过的 window 监听。
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => { if (!boxRef.current?.contains(e.target as Node)) onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const close = () => onClose();
+    window.addEventListener("mousedown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("mousedown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [onClose]);
+
+  const left = x + MENU_W + 8 <= window.innerWidth ? x : Math.max(8, x - MENU_W);
+  const top = Math.min(y, Math.max(8, window.innerHeight - 12 - items.length * 30));
+  // 不留上下内边距：菜单项的悬停底色要一直铺到边框，留白会让高亮看着「没对齐」。
+  return (
+    <div ref={boxRef} className="fixed z-50 bg-card border border-border rounded-[9px] shadow-[var(--shadow)] overflow-hidden"
+      style={{ left, top, width: MENU_W }}>
+      {items.map((it, i) => (
+        <button key={i}
+          onClick={() => { onClose(); it.onClick(); }}
+          className={`w-full text-left whitespace-nowrap px-[12px] py-[6px] bg-transparent border-none text-[12.5px] cursor-pointer ${
+            it.danger ? "text-danger hover:bg-danger-soft" : "text-text hover:bg-hover"}`}>
+          {it.label}
+        </button>
+      ))}
+    </div>
+  );
+}

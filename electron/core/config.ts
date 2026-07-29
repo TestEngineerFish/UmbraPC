@@ -48,6 +48,7 @@ export interface UmbraConfig {
   launcherFolders: LauncherFolder[]; // 文件夹书签：用指定软件打开固定文件夹
   launcherScripts: LauncherScript[]; // 自定义脚本（旧；加载时迁移为工作流）
   phrases: Phrase[];                 // 常用语（快捷入口可搜、回车插入；设置里管理排序）
+  phrasesDeleted: PhraseTomb[];      // 常用语的删除墓碑（云端同步用，服务端 30 天后清）
   launcherWorkflows: Workflow[];     // 工作流编排（类 Alfred Workflow）
   launcherPrefabs: WorkflowPrefab[]; // 预制件：存起来的节点组，可在任意工作流里一键落地（E3）
   launcherMaxResults: number;        // 结果列表最多显示几条（同时也是 Script Filter 单次取用上限）
@@ -94,6 +95,17 @@ export interface Phrase {
   name: string;      // 显示名/标签
   content: string;   // 实际文本（插入的内容）
   keyword?: string;  // 可选关键词，快速定位
+  // 最后改动时间（毫秒）。云端同步按条目 last-write-wins，全靠它比大小。
+  // 旧配置里没有这个字段，缺省当 0，第一次同步时会被云端版本覆盖——这是对的，
+  // 因为本地那份从没标记过改动时间，没有理由认为它更新。
+  updatedAt?: number;
+}
+
+// 删除墓碑：记下「哪条被删了、什么时候删的」。
+// 没有它，这台机器删掉的常用语会被别的设备一推又复活。
+export interface PhraseTomb {
+  id: string;
+  deletedAt: number;
 }
 
 // ── 工作流编排（类 Alfred Workflow）──
@@ -225,6 +237,7 @@ function defaults(configDir: string): UmbraConfig {
     launcherFolders: [],
     launcherScripts: [],
     phrases: [],
+    phrasesDeleted: [],
     launcherWorkflows: [],
     launcherPrefabs: [],
     launcherMaxResults: Number(process.env.UMBRA_LAUNCHER_MAX_RESULTS || 12),

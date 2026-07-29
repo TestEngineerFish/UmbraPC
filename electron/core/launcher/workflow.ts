@@ -5,6 +5,7 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ConfigStore, expandHome, httpBase, Workflow, WorkflowNode } from "../config";
+import { httpFetch } from "../http";
 import { run } from "../shared/util";
 import { simulatePaste, simulateCopy } from "../clipboard/paste";
 import { readClipboardFiles } from "../clipboard/watcher";
@@ -1057,7 +1058,7 @@ export class WorkflowEngine {
       const c = this.cfg.get();
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (c.token) headers["X-Umbra-Token"] = c.token;
-      const resp = await fetch(`${httpBase(c)}/web/message`, {
+      const resp = await httpFetch(`${httpBase(c)}/web/message`, {
         method: "POST", headers,
         body: JSON.stringify({ client_id: c.deviceId, content, node_id: c.deviceId }),
         signal: AbortSignal.timeout(REMOTE_TIMEOUT),
@@ -1076,7 +1077,7 @@ export class WorkflowEngine {
       const c = this.cfg.get();
       const headers: Record<string, string> = {};
       if (c.token) headers["X-Umbra-Token"] = c.token;
-      const resp = await fetch(`${httpBase(c)}/devices/all`, { headers, signal: AbortSignal.timeout(15000) });
+      const resp = await httpFetch(`${httpBase(c)}/devices/all`, { headers, signal: AbortSignal.timeout(15000) });
       if (!resp.ok) return "";
       const list = await resp.json() as {
         device_id?: string; online?: boolean;
@@ -1097,7 +1098,7 @@ export class WorkflowEngine {
       const c = this.cfg.get();
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (c.token) headers["X-Umbra-Token"] = c.token;
-      const resp = await fetch(`${httpBase(c)}/devices/${encodeURIComponent(deviceId)}/dispatch`, {
+      const resp = await httpFetch(`${httpBase(c)}/devices/${encodeURIComponent(deviceId)}/dispatch`, {
         method: "POST", headers,
         body: JSON.stringify({ provider, skill, params }),
         signal: AbortSignal.timeout(REMOTE_TIMEOUT),
@@ -1118,7 +1119,7 @@ export class WorkflowEngine {
       const c = this.cfg.get();
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (c.token) headers["X-Umbra-Token"] = c.token;
-      const resp = await fetch(`${httpBase(c)}/inspirations`, { method: "POST", headers, body: JSON.stringify({ raw: t }) });
+      const resp = await httpFetch(`${httpBase(c)}/inspirations`, { method: "POST", headers, body: JSON.stringify({ raw: t }) });
       return resp.ok ? "已记为灵感 ✓" : `记灵感失败：${resp.status}`;
     } catch (e) {
       return `记灵感失败：${String(e).slice(0, 40)}`;
