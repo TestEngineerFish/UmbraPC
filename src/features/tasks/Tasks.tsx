@@ -6,8 +6,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
-import { deleteJobs, getServerUrl } from "../../services/server";
-import type { Job, JobDetail, Subtask } from "../../services/server";
+import { deleteJobs, getServerUrl, retryJob, stopJob } from "../../services/server";
+import type { Job, JobDetail, StepError, Subtask } from "../../services/server";
 import { ImageViewer } from "../../components/ImageViewer";
 import { btnGhost, btnDanger, RefreshButton } from "../../components/ui";
 import { IconSearch, IconRefresh, IconCheck, IconX, IconClock, IconAlert, IconFolder } from "../../components/icons";
@@ -229,8 +229,11 @@ export function Tasks() {
 
       {/* ── 详情列 ── */}
       <main className="flex-1 min-w-0 flex flex-col min-h-0 bg-bg">
+        {/* onChanged：重试/停止改了服务端状态之后重拉列表与详情——不然按钮按完界面纹丝不动。
+            注释放在三元外面：放进表达式容器里会被当成对象字面量，编译不过（灵感页踩过一次）。 */}
         {tasks.detailId && tasks.detail && tasks.detail.job.id === tasks.detailId ? (
-          <Detail key={tasks.detail.job.id} d={tasks.detail} />
+          <Detail key={tasks.detail.job.id} d={tasks.detail}
+            onChanged={() => { void legacy.manualRefresh(); void legacy.openJob(tasks.detail!.job.id); }} />
         ) : (
           <div className="flex-1 flex items-center justify-center text-[12.5px] text-muted">
             {tasks.detailId ? t("tasks.loadingDetail") : t("tasks.pickOne")}
@@ -325,9 +328,12 @@ function detailToText(d: JobDetail): string {
   return lines.join("\n");
 }
 
-function Detail({ d }: { d: JobDetail }) {
+function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  // 重试/停止的进行中标志与失败提示。成功不提示——列表会自己刷新，状态胶囊就是反馈。
+  const [busy, setBusy] = useState("");
+  const [actErr, setActErr] = useState("");
   // 目标描述默认收起（两行截断）；这份 state 靠外层的 key={job.id} 在切换任务时自动重置。
   const [descOpen, setDescOpen] = useState(false);
   const st = displayStatus(d.job);
@@ -337,17 +343,40 @@ function Detail({ d }: { d: JobDetail }) {
   const done = d.job.steps_total ? (d.job.steps_done || 0) : subs.filter((s) => s.status === "done").length;
   const pct = total ? Math.round((done / total) * 100) : pctOf(d.job);
   const kind = [d.job.kind, d.job.channel].filter(Boolean).join(" · ");
+  // 失败卡用的错误：取第一个失败步骤的结构化错误（比任务级的 result_summary 具体）。
+  const failErr: StepError | null = useMemo(
+    () => subs.map((x) => normErr(x.error)).find(Boolean) || null, [subs]);
   // job.name 存在时 goal 才是「描述」；没有 name 时 goal 已经顶在标题位置了，不重复铺一遍。
   const desc = d.job.name ? (d.job.goal || "") : "";
 
+  // 执行设备：任务本身不绑定设备（去设备化模型），设备是**逐步骤**记的，
+  // 所以这里把各步骤的设备去重列出来 —— 一个任务确实可能跨设备跑。
+  // 一台都没有（纯 server 步 / 旧 Job）时整格不出现，不摆破折号占位。
+  const devices = useMemo(
+    () => [...new Set(subs.map((s) => s.device_id).filter(Boolean) as string[])],
+    [subs],
+  );
   // 统计条：里程碑与创建/更新时间是现成的；耗时由起止时间推。
-  // 「执行设备」设计稿里有，但 Job 行没有这个字段，所以这一格不出现（不摆破折号占位）。
   const stats: { k: string; v: string }[] = [
     { k: t("tasks.statMilestone"), v: total ? `${done} / ${total}` : "—" },
     { k: t("tasks.statDuration"), v: durationOf(d.job, t) },
+    ...(devices.length ? [{ k: t("tasks.statDevice"), v: devices.join("、") }] : []),
     { k: t("tasks.statCreated"), v: legacy.fmtTime(d.job.created_at) },
     { k: t("tasks.statUpdated"), v: legacy.fmtTime(d.job.updated_at) },
   ];
+
+  // 重试只对失败/已取消的**新任务**开放（旧 Job 没有里程碑模型，重试没有意义）；
+  // 停止只对还在跑或挂起的任务开放。两个按钮都按状态出现，不摆死按钮。
+  const canRetry = !!d.job.is_task && (st === "failed" || st === "cancelled");
+  const canStop = st === "running" || st === "pending" || st === "suspended";
+  const act = async (kind: "retry" | "stop") => {
+    if (busy) return;
+    setBusy(kind); setActErr("");
+    const r = kind === "retry" ? await retryJob(d.job.id) : await stopJob(d.job.id);
+    setBusy("");
+    if (!r.ok) { setActErr(r.error); return; }
+    onChanged();
+  };
 
   return (<>
     <div className="flex-none p-[15px_20px_13px] border-b border-border bg-card">
@@ -376,6 +405,14 @@ function Detail({ d }: { d: JobDetail }) {
           ) : null}
         </div>
         <div className="flex-none flex gap-[7px]">
+          {canRetry ? (
+            <button className={btnGhost} disabled={!!busy} title={t("tasks.retryHint")}
+              onClick={() => void act("retry")}>{busy === "retry" ? t("tasks.retrying") : t("tasks.retry")}</button>
+          ) : null}
+          {canStop ? (
+            <button className={btnDanger} disabled={!!busy}
+              onClick={() => void act("stop")}>{busy === "stop" ? t("tasks.stopping") : t("tasks.stop")}</button>
+          ) : null}
           <button className={btnGhost} onClick={() => {
             navigator.clipboard.writeText(detailToText(d)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
           }}>{copied ? t("tasks.copied") : t("tasks.copyDetail")}</button>
@@ -398,6 +435,8 @@ function Detail({ d }: { d: JobDetail }) {
         </span>
         <span className={`flex-none w-[38px] text-right whitespace-nowrap text-[12.5px] font-semibold ${TONE_TEXT[m.tone]}`}>{pct}%</span>
       </div>
+      {/* 重试/停止失败的原因原样显示（409「当前状态不能重试」这类信息必须让用户看到） */}
+      {actErr ? <div className="mt-[8px] text-[11.5px] text-danger leading-[1.6]">{actErr}</div> : null}
     </div>
 
     <div className="flex-1 overflow-y-auto p-[16px_20px_28px]">
@@ -416,8 +455,8 @@ function Detail({ d }: { d: JobDetail }) {
             ) : <div className="text-[12.5px] text-muted">{t("tasks.noSteps")}</div>}
           </div>
 
-          {/* 失败卡：设计稿画的模型 / HTTP / 错误码是结构化字段，服务端目前只回一串自由文本，
-              所以这里就把那串文本原样摊开，另给一个「前往能力设置」的出口（多半是 Key/额度问题）。 */}
+          {/* 失败卡：优先用失败步骤的结构化错误（带分类），没有就退回任务级的 result_summary。
+              另给一个「前往能力设置」的出口（失败多半是 Key/额度问题）。 */}
           {st === "failed" ? (
             <div className="bg-card border border-danger rounded-[11px] overflow-hidden">
               <div className="flex items-center gap-[8px] px-[13px] py-[10px] bg-danger-soft">
@@ -426,8 +465,11 @@ function Detail({ d }: { d: JobDetail }) {
                 {total ? <span className="flex-none whitespace-nowrap text-[11px] text-danger">{done + 1} / {total}</span> : null}
               </div>
               <div className="px-[13px] py-[11px] flex flex-col gap-[9px]">
+                {failErr?.kind && ERR_KIND_KEY[failErr.kind] ? (
+                  <span className="self-start flex-none whitespace-nowrap px-[7px] py-[2px] rounded-full bg-danger-soft text-danger text-[10.5px] font-semibold">{t(ERR_KIND_KEY[failErr.kind])}</span>
+                ) : null}
                 <div className="text-[12.5px] leading-[1.65] whitespace-pre-wrap break-all">
-                  {d.job.result_summary || subs.find((s) => s.error)?.error || t("tasks.statusFailed")}
+                  {failErr?.message || d.job.result_summary || t("tasks.statusFailed")}
                 </div>
                 <div className="flex gap-[8px]">
                   <button className={btnGhost} onClick={() => legacy.goNav("abilities")}>{t("tasks.goAbilities")}</button>
@@ -476,12 +518,43 @@ function SecLabel({ children }: { children: React.ReactNode }) {
 }
 
 // 步骤时间线的一行：左侧 20px 标记列（圆点 + 竖线），右侧标题 / 说明 / 截图。
+// 步骤错误有两种形状：新任务回结构化对象，旧 Job 回一串自由文本。统一成对象再渲染。
+function normErr(e: Subtask["error"]): StepError | null {
+  if (!e) return null;
+  if (typeof e === "string") return { kind: "", message: e };
+  return e.message ? e : null;
+}
+// 错误分类的中文名。kind 认不出来时不硬编一个名字，让界面只显示 message。
+const ERR_KIND_KEY: Record<string, string> = {
+  step_error: "tasks.errStep",
+  device_error: "tasks.errDevice",
+  timeout: "tasks.errTimeout",
+};
+// 毫秒 → 人读的耗时。null（没开始过）返回破折号，别显示 0 秒骗人。
+function fmtMs(ms: number | null | undefined): string {
+  if (ms == null) return "—";
+  if (ms < 1000) return `${ms} ms`;
+  const sec = Math.round(ms / 1000);
+  if (sec < 60) return `${sec} 秒`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min} 分 ${sec % 60} 秒`;
+  return `${Math.floor(min / 60)} 时 ${min % 60} 分`;
+}
+// 字节 → 人读的大小。null/undefined（设备没回报）返回破折号。
+function fmtBytes(n: number | null | undefined): string {
+  if (n == null) return "—";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
 function Step({ s, last }: { s: Subtask; last: boolean }) {
   const { t } = useTranslation();
   const pale = s.status === "pending";
   const m = metaOf(s.status === "dispatched" ? "running" : s.status);
   const title = s.title || `${s.provider || ""}.${s.skill || ""}`;
   const shot = stepShot(s);
+  const err = normErr(s.error);
   return (
     <div className="flex gap-[10px]">
       <div className="flex flex-col items-center flex-none w-[20px]">
@@ -494,8 +567,32 @@ function Step({ s, last }: { s: Subtask; last: boolean }) {
       <div className="flex-1 min-w-0 pb-[14px]">
         <div className="flex items-baseline gap-[8px]">
           <span className={`flex-1 min-w-0 text-[12.5px] leading-[1.5] ${pale ? "text-faint font-normal" : "text-text font-medium"}`}>{title}</span>
+          {/* 本步耗时：只在真开始过之后才显示（elapsed_ms 为 null 时整块不出现，不摆破折号） */}
+          {s.elapsed_ms != null ? <span className="flex-none whitespace-nowrap text-[10.5px] text-faint font-mono">{fmtMs(s.elapsed_ms)}</span> : null}
         </div>
-        {s.error ? <div className="text-[11.5px] text-danger mt-[3px] leading-[1.6] whitespace-pre-wrap break-all">{s.error}</div> : null}
+        {/* 执行设备：server 步没有设备，这一行就不出现 */}
+        {s.device_id ? (
+          <div className="text-[10.5px] text-faint mt-[2px] whitespace-nowrap">
+            {t("tasks.stepDevice")}<span className="font-mono">{s.device_id}</span>
+          </div>
+        ) : null}
+        {err ? (
+          <div className="mt-[4px] flex flex-col gap-[2px]">
+            <div className="flex items-center gap-[6px]">
+              {err.kind && ERR_KIND_KEY[err.kind]
+                ? <span className="flex-none whitespace-nowrap px-[6px] py-px rounded-full bg-danger-soft text-danger text-[10px] font-semibold">{t(ERR_KIND_KEY[err.kind])}</span>
+                : null}
+              <span className="flex-1 min-w-0 text-[11.5px] text-danger leading-[1.6] whitespace-pre-wrap break-all">{err.message}</span>
+            </div>
+            {/* detail 是原始错误文本，多半很长，折起来放；要查根因的人才展开 */}
+            {err.detail && err.detail !== err.message ? (
+              <details className="text-[10.5px] text-faint">
+                <summary className="cursor-pointer whitespace-nowrap">{t("tasks.errDetail")}</summary>
+                <div className="mt-[3px] font-mono leading-[1.55] whitespace-pre-wrap break-all">{err.detail}</div>
+              </details>
+            ) : null}
+          </div>
+        ) : null}
         {shot ? (
           // 该步「完成后」状态截图：内联显示，点击打开预览器（放大/缩小/下载）。
           <div className="mt-[8px] max-w-[330px] border border-border rounded-[9px] overflow-hidden">
@@ -508,12 +605,21 @@ function Step({ s, last }: { s: Subtask; last: boolean }) {
   );
 }
 
-// 生成结果：从每步的 result_json 里挑出产物（下载链接 / 路径 / 变更文件）。
-// 设计稿的「大小」列服务端没回，所以不出现这一列。
+// 生成结果：从每步的 result_json 里挑出产物（下载链接 / 路径 / 变更文件），
+// 外加 write_artifact 登记的产物（带字节数——设备写文件时回报的，服务端 stat 不到）。
 function Results({ subs }: { subs: Subtask[] }) {
   const { t } = useTranslation();
-  const rows: { name: string; path: string; url?: string; ext: string }[] = [];
+  const rows: { name: string; path: string; url?: string; ext: string; bytes?: number | null }[] = [];
   const notes: string[] = [];
+  for (const s of subs) {
+    // 先收 artifacts：这是唯一带大小的来源。同一条路径可能又出现在 result_json 里，
+    // 用 path 去重时以这一份为准（它信息更全）。
+    for (const a of s.artifacts || []) {
+      const name = a.path.split("/").filter(Boolean).pop() || a.path;
+      rows.push({ name, path: a.path, bytes: a.bytes,
+                  ext: (name.includes(".") ? name.split(".").pop()! : "DOC").toUpperCase().slice(0, 4) });
+    }
+  }
   for (const s of subs) {
     if (!s.result_json || s.skill === "plan_step") continue; // 计划步骤的截图已在步骤下方内联显示
     let r: { url?: string; filename?: string; project_dir?: string; path?: string; changed_files?: string[] };
@@ -532,18 +638,28 @@ function Results({ subs }: { subs: Subtask[] }) {
       notes.push(t("tasks.changedFiles", { count: r.changed_files.length, files: r.changed_files.slice(0, 8).join("、") + (r.changed_files.length > 8 ? " …" : "") }));
     }
   }
-  if (!rows.length && !notes.length) return null;
+  // 按路径去重：artifacts 先入表，所以带大小的那份会留下。
+  const seen = new Set<string>();
+  const uniq = rows.filter((r) => {
+    const k = r.path || r.url || r.name;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  if (!uniq.length && !notes.length) return null;
   return (
     <div>
       <SecLabel>{t("tasks.results")}</SecLabel>
       <div className="flex flex-col gap-[7px]">
-        {rows.map((r, i) => (
+        {uniq.map((r, i) => (
           <div key={i} className="flex items-center gap-[10px] bg-card border border-border rounded-[10px] px-[12px] py-[9px]">
             <span className="w-7 h-7 flex-none rounded-[7px] bg-chip text-muted flex items-center justify-center text-[10px] font-semibold">{r.ext}</span>
             <div className="flex-1 min-w-0">
               <div className="text-[12.5px] truncate">{r.name}</div>
               {r.path ? <div className="text-[10.5px] text-faint font-mono truncate">{r.path}</div> : null}
             </div>
+            {/* 大小：设备回报了才显示。没回报的（老数据、非 write_artifact 产出）整块不出现 */}
+            {r.bytes != null ? <span className="flex-none whitespace-nowrap text-[11px] text-faint font-mono">{fmtBytes(r.bytes)}</span> : null}
             {r.url && isImg(r.url) ? (
               <button className="w-[26px] h-[26px] flex-none flex items-center justify-center border border-border bg-transparent text-muted rounded-[7px] hover:border-orange hover:text-orange-text"
                 title={t("tasks.shotOpen")} onClick={() => openPreview(r.url!, r.name)}><IconSearch size={13} /></button>

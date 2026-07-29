@@ -233,6 +233,19 @@ export interface Job {
   // 所属工作区的名字（tasks.project）。旧 Job 行没有项目概念，恒为空。
   project?: string | null;
 }
+// 一步失败时的结构化错误。kind 决定界面怎么归类：
+// step_error=执行轮自己抛的异常 · device_error=设备报错 · timeout=看门狗判定卡住（此时步骤仍在跑）。
+export interface StepError {
+  kind: string;
+  message: string;
+  detail?: string;
+}
+// 一条产物。bytes 由设备写文件时回报 —— 服务端拿不到大小（文件在设备的项目目录里），
+// 所以它可能是 null，界面要能显示破折号而不是 0 B。
+export interface StepArtifact {
+  path: string;
+  bytes?: number | null;
+}
 export interface Subtask {
   id: string;
   seq: number;
@@ -241,7 +254,14 @@ export interface Subtask {
   skill?: string | null;
   status: string; // pending/dispatched/running/done/failed
   result_json?: string | null;
-  error?: string | null;
+  // 新任务的里程碑回结构化对象；旧 Job 的 subtask 回的是一串自由文本。两种都要认。
+  error?: string | StepError | null;
+  // ↓ 以下四项只有新任务（is_task）才有，旧 Job 一律缺省。
+  device_id?: string | null;   // 这一步派给了哪台设备；server 步没有设备，空串
+  started_at?: string | null;  // 真正开始执行的时刻（不是排里程碑的时刻）
+  elapsed_ms?: number | null;  // 本步耗时；没开始过时为 null，界面显示破折号
+  artifacts?: StepArtifact[];
+  artifacts_bytes?: number;    // 本步产物字节合计（bytes 缺失的条目不计入）
 }
 export interface JobEvent {
   id: number;
@@ -313,6 +333,40 @@ export async function fetchJobsByProject(project: string, limit = 20): Promise<J
   } catch {
     return [];
   }
+}
+
+// 停止一个正在跑/挂起中的任务。服务端两种任务都认（新任务走取消，旧 operate Job 走停止请求）。
+// 返回是否成功；失败原因交给调用方提示（这里不弹窗，任务面板自己有提示位）。
+export async function stopJob(id: string): Promise<{ ok: boolean; error: string }> {
+  try {
+    const r = await fetch(`${getServerUrl()}/jobs/${encodeURIComponent(id)}/stop`, { method: "POST" });
+    if (!r.ok) return { ok: false, error: await errText(r) };
+    return { ok: true, error: "" };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+// 重试任务：从失败的那一步继续（已完成的里程碑保留不重做）。
+// 409 = 当前状态不能重试（比如任务还在跑，或者已经做完了）——这类错误要原样告诉用户。
+export async function retryJob(id: string): Promise<{ ok: boolean; error: string; kept?: number; total?: number }> {
+  try {
+    const r = await fetch(`${getServerUrl()}/jobs/${encodeURIComponent(id)}/retry`, { method: "POST" });
+    if (!r.ok) return { ok: false, error: await errText(r) };
+    const data = await r.json();
+    return { ok: true, error: "", kept: data?.kept, total: data?.total };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+// 从 FastAPI 的错误响应里取 detail；取不到就退回状态码，别让界面显示一句空话。
+async function errText(r: Response): Promise<string> {
+  try {
+    const d = await r.json();
+    if (d && typeof d.detail === "string" && d.detail) return d.detail;
+  } catch { /* 不是 JSON 就算了 */ }
+  return `HTTP ${r.status}`;
 }
 
 // 批量删除任务（全选/多选）。返回实际删除数量。

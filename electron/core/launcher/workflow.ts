@@ -1138,6 +1138,42 @@ export class WorkflowEngine {
     return out;
   }
   // Hotkey 触发：arg = 当前剪贴板文本；沿该节点的回车分支执行动作链。
+  // ── 从编辑器手动运行（顶栏「运行」按钮）──────────────────────────────────
+  // 和快捷键/Universal 触发的区别只有入口：参数是用户在顶栏输入框里现填的，
+  // 而不是从剪贴板或选区抓的。跑的仍然是「回车」分支，走同一条 runNode，
+  // 所以调试抽屉里看到的轨迹和真实触发时完全一致 —— 这正是这个按钮的意义。
+  //
+  // nodeId 为空 = 让引擎自己挑入口：优先第一个**没被停用**的触发器节点。
+  // 编辑器里选中了某个节点时会把它传进来，这样可以只跑链路的一段。
+  // 返回 from 是为了让界面能说清「从哪个节点跑的」，跑完一脸茫然最难受。
+  async runFromEditor(wfId: string, nodeId: string, arg: string): Promise<{ ok: boolean; from: string; feedback: string; error: string }> {
+    const fail = (error: string) => ({ ok: false, from: "", feedback: "", error });
+    const wf = this.workflows().find((w) => w.id === wfId);
+    if (!wf) return fail("工作流不存在");
+    let start = nodeId ? wf.nodes.find((n) => n.id === nodeId) : undefined;
+    if (nodeId && !start) return fail("选中的节点已不存在");
+    if (!start) start = wf.nodes.find((n) => n.type.startsWith("trigger.") && !n.disabled);
+    if (!start) return fail("这条工作流还没有可用的触发器节点");
+    if (start.disabled) return fail("这个节点已停用");
+    const conns = this.outConns(wf, start.id, "");
+    if (!conns.length) return fail("这个节点的「回车」出口还没有连线");
+
+    const vars = this.baseVars(wf);
+    const visited = new Set<string>();
+    // 轨迹的触发方式写「手动运行」，和真实触发区分开，回头看记录时不会认错。
+    const tr = this.trace.begin(wf.id, wf.name, "手动运行", arg);
+    let feedback = "";
+    try {
+      for (const conn of conns) feedback = (await this.runNode(wf, conn.to, arg, vars, visited, tr)) || feedback;
+    } catch (e) {
+      return { ok: false, from: start.id, feedback, error: String(e instanceof Error ? e.message : e) };
+    } finally {
+      // 中途抛异常也要把已记录的步数留下 —— 手动运行本来就多半是为了看它错在哪。
+      this.trace.end(tr);
+    }
+    return { ok: true, from: start.id, feedback, error: "" };
+  }
+
   async fireHotkey(wfId: string, nodeId: string): Promise<void> {
     const wf = this.workflows().find((w) => w.id === wfId);
     if (!wf) return;

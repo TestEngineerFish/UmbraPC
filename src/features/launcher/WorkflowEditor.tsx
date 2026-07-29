@@ -10,7 +10,7 @@ import {
   IconExternal, IconEye,
   IconFit, IconMinus,
   IconEyeOff, IconFile, IconFilter, IconFlow, IconFolder, IconGear, IconGlobe, IconGrid, IconInfinity, IconKeyboard,
-  IconLink, IconList, IconMusic, IconPanel, IconPhone, IconPlus, IconRedo, IconRefresh, IconRocket,
+  IconLink, IconList, IconMusic, IconPanel, IconPhone, IconPlay, IconPlus, IconRedo, IconRefresh, IconRocket,
   IconRuler, IconScissors, IconSearch, IconTag, IconTarget, IconTerminal, IconText, IconTrash, IconUndo, IconUser,
   IconVolume, IconWindow, IconX,
 } from "../../components/icons";
@@ -54,6 +54,8 @@ interface LauncherAPI {
   getPrefabs(): Promise<WFPrefab[]>; setPrefabs(p: WFPrefab[]): Promise<void>;
   pickPath(): Promise<string>; pickApp(): Promise<string>; fileIcon(p: string): Promise<string>;
   getTrace(wfId?: string): Promise<TraceRun[]>; clearTrace(): Promise<void>;
+  // 顶栏「运行」：带参手动跑一条工作流。nodeId 留空 = 自动挑第一个可用触发器。
+  runWorkflow(wfId: string, nodeId: string, arg: string): Promise<{ ok: boolean; from: string; feedback: string; error: string }>;
   onTrace(cb: (r: TraceRun) => void): () => void;
   // W10：把配置项里的密钥交给密码保险箱，拿回一条 vault://... 引用存进工作流。
   setWfSecret(ref: string, title: string, value: string): Promise<{ ok: boolean; ref?: string; error?: string }>;
@@ -628,6 +630,9 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   useEffect(() => { localStorage.setItem(LS_LIB, lib ? "1" : "0"); }, [lib]);
   // W8 调试抽屉：runs 只保留当前工作流的记录（主进程侧留最近 N 次全量）。
   const [drawer, setDrawer] = useState(false);
+  // 顶栏「运行」：现填的参数（相当于用户在快捷入口里输入的那段），以及一次运行的进行中标志。
+  const [runArg, setRunArg] = useState("");
+  const [running, setRunning] = useState(false);
   const [runs, setRuns] = useState<TraceRun[]>([]);
   // 顶栏一闪而过的提示（导入导出结果），比 alert 温和。
   const [note, setNote] = useState("");
@@ -1105,6 +1110,23 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     })();
   };
 
+  // 顶栏「运行」：把现填的参数喂给工作流跑一遍。
+  // 选中了某个节点就从那个节点跑（方便只调一段链路），没选就让主进程挑第一个可用触发器。
+  // 跑完自动把调试抽屉拉出来 —— 手动运行的唯一目的就是看轨迹，还要再点一下才看得到很蠢。
+  const runNow = async () => {
+    if (!cur || running) return;
+    setRunning(true);
+    try {
+      const r = await api.runWorkflow(cur.id, selNode || "", runArg);
+      setDrawer(true);
+      setNote(r.ok ? (r.feedback || "已运行 ✓") : `运行失败：${r.error}`);
+    } catch (e) {
+      setNote(`运行失败：${String(e).replace("Error: ", "")}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
   // 顶栏「⋯」菜单：低频操作都收在这里（变量表、导入导出、启用停用、复位视图）。
   // 菜单往按钮左下角贴（按钮本身在最右边，直接按 x=rect.left 会把菜单甩出窗口）。
   const openMoreMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -1155,6 +1177,23 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
         {note ? <span className="text-[11.5px] text-orange flex-none whitespace-nowrap">{note}</span> : null}
         <input ref={fileRef} type="file" accept=".json,application/json" className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void importFile(f); }} />
+        {/* 运行：一个参数输入框 + 一个运行按钮。参数等价于用户在快捷入口里输入的那段，
+            跑的是「回车」分支，走的和真实触发同一条执行路径，所以轨迹可以直接当真。 */}
+        {cur ? (
+          <div className="flex-none flex items-center bg-bg border border-border rounded-lg overflow-hidden">
+            <input value={runArg} onChange={(e) => setRunArg(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") void runNow(); }}
+              placeholder="运行参数（可留空）"
+              title="相当于在快捷入口里输入的那段文字，下游用 {query} 取它"
+              className="w-[150px] h-[30px] flex-none bg-transparent border-none outline-none px-[10px] text-[12px] font-mono" />
+            <button
+              className={`${TB} border-l border-border ${running ? "text-faint" : "text-orange-text hover:bg-orange-soft"}`}
+              disabled={running}
+              title={selNode ? "从选中的节点开始跑（回车分支）" : "从第一个触发器开始跑（回车分支）"}
+              onClick={() => void runNow()}
+            ><IconPlay size={14} /></button>
+          </div>
+        ) : null}
         {/* 连体图标条：整条一个外框，按钮之间用发丝线分隔，最后一个不带右边线。 */}
         <div className="flex-none flex items-center bg-bg border border-border rounded-lg overflow-hidden">
           <button className={`${TB} border-r border-border ${hist.u ? "text-muted hover:bg-hover" : "text-faint"}`} disabled={!hist.u} title="撤销 ⌘Z" onClick={() => { if (hist.u) undo(); }}><IconUndo size={15} /></button>

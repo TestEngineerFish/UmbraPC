@@ -212,6 +212,15 @@ export function IconArrowRight(p: IconProps) {
   );
 }
 
+// 运行（工作流编辑器顶栏）。线性三角，和其余描边图标同一套观感，不用实心播放键。
+export function IconPlay(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M7 4.5v15l13-7.5z" />
+    </svg>
+  );
+}
+
 export function IconChevronRight(p: IconProps) {
   return (
     <svg {...base(p)}>

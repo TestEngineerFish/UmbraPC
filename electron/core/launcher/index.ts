@@ -690,6 +690,9 @@ export class LauncherManager {
     // 保险箱是否已解锁：配置面板据此提示「先解锁才能存/改密钥」。
     ipcMain.handle("launcher:vaultUnlocked", () => !!this.secretDeps?.unlocked);
     // 工作流调试轨迹：只读内存里最近若干次执行（编辑器底部调试抽屉用）。
+    // 编辑器顶栏的「运行」：带参跑一条工作流，轨迹照常进调试抽屉。
+    ipcMain.handle("launcher:runWorkflow", (_e, wfId: string, nodeId: string, arg: string) =>
+      this.engine.runFromEditor(String(wfId || ""), String(nodeId || ""), String(arg ?? "")));
     ipcMain.handle("launcher:getTrace", (_e, wfId: string) => this.engine.trace.list(wfId || undefined));
     ipcMain.handle("launcher:clearTrace", () => { this.engine.trace.clear(); });
     // 常用语读写（设置页管理）。

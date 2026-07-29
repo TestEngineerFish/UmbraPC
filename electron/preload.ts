@@ -133,6 +133,8 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   setWfSecret: (ref: string, title: string, value: string) => ipcRenderer.invoke("launcher:setWfSecret", ref, title, value),
   vaultUnlocked: () => ipcRenderer.invoke("launcher:vaultUnlocked"),
   // 工作流调试轨迹（编辑器底部调试抽屉）：拉最近若干次执行记录 / 清空 / 订阅新记录。
+  // 编辑器顶栏「运行」：nodeId 留空则自动挑第一个可用触发器。
+  runWorkflow: (wfId: string, nodeId: string, arg: string) => ipcRenderer.invoke("launcher:runWorkflow", wfId, nodeId, arg),
   getTrace: (wfId?: string) => ipcRenderer.invoke("launcher:getTrace", wfId || ""),
   clearTrace: () => ipcRenderer.invoke("launcher:clearTrace"),
   onTrace: (cb: (run: unknown) => void) => {
