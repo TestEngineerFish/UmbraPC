@@ -66,7 +66,10 @@ interface LauncherAPI {
 const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
 
 const NODE_W = 252;   // 节点卡片宽度（对齐设计稿）
-const NODE_H = 74;    // 节点最小高度（框选命中判定用，多出口节点会更高但不影响判定）
+// 节点最小高度（框选命中判定 + 适应画布的包围盒用；多出口节点会更高但不影响判定）。
+// 88 = 头部 42 + 正文两行键值行（上下 8px 内边距 + 两行 15px + 行距 3px）+ 分隔线。
+// 正文从一行文字改成两行键值行时跟着加了 14 —— 不改的话卡片底部那一截框选选不中。
+const NODE_H = 88;
 const PORT_Y = 21;    // 端口的垂直位置：卡片头部的竖直中线（1px 描边 + 9px 内边距 + 22px 图标的一半）
 const PORT_GAP = 20;   // 多出口节点：相邻两个输出端口的垂直间距
 const MODS = ["", "cmd", "alt", "ctrl", "shift"];
@@ -1322,7 +1325,22 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
                         {n.disabled ? "已停用" : kind.label}
                       </span>
                     </div>
-                    <div className="px-[11px] py-[9px] text-[11.5px] truncate" style={{ color: n.disabled ? CV.faint : CV.muted }}>{nodeSummary(n)}</div>
+                    {/* 正文：键值行（对齐设计稿）。左侧 52px 固定宽的字段名，右侧值；
+                        mono 的值套一个等宽底框——路径、脚本、键位这类要逐字看清的东西，
+                        混在正文字体里一个下划线和一个连字符看着是一样的。 */}
+                    <div className="px-[11px] py-[8px] flex flex-col gap-[3px]">
+                      {nodeRows(n).map((r, ri) => (
+                        <div key={ri} className="flex items-baseline gap-[7px]">
+                          <span className="w-[52px] flex-none whitespace-nowrap text-[10.5px]"
+                            style={{ color: n.disabled ? CV.faint : CV.faint }}>{r.k}</span>
+                          <span className={`flex-1 min-w-0 truncate text-[11px] ${r.mono ? "font-mono px-[5px] py-px rounded-[5px]" : ""}`}
+                            style={{
+                              color: n.disabled ? CV.faint : (r.mono ? CV.dim : CV.muted),
+                              background: r.mono && !n.disabled ? CV.bg : undefined,
+                            }}>{r.v}</span>
+                        </div>
+                      ))}
+                    </div>
                     {/* 端口 9px + 2px 画布底色描边，看着像「嵌」在卡片边上。入口在左，出口在右侧竖着排。
                         配色表达「接没接上」：已连线橙色、空着灰色，失败出口固定红色 —— 多出口节点漏接哪一路一眼看得出。 */}
                     <span data-port className="absolute w-[9px] h-[9px] rounded-full" style={{ left: -5, top: PORT_Y - 4, border: `2px solid ${CV.bg}`,
@@ -1453,38 +1471,212 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
 
 // Split / Join 的分隔符选项：键与引擎 delimOf() 认的值一一对应，改这里记得两边一起改。
 const DELIM_LABEL: Record<string, string> = { comma: "逗号", space: "空格", tab: "制表符", newline: "换行", custom: "自定义" };
+// Transform 节点的变换方式中文名。原来卡片上直接显示 mode 的英文值（upper/urlencode…），
+// 和别处都用中文对不上，顺手补齐。键要和 NodeConfig 里那个下拉的 option 值一一对应。
+const TRANSFORM_LABEL: Record<string, string> = {
+  upper: "全部大写", lower: "全部小写", title: "首字母大写", trim: "去掉首尾空白",
+  urlencode: "URL 编码", urldecode: "URL 解码",
+  base64: "Base64 编码", unbase64: "Base64 解码",
+  json: "转 JSON 字符串", unjson: "解析 JSON",
+};
 
-function nodeSummary(n: WFNode): string {
+// 节点卡片正文的一行。k=字段名，v=值，mono=用等宽字 + 底框显示。
+// mono 留给「要逐字看清」的东西：路径、脚本、网址、键位、分隔符 —— 混在正文字体里
+// 一个下划线和一个连字符看着是一样的。
+export interface SumRow { k: string; v: string; mono?: boolean }
+
+// 取值，空则回落到占位文案（占位一律说清「没设」，不要显示空白让人以为是渲染坏了）。
+function val(v: unknown, empty: string): string {
+  const s = String(v ?? "").trim();
+  return s || empty;
+}
+// 截断长文本。卡片只有 252px 宽，再长也看不全，不如早点收住。
+function cut(s: string, n = 30): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  return t.length > n ? t.slice(0, n) + "…" : t;
+}
+// 分隔符的显示名：自定义时把用户填的那串原样显示出来（空格/换行看不见，用记号代替）。
+function delim(kind: string, custom: string): string {
+  if (kind === "custom") return val(custom, "（未填）");
+  return DELIM_LABEL[kind || "comma"] || kind;
+}
+
+// 对象库里 soon=true 的节点是置灰不可添加的，正常情况下画布上不会出现它们。
+// 这一行是为「万一出现」准备的（比如将来从 .alfredworkflow 导入进来的工作流里带着）：
+// 与其显示成一个看不出所以然的类型名，不如直说它还没实现。
+const SOON_ROWS: SumRow[] = [{ k: "状态", v: "暂未实现（对象库里置灰的那批）" }];
+const SOON_TYPES = new Set(CATALOG.flatMap((g) => g.items.filter((i) => i.soon).map((i) => i.type)));
+
+// 节点卡片正文：按类型给出「字段名 : 值」的键值行（最多两行，卡片放不下更多）。
+// 覆盖对象库里的全部 62 种：32 种可添加的各写一套，30 种置灰未实现的共用 SOON_ROWS。
+// 每一条都只描述**这个节点自己配了什么**，不复述类型名——类型名已经在卡片标题上了。
+function nodeRows(n: WFNode): SumRow[] {
+  if (SOON_TYPES.has(n.type)) return SOON_ROWS;
   const c = n.config as Record<string, string>;
+  const cfg = n.config as Record<string, unknown>;
   switch (n.type) {
-    case "trigger.keyword": return `关键词「${c.keyword || "?"}」${c.arg === "none" ? "" : " · 带参"}`;
-    case "trigger.hotkey": return c.accelerator || "未设快捷键";
-    case "trigger.universal": return `${c.accelerator || "未设快捷键"} · ${c.source === "files" ? "选中文件" : c.source === "text" ? "选中文本" : "文本/文件"}`;
-    case "trigger.always": return "任意输入都尝试";
-    case "input.scriptfilter": return c.script ? c.script.slice(0, 40) : "未设脚本";
-    case "input.listfilter": { const rows = (n.config.items as unknown[]) || []; return `${rows.length} 项 · ${c.match === "none" ? "不过滤" : c.match === "contains" ? "包含匹配" : "词首匹配"}`; }
-    case "input.codec": return `编解码：${c.mode || "unicode"}`;
-    case "input.calc": return "计算表达式";
-    case "input.units": return "单位换算";
-    case "action.script": return c.script ? c.script.slice(0, 40) : "未设脚本";
-    case "action.openurl": return String(c.url || "{query}");
-    case "action.openfile": return String(c.path || "{query}");
-    case "action.launch": { const p = (n.config.paths as string[]) || []; return p.length ? `${p.length} 个 App/文件` : "未选择 App/文件"; }
-    case "utility.args": return c.argMode === "set" ? `参数改为「${String(c.text || "").slice(0, 16)}」` : c.argMode === "clear" ? "清空参数" : "沿用参数 · 可设变量";
-    case "utility.conditional": { const r = (n.config.rules as unknown[]) || []; return `${r.length} 条规则 · 多出口`; }
-    case "utility.transform": return `${c.target ? `变量 ${c.target}` : "参数"} → ${c.mode || "upper"}`;
-    case "utility.replace": return c.find ? `「${c.find}」→「${c.to || ""}」` : "未设查找内容";
-    case "utility.delay": return `等待 ${Number(c.seconds || 0)} 秒`;
-    case "utility.debug": return String(c.text || "{query}").replace(/\s+/g, " ").slice(0, 28);
-    case "utility.split": return `按${DELIM_LABEL[c.with || "comma"] || "自定义"}拆 · ${c.output === "args" ? "逐条执行" : `变量 ${String(c.prefix || "split")}1…`}`;
-    case "utility.join": return `用${DELIM_LABEL[c.with || "newline"] || "自定义"}合并`;
-    case "output.writefile": return c.path ? `写入 ${String(c.path).split("/").pop()}` : "未设文件名";
-    case "action.ask_assistant": return String(c.prompt || "{query}").slice(0, 28);
-    case "action.create_task": return String(c.text || "{query}").slice(0, 28);
-    case "action.device_skill": return `${c.provider || "?"}.${c.skill || "?"}${c.device ? ` @${c.device}` : " @自动"}`;
-    case "output.textview": return `文本视图${c.append ? " · 追加" : ""}`;
-    default: return TYPE_META[n.type]?.label || n.type;
+    // ── 触发器 ──────────────────────────────────────────────────────────────
+    case "trigger.keyword": return [
+      { k: "关键词", v: val(c.keyword, "未设"), mono: true },
+      { k: "参数", v: c.arg === "none" ? "不带参数" : c.arg === "required" ? "必填" : "可选" },
+    ];
+    case "trigger.hotkey": return [
+      { k: "快捷键", v: val(c.accelerator, "未录制"), mono: true },
+      { k: "参数", v: "当前剪贴板文本" },
+    ];
+    case "trigger.always": return [
+      { k: "触发", v: "任意输入都尝试" },
+      { k: "结果", v: "并入普通搜索" },
+    ];
+    case "trigger.universal": return [
+      { k: "快捷键", v: val(c.accelerator, "未录制"), mono: true },
+      { k: "抓取", v: c.source === "files" ? "选中的文件路径" : c.source === "text" ? "选中的文本" : "文本或文件（自动）" },
+    ];
+
+    // ── 输入 ────────────────────────────────────────────────────────────────
+    case "input.scriptfilter": return [
+      { k: "脚本", v: cut(val(c.script, "未设脚本")), mono: true },
+      c.cwd ? { k: "目录", v: cut(String(c.cwd)), mono: true }
+            : { k: "过滤", v: c.alfredFilters ? "由 Umbra 按输入过滤" : "脚本自己过滤" },
+    ];
+    case "input.listfilter": return [
+      { k: "列表", v: `${((cfg.items as unknown[]) || []).length} 项` },
+      { k: "匹配", v: c.match === "none" ? "不过滤" : c.match === "contains" ? "任意位置包含" : "词首匹配" },
+    ];
+    case "input.codec": return [
+      { k: "类型", v: { url: "URL", base64: "Base64" }[c.mode || "unicode"] || "Unicode" },
+      { k: "方向", v: "按输入自动判断编/解码" },
+    ];
+    case "input.calc": return [
+      { k: "输入", v: "算式，如 3*4+2" },
+      { k: "回车", v: "复制结果" },
+    ];
+    case "input.units": return [
+      { k: "输入", v: "换算，如 10km to mi" },
+      { k: "回车", v: "复制结果" },
+    ];
+
+    // ── 工具 ────────────────────────────────────────────────────────────────
+    case "utility.args": {
+      const mode = c.argMode || "keep";
+      const vars = Object.keys((cfg.vars as Record<string, string>) || {}).length;
+      return [
+        mode === "set" ? { k: "参数", v: cut(val(c.text, "{query}"), 22), mono: true }
+                       : { k: "参数", v: mode === "clear" ? "清空" : "沿用上游" },
+        { k: "变量", v: vars ? `${vars} 个` : "未设" },
+      ];
+    }
+    case "utility.conditional": {
+      const rules = (cfg.rules as { op?: string }[]) || [];
+      const first = rules[0]?.op;
+      return [
+        { k: "规则", v: rules.length ? `${rules.length} 条` : "未设规则" },
+        { k: "出口", v: rules.length ? `${rules.length} 个 + 否则` : (RULE_OPS.find((o) => o.v === first)?.t || "只有「否则」") },
+      ];
+    }
+    case "utility.transform": return [
+      { k: "作用于", v: c.target ? `变量 ${c.target}` : "参数 arg" },
+      { k: "方式", v: TRANSFORM_LABEL[c.mode || "upper"] || String(c.mode) },
+    ];
+    case "utility.replace": return [
+      { k: c.regex ? "正则" : "查找", v: cut(val(c.find, "未设"), 22), mono: true },
+      { k: "替换为", v: cut(val(c.to, "（空）"), 22), mono: true },
+    ];
+    case "utility.delay": return [
+      { k: "等待", v: `${Number(c.seconds || 0)} 秒` },
+      { k: "期间", v: c.text ? cut(String(c.text), 20) : "不提示" },
+    ];
+    case "utility.debug": return [
+      { k: "打点", v: cut(val(c.text, "{query}"), 24), mono: true },
+      { k: "记录", v: c.clear ? "执行到这里先清空" : "追加到调试抽屉" },
+    ];
+    case "utility.split": return [
+      { k: "分隔符", v: delim(c.with || "comma", c.custom), mono: c.with === "custom" },
+      { k: "输出", v: c.output === "args" ? "逐条执行下游" : `变量 ${val(c.prefix, "split")}1…` },
+    ];
+    case "utility.join": return [
+      { k: "分隔符", v: delim(c.with || "newline", c.custom), mono: c.with === "custom" },
+      { k: "输入", v: "上游拆出来的多条参数" },
+    ];
+
+    // ── 动作 ────────────────────────────────────────────────────────────────
+    case "action.launch": {
+      const paths = (cfg.paths as string[]) || [];
+      return [
+        { k: "目标", v: paths.length ? `${paths.length} 个 App/文件` : "未选择" },
+        paths.length === 1 ? { k: "路径", v: cut(String(paths[0]), 26), mono: true }
+                           : { k: "已在前台", v: c.toggleVisibility ? "再按一次隐藏" : "照常置前" },
+      ];
+    }
+    case "action.openfile": return [
+      { k: "路径", v: cut(val(c.path, "{query}"), 26), mono: true },
+      { k: "用什么打开", v: val(c.app, "系统默认") },
+    ];
+    case "action.openurl": return [
+      { k: "网址", v: cut(val(c.url, "{query}"), 30), mono: true },
+      { k: "打开方式", v: "默认浏览器" },
+    ];
+    case "action.script": return [
+      { k: "脚本", v: cut(val(c.script, "未设脚本")), mono: true },
+      c.cwd ? { k: "目录", v: cut(String(c.cwd), 26), mono: true }
+            : { k: "失败时", v: c.onError === "continue" ? "忽略继续" : c.onError === "branch" ? "走失败出口" : "停止链路" },
+    ];
+    case "action.copy": return [
+      { k: "内容", v: "上游参数 {query}", mono: true },
+      { k: "去向", v: "系统剪贴板" },
+    ];
+    case "action.paste": return [
+      { k: "内容", v: "上游参数 {query}", mono: true },
+      { k: "去向", v: "前台应用（需辅助功能权限）" },
+    ];
+    case "action.assistant": return [
+      { k: "内容", v: "上游参数 {query}", mono: true },
+      { k: "去向", v: "聊天页发给秘书，不等回复" },
+    ];
+    case "action.inspiration": return [
+      { k: "内容", v: "上游参数 {query}", mono: true },
+      { k: "去向", v: "记为一条灵感" },
+    ];
+    case "action.ask_assistant": return [
+      { k: "提问", v: cut(val(c.prompt, "{query}"), 26), mono: true },
+      { k: "回复", v: c.show ? "弹窗展示" : "作为参数传给下游" },
+    ];
+    case "action.create_task": return [
+      { k: "任务", v: cut(val(c.text, "{query}"), 26) },
+      { k: "执行设备", v: val(c.device, "由服务端挑") },
+    ];
+    case "action.device_skill": return [
+      { k: "技能", v: `${val(c.provider, "?")}.${val(c.skill, "?")}`, mono: true },
+      { k: "设备", v: val(c.device, "自动挑一台在线的") },
+    ];
+
+    // ── 输出 ────────────────────────────────────────────────────────────────
+    case "output.notify": return [
+      { k: "内容", v: "上游参数 {query}", mono: true },
+      { k: "形式", v: "系统通知" },
+    ];
+    case "output.largetype": return [
+      { k: "内容", v: "上游参数 {query}", mono: true },
+      { k: "形式", v: "半透明浮层大字" },
+    ];
+    case "output.textview": return [
+      { k: "标题", v: val(c.title, "（无）") },
+      { k: "写入", v: `${c.append ? "追加" : "覆盖"}${c.markdown ? " · Markdown" : ""}` },
+    ];
+    case "output.writefile": return [
+      { k: "文件", v: cut(val(c.path, "未设文件名"), 26), mono: true },
+      { k: "已存在时", v: c.ifExists === "append" ? "追加" : c.ifExists === "skip" ? "跳过" : "覆盖" },
+    ];
+
+    // 兜底：类型不在上面（理论上不会发生，除非新加了对象忘了补这里）。
+    // 显示类型名而不是空白，至少还能看出是谁漏了。
+    default: return [{ k: "类型", v: TYPE_META[n.type]?.label || n.type, mono: true }];
   }
+}
+
+// 一行版摘要：调试抽屉的标题这类只能塞一行文字的地方用，直接把键值行拼起来。
+function nodeSummary(n: WFNode): string {
+  return nodeRows(n).map((r) => `${r.k} ${r.v}`).join(" · ");
 }
 
 // Launch 目标列表：左图标 + 路径（默认只读，双击可编辑）。
