@@ -131,12 +131,12 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "utility.debug", label: "Debug 调试打点", icon: IconBug },
     { type: "utility.split", label: "Split Arg 拆分参数", icon: IconScissors },
     { type: "utility.join", label: "Join Args 合并参数", icon: IconLink },
-    { type: "utility.junction", label: "Junction 汇流点", icon: IconBranch, soon: true, hint: "纯理线用的中转点，只影响连线走向不改数据。" },
-    { type: "utility.filter", label: "Filter 过滤", icon: IconFilter, soon: true, hint: "条件不满足就整条中断（Conditional 的单出口版）。" },
+    { type: "utility.junction", label: "Junction 汇流点", icon: IconBranch, hint: "纯理线用的中转点，只影响连线走向不改数据。" },
+    { type: "utility.filter", label: "Filter 过滤", icon: IconFilter, hint: "条件不满足就整条中断（Conditional 的单出口版）。" },
     { type: "utility.fileconditional", label: "File Conditional 文件条件", icon: IconFolder, soon: true, hint: "按文件类型/扩展名分流。等 File Filter 一起做。" },
     { type: "utility.dialog", label: "Dialog Conditional 对话框", icon: IconAlert, soon: true, hint: "弹个框问用户，按点了哪个按钮分流。UI 规范还没定。" },
-    { type: "utility.random", label: "Random 随机值", icon: IconDice, soon: true, hint: "生成随机数/UUID 塞进参数。" },
-    { type: "utility.jsonconfig", label: "JSON Config 配置", icon: IconFile, soon: true, hint: "用一段 JSON 一次性设置多个变量。" },
+    { type: "utility.random", label: "Random 随机值", icon: IconDice, hint: "生成随机数 / UUID / 随机串，写进参数或变量。" },
+    { type: "utility.jsonconfig", label: "JSON Config 配置", icon: IconFile, hint: "用一段 JSON 一次性设置多个变量。" },
     { type: "utility.hide", label: "隐藏主面板", icon: IconEyeOff, soon: true, hint: "执行到这里先把主面板收起来再继续。等窗口控制接口补齐。" },
     { type: "utility.show", label: "显示主面板", icon: IconEye, soon: true, hint: "把主面板重新唤起，和「隐藏主面板」配套。" },
   ] },
@@ -1596,6 +1596,40 @@ export function nodeRows(n: WFNode): SumRow[] {
       { k: "分隔符", v: delim(c.with || "comma", c.custom), mono: c.with === "custom" },
       { k: "输出", v: c.output === "args" ? "逐条执行下游" : `变量 ${val(c.prefix, "split")}1…` },
     ];
+    case "utility.junction": return [
+      { k: "作用", v: "纯理线，不改数据" },
+      { k: "出口", v: "原样传给下游" },
+    ];
+    case "utility.filter": {
+      const rules = (cfg.rules as unknown[]) || [];
+      return [
+        { k: "规则", v: rules.length ? `${rules.length} 条（任一命中即放行）` : "未设 · 全部放行" },
+        { k: "不满足时", v: "中断这条链路" },
+      ];
+    }
+    case "utility.random": {
+      const mode = String(c.mode || "range");
+      const shape = mode === "uuid" ? "UUID"
+        : mode === "hex" ? `十六进制 ${Number(c.length || 8)} 位`
+        : mode === "str" ? `随机串 ${Number(c.length || 8)} 位`
+        : `${Number(c.min ?? 1)} – ${Number(c.max ?? 100)}`;
+      return [
+        { k: "生成", v: shape },
+        { k: "写入", v: c.target ? `变量 ${c.target}` : "参数 arg" },
+      ];
+    }
+    case "utility.jsonconfig": {
+      const raw = String(c.json || "").trim();
+      let keys = 0;
+      try {
+        const o = raw ? JSON.parse(raw) : null;
+        if (o && typeof o === "object" && !Array.isArray(o)) keys = Object.keys(o).length;
+      } catch { keys = -1; }   // 填了但解不出来：直接在卡片上说清楚，别等运行才报错
+      return [
+        { k: "变量", v: keys < 0 ? "JSON 不合法" : keys ? `${keys} 个` : "未填" },
+        { k: "值里", v: "可用 {query} / {var:名称}" },
+      ];
+    }
     case "utility.join": return [
       { k: "分隔符", v: delim(c.with || "newline", c.custom), mono: c.with === "custom" },
       { k: "输入", v: "上游拆出来的多条参数" },
@@ -1917,6 +1951,48 @@ function NodeConfig({ node, onSave, onClose }: { node: WFNode; onSave: (c: Recor
           {node.type === "utility.conditional" ? (<>
             <div className="text-[11.5px] text-muted">从上往下逐条判断，命中哪条就走哪个出口；全不中走「否则」。出口没连线时链路自然结束。</div>
             <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
+          </>) : null}
+          {node.type === "utility.junction" ? (
+            <div className="text-[12px] text-muted leading-[1.7]">纯理线用的中转点：多条连线先并到这里，再从这里出一条到下游，画布上就不用画一把交叉的线。<br />
+              参数、变量、出口一律原样透传，它不改任何数据，也没有配置项。</div>
+          ) : null}
+          {node.type === "utility.filter" ? (<>
+            <div className="text-[11.5px] text-muted">逐条判断，<b>任一条命中就放行</b>；一条都不中就中断这条链路，下游不再执行。
+              一条规则都不配 = 不过滤（全部放行）。</div>
+            <RulesEditor rules={(c.rules as Rule[]) || []} onChange={(r) => set("rules", r)} />
+          </>) : null}
+          {node.type === "utility.random" ? (<>
+            <div><span className={lab}>生成什么</span>
+              <select className={inp} value={String(c.mode || "range")} onChange={(e) => set("mode", e.target.value)}>
+                <option value="range">整数（指定范围）</option>
+                <option value="uuid">UUID</option>
+                <option value="hex">十六进制串</option>
+                <option value="str">字母数字随机串</option>
+              </select></div>
+            {String(c.mode || "range") === "range" ? (
+              <div className="flex items-center gap-[8px]">
+                <div className="flex-1"><span className={lab}>最小值</span>
+                  <input type="number" className={`${inp} font-mono`} value={String(c.min ?? 1)} onChange={(e) => set("min", e.target.value)} /></div>
+                <div className="flex-1"><span className={lab}>最大值</span>
+                  <input type="number" className={`${inp} font-mono`} value={String(c.max ?? 100)} onChange={(e) => set("max", e.target.value)} /></div>
+              </div>
+            ) : null}
+            {["hex", "str"].includes(String(c.mode || "range")) ? (
+              <div><span className={lab}>长度（1–64）</span>
+                <input type="number" className={`${inp} font-mono`} value={String(c.length ?? 8)} onChange={(e) => set("length", e.target.value)} /></div>
+            ) : null}
+            <div><span className={lab}>写到哪里（留空=改参数 arg）</span>
+              <input className={`${inp} font-mono`} value={String(c.target || "")} onChange={(e) => set("target", e.target.value)} placeholder="变量名，留空则改参数" /></div>
+            <div className="text-[11px] text-muted">和占位符 {"{random}"} 用的是同一套实现。只想在某个文本里插一个随机数的话，直接写占位符更省事；这个节点适合「先生成、后面多处引用」。</div>
+          </>) : null}
+          {node.type === "utility.jsonconfig" ? (<>
+            <div><span className={lab}>JSON（最外层是一个对象，键=变量名）</span>
+              <textarea className={`${inp} font-mono h-[110px] resize-y`} value={String(c.json || "")} onChange={(e) => set("json", e.target.value)}
+                placeholder={'{\n  "api": "https://example.com",\n  "keyword": "{query}"\n}'} /></div>
+            <div className="text-[11px] text-muted leading-[1.7]">一次设置多个变量，省得摆一排 Args &amp; Vars。<br />
+              值里可以用 {"{query}"} / {"{var:名称}"} 等占位符，替换在 <b>解析之后</b> 做，所以值里带引号和换行都不会撑坏 JSON。<br />
+              值不是字符串时（数字、布尔、嵌套对象）会转成字符串存 —— 变量表只存字符串。<br />
+              JSON 不合法会中断链路并提示，不会带着半份变量往下跑。</div>
           </>) : null}
           {node.type === "utility.transform" ? (<>
             <div><span className={lab}>作用对象（留空=作用于参数 arg）</span>

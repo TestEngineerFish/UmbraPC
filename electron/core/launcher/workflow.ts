@@ -751,6 +751,75 @@ export class WorkflowEngine {
         break;
       }
 
+      // ── 工具：Junction 汇流点 —— 纯理线用，什么都不做 ──
+      // 存在的意义只有一个：让多条连线先并到一个点上，再从这里出一条到下游，
+      // 画布上不用画一把交叉的线。参数、变量、出口一律原样透传。
+      case "utility.junction":
+        break;
+
+      // ── 工具：Filter 过滤 —— 条件不满足就整条中断（Conditional 的单出口版）──
+      // 逐条判断，**任一命中即放行**；一条都不中就 stop，下游不再执行。
+      // 没配规则时一律放行 —— 空规则当成「不过滤」，比当成「全拦」更符合直觉，
+      // 也不会让刚拖上画布还没配的节点把整条链路憋死。
+      case "utility.filter": {
+        const rules = Array.isArray(node.config.rules) ? (node.config.rules as Record<string, unknown>[]) : [];
+        if (rules.length) {
+          const pass = rules.some((r) => this.matchRule(r || {}, arg, vars));
+          if (!pass) {
+            stop = true;
+            feedback = "";   // 被过滤掉是正常结果，不弹提示（弹了反而像出错）
+          }
+        }
+        break;
+      }
+
+      // ── 工具：Random 随机值 —— 生成随机数 / UUID / 随机串，写进 arg 或某个变量 ──
+      // 复用占位符系统里的 randomToken()，两处行为天然一致：改一处就是改两处。
+      case "utility.random": {
+        const mode = String(node.config.mode || "range");
+        let param = "";
+        if (mode === "range") {
+          // 顺序写反了（100-1）也认，省得用户对着一个空结果找半天。
+          const a = Math.trunc(Number(node.config.min ?? 1));
+          const b = Math.trunc(Number(node.config.max ?? 100));
+          param = `${Math.min(a, b)}-${Math.max(a, b)}`;
+        } else if (mode === "uuid") {
+          param = "uuid";
+        } else {
+          // hex / str：长度夹在 1..64，太长没意义、也怕有人手滑填个几百万
+          const len = Math.max(1, Math.min(64, Math.trunc(Number(node.config.length ?? 8)) || 8));
+          param = `${mode}${len}`;
+        }
+        const value = randomToken(param);
+        const target = String(node.config.target || "").trim();
+        if (target) vars[target] = value; else outArg = value;
+        break;
+      }
+
+      // ── 工具：JSON Config —— 用一段 JSON 一次性设置多个变量 ──
+      // 先 parse 再对每个值做占位符替换（而不是先替换整段文本再 parse）：
+      // 值里带引号或换行时，先替换会把 JSON 结构本身撑坏。
+      // 值不是字符串的（数字/布尔/嵌套对象）一律转成字符串 —— 变量表只存字符串。
+      case "utility.jsonconfig": {
+        const raw = String(node.config.json || "").trim();
+        if (!raw) break;   // 没填就什么都不做，不算错
+        let parsed: unknown;
+        try { parsed = JSON.parse(raw); }
+        catch { feedback = "JSON Config：内容不是合法 JSON"; stop = true; break; }
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          feedback = "JSON Config：最外层要是一个对象（{\"变量名\": \"值\"}）";
+          stop = true;
+          break;
+        }
+        for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+          const key = k.trim();
+          if (!key) continue;
+          const text = typeof v === "string" ? v : JSON.stringify(v);
+          vars[key] = this.subst(text, arg, vars);
+        }
+        break;
+      }
+
       // ── 工具：Delay —— 等待若干秒再继续（上限 60 秒，避免卡死链路）──
       case "utility.delay": {
         const ms = Math.max(0, Math.min(Number(node.config.seconds || 0) * 1000, 60000));

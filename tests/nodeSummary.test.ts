@@ -39,14 +39,17 @@ const DEMO: Record<string, Cfg> = {
   "action.device_skill": { provider: "system", skill: "write_file", device: "pc-1" },
   "output.textview": { title: "结果", append: true, markdown: true },
   "output.writefile": { path: "~/out/报告.md", ifExists: "append" },
+  "utility.filter": { rules: [{ op: "contains", value: "urgent" }] },
+  "utility.random": { mode: "hex", length: 12, target: "token" },
+  "utility.jsonconfig": { json: '{"api":"https://x","kw":"{query}"}' },
 };
 
 const ALL = CATALOG.flatMap((g) => g.items.map((i) => ({ type: i.type, soon: !!i.soon })));
 
 describe("对象库覆盖", () => {
-  it("62 种节点，30 种置灰、32 种可添加", () => {
+  it("62 种节点，26 种置灰、36 种可添加", () => {
     expect(ALL.length).toBe(62);
-    expect(ALL.filter((x) => x.soon).length).toBe(30);
+    expect(ALL.filter((x) => x.soon).length).toBe(26);
   });
 
   it.each(ALL.map((x) => [x.type, x.soon] as [string, boolean]))("%s 的摘要成形", (type, soon) => {
@@ -96,6 +99,24 @@ describe("值真的读进去了（不是永远显示占位）", () => {
 
   it("设备技能拼成 provider.skill", () => {
     expect(text("action.device_skill", DEMO["action.device_skill"])).toContain("system.write_file");
+  });
+
+  it("过滤：没配规则时说清楚是「全部放行」，不是「全拦」", () => {
+    expect(text("utility.filter")).toContain("全部放行");
+    expect(text("utility.filter", DEMO["utility.filter"])).toContain("1 条");
+  });
+
+  it("随机值：形状和写入位置都要说清", () => {
+    const t = text("utility.random", DEMO["utility.random"]);
+    expect(t).toContain("十六进制 12 位");
+    expect(t).toContain("变量 token");
+    expect(text("utility.random")).toContain("1 – 100");
+  });
+
+  it("JSON Config：不合法的 JSON 在卡片上就说，别等运行才报错", () => {
+    expect(text("utility.jsonconfig", DEMO["utility.jsonconfig"])).toContain("2 个");
+    expect(text("utility.jsonconfig", { json: "{坏" })).toContain("JSON 不合法");
+    expect(text("utility.jsonconfig")).toContain("未填");
   });
 });
 
