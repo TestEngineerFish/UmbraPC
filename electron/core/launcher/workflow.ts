@@ -192,6 +192,17 @@ const APPLESCRIPT_TIMEOUT = 20_000;
 // 快捷指令可能真的要跑一会儿（发消息、处理图片），给宽一些。
 const SHORTCUT_TIMEOUT = 120_000;
 // 朗读 / 提示音的超时。这两个都是「响一下」的事，卡住就没有意义了。
+// Dialog Conditional 的按钮清单。**引擎和编辑器必须用同一份**：
+// 出口是按下标编号的（b0/b1/b2），两边对按钮个数的理解差一个，连线就接到别的分支上去了。
+// 所以这个函数导出给编辑器的 outPorts 直接用，而不是各算一遍。
+// 空按钮名补成「按钮N」而不是丢掉 —— 丢掉会让下标错位，是同一类的坑。
+export const DIALOG_MAX_BUTTONS = 3;
+export function dialogButtons(config: Record<string, unknown>): string[] {
+  const raw = Array.isArray(config.buttons) ? (config.buttons as unknown[]) : [];
+  const list = raw.slice(0, DIALOG_MAX_BUTTONS).map((b, i) => String(b ?? "").trim() || `按钮${i + 1}`);
+  return list.length ? list : ["取消", "确定"];
+}
+
 // 确认框等人点的时间。给足两分钟：弹出来时用户可能正被别的事岔开。
 const CONFIRM_TIMEOUT = 120_000;
 const SPEAK_TIMEOUT = 60_000;
@@ -1255,6 +1266,40 @@ export class WorkflowEngine {
           stop = true; break;
         }
         feedback = "已播放 ✓";
+        break;
+      }
+
+      // ── 工具：Dialog Conditional —— 弹个框问一句，按点了哪个按钮分流 ──
+      //
+      // 用 Electron 自己的消息框，不走 AppleScript：两个平台一套代码，而且返回的是
+      // 按钮下标，不用去解析 osascript 那串 "button returned:确定"（本地化一变就解析错）。
+      //
+      // 三件事是刻意这么定的：
+      //   1. **弹框前先收起快捷入口面板**。面板是 alwaysOnTop floating，消息框会被它盖住 ——
+      //      于是弹了一个看不见的框在那儿等人点，链路卡死而界面上毫无迹象。这是最难查的一类。
+      //   2. **按钮最多三个**（和 Alfred 一致）。macOS 的消息框超过三个按钮会改成竖排堆叠，
+      //      又难看又分不清哪个是默认键。
+      //   3. **Esc 等同于点了「取消按钮」那一路**。Electron 的消息框只回一个按钮下标，
+      //      分辨不出「按了 Esc」和「点了取消」；与其猜，不如把规则定死并写在界面上。
+      case "utility.dialog": {
+        const btns = dialogButtons(node.config);
+        const title = this.subst(String(node.config.title || ""), arg, vars).trim() || wf.name;
+        const detail = this.subst(String(node.config.text || ""), arg, vars).trim();
+        const cancelId = Math.max(0, Math.min(Math.trunc(Number(node.config.cancelIndex ?? 0)) || 0, btns.length - 1));
+        const defaultId = Math.max(0, Math.min(Math.trunc(Number(node.config.defaultIndex ?? btns.length - 1)) || 0, btns.length - 1));
+        const kind = String(node.config.kind || "none");
+        await this.deps.hide(true);   // 见上面第 1 条：不收面板的话框会被盖住
+        const { dialog } = await import("electron");
+        const r = await dialog.showMessageBox({
+          type: (["none", "info", "warning", "error"].includes(kind) ? kind : "none") as "none",
+          title, message: title, detail: detail || undefined,
+          buttons: btns, defaultId, cancelId,
+          noLink: true,   // Windows 上别把按钮渲染成命令链接，那样和 macOS 差太远
+        });
+        const picked = btns[r.response] ?? btns[cancelId];
+        vars.dialog_button = picked;          // 下游可以用 {var:dialog_button} 拿到按了哪个
+        outPort = `b${r.response}`;
+        feedback = `选择了「${picked}」`;
         break;
       }
 

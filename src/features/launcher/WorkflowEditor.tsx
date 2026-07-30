@@ -144,7 +144,7 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "utility.junction", label: "Junction 汇流点", icon: IconBranch, hint: "纯理线用的中转点，只影响连线走向不改数据。" },
     { type: "utility.filter", label: "Filter 过滤", icon: IconFilter, hint: "条件不满足就整条中断（Conditional 的单出口版）。" },
     { type: "utility.fileconditional", label: "File Conditional 文件条件", icon: IconFolder, hint: "按扩展名 / 是不是目录 / 名字包含什么来分流，多出口。" },
-    { type: "utility.dialog", label: "Dialog Conditional 对话框", icon: IconAlert, soon: true, hint: "弹个框问用户，按点了哪个按钮分流。UI 规范还没定。" },
+    { type: "utility.dialog", label: "Dialog Conditional 对话框", icon: IconAlert, hint: "弹个系统消息框问一句，按用户点了哪个按钮走不同出口。最多三个按钮。" },
     { type: "utility.random", label: "Random 随机值", icon: IconDice, hint: "生成随机数 / UUID / 随机串，写进参数或变量。" },
     { type: "utility.jsonconfig", label: "JSON Config 配置", icon: IconFile, hint: "用一段 JSON 一次性设置多个变量。" },
     { type: "utility.hide", label: "隐藏主面板", icon: IconEyeOff, hint: "执行到这里先把快捷入口面板收起来再继续（新窗口就不会被它挡住）。" },
@@ -227,7 +227,7 @@ export const NODE_SUB: Record<string, string> = {
   "utility.junction": "纯理线的中转点，数据原样透传",
   "utility.filter": "任一条规则命中才放行，否则中断链路",
   "utility.fileconditional": "按路径特征分流：扩展名、是不是目录、名字里有什么",
-  "utility.dialog": "弹个框问一句，按点了哪个按钮分流（暂未实现）",
+  "utility.dialog": "弹个框问一句，按点了哪个按钮分流",
   "utility.random": "生成一个随机值，写进参数或某个变量",
   "utility.jsonconfig": "用一段 JSON 设变量、改参数、改下游节点配置",
   "utility.hide": "先把快捷入口面板收起来，再继续跑下游",
@@ -358,6 +358,7 @@ function defaultConfig(type: string): Record<string, unknown> {
     case "utility.transform": return { target: "", mode: "upper" };
     case "utility.replace": return { target: "", find: "", to: "", regex: false, ci: false };
     case "utility.delay": return { seconds: 1 };
+    case "utility.dialog": return { title: "确定要继续吗？", text: "", buttons: ["取消", "继续"], defaultIndex: 1, cancelIndex: 0, kind: "warning" };
     case "utility.debug": return { text: "{query}", after: "pass", clear: false };
     case "utility.split": return { with: "comma", custom: "", trim: true, discardEmpty: false, output: "vars", prefix: "split" };
     case "utility.join": return { with: "newline", custom: "" };
@@ -376,6 +377,20 @@ function defaultConfig(type: string): Record<string, unknown> {
     default: return {};
   }
 }
+// 对话框的按钮清单。**主进程 electron/core/launcher/workflow.ts 里有一份一模一样的**。
+//
+// 为什么宁可抄一份也不 import 那边的：那个模块顶层 import 了 node:fs / node:path /
+// 整个执行引擎，拖进渲染层包既跑不起来也白胖一大截。而这里需要的只是十行纯逻辑。
+// 代价是两份可能走岔 —— 出口是按下标编号的（b0/b1/b2），两边对按钮个数的理解差一个，
+// 连线就接到别的分支上去了。所以 tests/dialog.test.ts 拿一组配置把两份实现逐个对过，
+// 走岔了测试当场就红。别把这段改成「差不多就行」。
+const DIALOG_MAX_BUTTONS = 3;
+export function dialogButtons(config: Record<string, unknown>): string[] {
+  const raw = Array.isArray(config.buttons) ? (config.buttons as unknown[]) : [];
+  const list = raw.slice(0, DIALOG_MAX_BUTTONS).map((b, i) => String(b ?? "").trim() || `按钮${i + 1}`);
+  return list.length ? list : ["取消", "确定"];
+}
+
 // 节点的输出端口清单：默认只有一个匿名出口；Conditional 按规则条数出 r0…rN 再加一个 else；
 // Run Script 选了「失败走分支」时，成功口之外再多一个 error 口。端口顺序即画布上从上到下的顺序。
 export function outPorts(n: WFNode): { port: string; label: string }[] {
@@ -387,6 +402,11 @@ export function outPorts(n: WFNode): { port: string; label: string }[] {
     const list = rules.map((r, i) => ({ port: `r${i}`, label: String(r?.label || "").trim() || `规则${i + 1}` }));
     list.push({ port: "else", label: "否则" });
     return list;
+  }
+  // 对话框：每个按钮一个出口，标签就是按钮文字。按钮个数由引擎那份 dialogButtons 说了算 ——
+  // 两边各算一遍的话，差一个按钮就会把连线接到别的分支上。
+  if (n.type === "utility.dialog") {
+    return dialogButtons(n.config).map((b, i) => ({ port: `b${i}`, label: b }));
   }
   if (n.type === "action.script" && String(n.config.onError || "stop") === "branch") {
     return [{ port: "", label: "成功" }, { port: "error", label: "失败" }];
@@ -1718,6 +1738,13 @@ export function nodeRows(n: WFNode): SumRow[] {
       { k: c.regex ? "正则" : "查找", v: cut(val(c.find, "未设"), 22), mono: true },
       { k: "替换为", v: cut(val(c.to, "（空）"), 22), mono: true },
     ];
+    case "utility.dialog": {
+      const btns = dialogButtons(cfg);
+      return [
+        { k: "问句", v: cut(val(c.title, "未填问句"), 26) },
+        { k: "按钮", v: `${btns.join(" / ")}（${btns.length} 个出口）` },
+      ];
+    }
     case "utility.delay": return [
       { k: "等待", v: `${Number(c.seconds || 0)} 秒` },
       { k: "期间", v: c.text ? cut(String(c.text), 20) : "不提示" },
@@ -2384,6 +2411,56 @@ function NodeConfig({ node, onSave, onClose, onDelete }: {
         </Row>
       ) : null}
 
+      {node.type === "utility.dialog" ? (<>
+        <Row label="问句" top>
+          <input className={FLD} value={s("title")} onChange={(e) => set("title", e.target.value)} placeholder="确定要继续吗？" />
+          <Hint>消息框里的主文案。可用 <Code>{"{query}"}</Code> 把上游参数带进去。留空用工作流名。</Hint>
+        </Row>
+        <Row label="说明" top>
+          <textarea className={`${FLD} h-[60px] resize-y`} value={s("text")} onChange={(e) => set("text", e.target.value)}
+            placeholder="可选，写在问句下面的小字" />
+        </Row>
+        <Row label="图标" last>
+          <select className={FLD} value={s("kind", "none")} onChange={(e) => set("kind", e.target.value)}>
+            <option value="none">无</option><option value="info">信息</option>
+            <option value="warning">警告</option><option value="error">错误</option>
+          </select>
+        </Row>
+        <Sec title="按钮" note={`${dialogButtons(c).length} / ${DIALOG_MAX_BUTTONS} · 顺序即出口顺序`} />
+        <RowTable<string>
+          rows={(Array.isArray(c.buttons) ? (c.buttons as string[]) : [])}
+          onChange={(b) => set("buttons", b)}
+          blank={dialogButtons(c).length < DIALOG_MAX_BUTTONS ? () => "" : undefined}
+          addLabel="加一个按钮"
+          cols={[{ label: "按钮文字", cls: "flex-1 min-w-0" }]}
+          emptyText="没配按钮时用默认的「取消 / 继续」两个。"
+          cell={(b, i) => [
+            <input key="b" className={CELL} value={b} placeholder={`按钮${i + 1}`}
+              onChange={(e) => set("buttons", (c.buttons as string[]).map((x, j) => (j === i ? e.target.value : x)))} />,
+          ]}
+        />
+        <Row label="默认按钮" top>
+          <select className={FLD} value={String(c.defaultIndex ?? dialogButtons(c).length - 1)} onChange={(e) => set("defaultIndex", Number(e.target.value))}>
+            {dialogButtons(c).map((b, i) => <option key={i} value={i}>{b}</option>)}
+          </select>
+          <Hint>回车直接选它。</Hint>
+        </Row>
+        <Row label="取消按钮" top last>
+          <select className={FLD} value={String(c.cancelIndex ?? 0)} onChange={(e) => set("cancelIndex", Number(e.target.value))}>
+            {dialogButtons(c).map((b, i) => <option key={i} value={i}>{b}</option>)}
+          </select>
+          <Hint>按 Esc 或点关闭，等同于点了它。</Hint>
+        </Row>
+        <Note>调整按钮顺序会跟着改出口顺序 —— 已经连好的线还挂在原来的位置上，换过顺序记得回画布上核对一遍。</Note>
+        <Fold title="几个刻意定下来的规则">
+          <b>弹框前会先收起快捷入口面板。</b>面板是常驻最前的浮层，不收的话消息框会被它盖住 ——
+          于是弹了一个看不见的框在等人点，链路卡住而界面上毫无迹象。<br />
+          <b>最多三个按钮</b>（和 Alfred 一致）：macOS 的消息框超过三个会改成竖排堆叠，又难看又分不清默认键。<br />
+          <b>Esc 等同于点「取消按钮」那一路</b>。系统消息框只回一个按钮下标，分辨不出「按了 Esc」和「点了取消」——
+          与其猜，不如把规则定死。想让「取消」什么都不做，就把那个出口空着不连线。<br />
+          下游可以用 <Code>{"{var:dialog_button}"}</Code> 拿到用户点的按钮文字；参数本身原样透传。
+        </Fold>
+      </>) : null}
       {node.type === "utility.junction" ? (
         <Blank>纯理线用的中转点：多条连线先并到这里，再从这里出一条到下游，画布上就不用画一把交叉的线。<br />
           参数、变量、出口一律原样透传，它不改任何数据，也没有配置项。</Blank>

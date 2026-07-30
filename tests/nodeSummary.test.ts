@@ -54,6 +54,7 @@ const DEMO: Record<string, Cfg> = {
   "input.appsfilter": { action: "quit" },
   "output.keycombo": { accelerator: "Command+Shift+K", hideFirst: false },
   "automation.system": { command: "emptytrash" },
+  "utility.dialog": { title: "要删掉吗？", buttons: ["取消", "删掉"], defaultIndex: 1 },
   "action.terminal": { command: "cd ~/Downloads && ls -la", app: "iTerm" },
   "action.websearch": { engine: "github", query: "{query} language:ts", browser: "Safari" },
   "output.speak": { text: "跑完了", voice: "Tingting", rate: 220, wait: true },
@@ -63,9 +64,9 @@ const DEMO: Record<string, Cfg> = {
 const ALL = CATALOG.flatMap((g) => g.items.map((i) => ({ type: i.type, soon: !!i.soon })));
 
 describe("对象库覆盖", () => {
-  it("62 种节点，8 种置灰、54 种可添加", () => {
+  it("62 种节点，7 种置灰、55 种可添加", () => {
     expect(ALL.length).toBe(62);
-    expect(ALL.filter((x) => x.soon).length).toBe(8);
+    expect(ALL.filter((x) => x.soon).length).toBe(7);
   });
 
   it.each(ALL.map((x) => [x.type, x.soon] as [string, boolean]))("%s 的摘要成形", (type, soon) => {
@@ -340,5 +341,22 @@ describe("出口名要透到节点卡片上", () => {
   it("没有规则时说清楚只剩「否则」", () => {
     expect(text("utility.conditional")).toContain("只有「否则」");
     expect(text("utility.fileconditional")).toContain("只有「否则」");
+  });
+});
+
+describe("对话框的卡片摘要", () => {
+  it("按钮列出来，并且说清有几个出口 —— 出口数量是接线时最需要先知道的", () => {
+    const t = text("utility.dialog", { title: "要删掉吗？", buttons: ["取消", "删掉"] });
+    expect(t).toContain("要删掉吗？");
+    expect(t).toContain("取消 / 删掉");
+    expect(t).toContain("2 个出口");
+  });
+
+  it("不配按钮时显示默认的那两个，不是「未设」", () => {
+    expect(text("utility.dialog")).toContain("取消 / 确定");
+  });
+
+  it("没填问句时说清楚", () => {
+    expect(text("utility.dialog", { buttons: ["好"] })).toContain("未填问句");
   });
 });

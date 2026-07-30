@@ -14,8 +14,14 @@ export const shell = {
   openPath: () => Promise.resolve(""),
   openExternal: (u: string) => { openedUrls.push(u); return Promise.resolve(); },
 };
+// 对话框要按下标返回「用户点了哪个按钮」。测试往 dialogPicks 里塞一个下标，
+// 壳就按它回。不给就当点了第一个。
+export const dialogPicks: number[] = [];
+export const dialog = {
+  showMessageBox: (_opts: unknown) => Promise.resolve({ response: dialogPicks.length ? dialogPicks[0] : 0, checkboxChecked: false }),
+};
 export const systemPreferences = { canPromptTouchID: () => false };
 export const safeStorage = { isEncryptionAvailable: () => false };
 export const BrowserWindow = class {};
 export const globalShortcut = { register: () => false, isRegistered: () => false };
-export default { net, app, ipcMain, clipboard, shell, systemPreferences, safeStorage, BrowserWindow, globalShortcut };
+export default { net, app, ipcMain, clipboard, shell, dialog, systemPreferences, safeStorage, BrowserWindow, globalShortcut };

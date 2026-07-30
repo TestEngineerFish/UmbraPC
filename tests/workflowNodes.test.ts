@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { WorkflowEngine } from "../electron/core/launcher/workflow";
 import type { ConfigStore } from "../electron/core/config";
+import { dialogPicks } from "./stubs/electron";
 
 interface NodeDef { id: string; type: string; config?: Record<string, unknown> }
 
@@ -714,5 +715,76 @@ describe("系统命令：确认框", () => {
     if (process.platform === "darwin") return;
     const r = await runChain([{ id: "sc", type: "automation.system", config: { command: "lock" } }]);
     expect(r.feedback).toContain("macOS");   // 非 mac 上在平台守卫处就停了，说明没先去弹框
+  });
+});
+
+describe("Dialog Conditional 对话框", () => {
+  // 通用的 runChain 只会把连线挂在默认出口上，表达不了「从 b1 这个出口引出去」，
+  // 所以这里自己搭链路。这也正好把最该测的东西测到了：**出口真的按按钮下标路由**。
+  const run = async (pick: number, fromPort: string, config: Record<string, unknown>, arg = "透传") => {
+    dialogPicks.length = 0;
+    dialogPicks.push(pick);
+    let hide = 0;
+    const nodes = [
+      { id: "t", type: "trigger.keyword", x: 0, y: 0, config: { keyword: "k" } },
+      { id: "dlg", type: "utility.dialog", x: 0, y: 0, config },
+      { id: "dbg", type: "utility.debug", x: 0, y: 0, config: { text: "{query}" } },
+    ];
+    const connections = [
+      { from: "t", to: "dlg" },
+      { from: "dlg", to: "dbg", fromPort },
+    ];
+    const wf = { id: "wf", name: "测试", enabled: true, nodes, connections };
+    const cfg = { dir: TMP_CFG_DIR, get: () => ({ launcherWorkflows: [wf] }) } as unknown as ConfigStore;
+    const engine = new WorkflowEngine(cfg, {
+      sendAssistant: () => {}, hide: async () => { hide++; }, showLargeType: () => {},
+      showPanel: async () => {}, showTextView: () => {}, getSecret: () => null,
+    } as never);
+    const r = await engine.runFromEditor("wf", "t", arg);
+    const steps = engine.trace.list("wf")[0].steps;
+    return {
+      feedback: r.feedback,
+      hide,
+      dlg: steps.find((x) => x.nodeId === "dlg"),
+      dbg: steps.find((x) => x.nodeId === "dbg"),
+    };
+  };
+
+  it("点了第 N 个按钮就走第 N 个出口", async () => {
+    expect((await run(1, "b1", { buttons: ["取消", "继续"] })).dlg?.outPort).toBe("b1");
+    expect((await run(0, "b0", { buttons: ["取消", "继续"] })).dlg?.outPort).toBe("b0");
+  });
+
+  it("接在别的出口上的下游不会跑 —— 这才是「分流」的意思", async () => {
+    const r = await run(0, "b1", { buttons: ["取消", "继续"] });   // 点了取消，线接在「继续」那口
+    expect(r.dbg).toBeUndefined();
+  });
+
+  it("接在命中的出口上就会跑", async () => {
+    expect((await run(1, "b1", { buttons: ["取消", "继续"] })).dbg).toBeTruthy();
+  });
+
+  it("按了哪个按钮写进变量，下游能读到", async () => {
+    const r = await run(1, "b1", { buttons: ["取消", "继续"] });
+    expect(r.dbg?.vars?.dialog_button).toBe("继续");
+  });
+
+  it("参数原样透传 —— 它是分流，不是取数", async () => {
+    const r = await run(1, "b1", { buttons: ["取消", "继续"] }, "原样");
+    expect(r.dbg?.stdout).toBe("原样");
+  });
+
+  it("弹框前先收起面板 —— 不收的话框会被常驻最前的浮层盖住，等于弹了个看不见的框", async () => {
+    expect((await run(0, "b0", { buttons: ["好"] })).hide).toBeGreaterThan(0);
+  });
+
+  it("反馈里写清选了哪个，调试轨迹上一眼能看到", async () => {
+    expect((await run(1, "b1", { buttons: ["取消", "删掉"] })).feedback).toContain("删掉");
+  });
+
+  it("不配按钮时按默认的两个走", async () => {
+    const r = await run(1, "b1", {});
+    expect(r.dlg?.outPort).toBe("b1");
+    expect(r.dbg?.vars?.dialog_button).toBe("确定");
   });
 });
