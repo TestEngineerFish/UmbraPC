@@ -276,3 +276,8 @@ contextBridge.exposeInMainWorld("umbraSticker", {
   showMenu: () => ipcRenderer.invoke("stickers:showMenu"),
   close: () => ipcRenderer.invoke("stickers:close"),
 });
+
+// 运行时环境（Java / Python 多版本）桥。只读能力，所以只有一个方法。
+contextBridge.exposeInMainWorld("umbraRuntime", {
+  scan: (kind: string) => ipcRenderer.invoke("runtime:scan", kind),
+});

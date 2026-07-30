@@ -9,21 +9,23 @@ import { LauncherTool } from "./LauncherTool";
 import { WorkflowTool } from "./WorkflowTool";
 import { PhrasesTool, PhrasesSyncStatus } from "./PhrasesTool";
 import { VaultTool } from "./VaultTool";
-import { hasClip, hasShot, hasLauncher, hasVault } from "./bridges";
+import { RuntimeTool } from "./RuntimeTool";
+import { hasClip, hasShot, hasLauncher, hasVault, hasRuntime } from "./bridges";
 import * as legacy from "../../app/shell";
-import { IconClip, IconShot, IconRocket, IconFlow, IconPhrase, IconLock } from "../../components/icons";
+import { IconClip, IconShot, IconRocket, IconFlow, IconPhrase, IconLock, IconCpu } from "../../components/icons";
 
 // 二级页标识。
-type ToolKey = "clipboard" | "screenshot" | "launcher" | "workflow" | "phrases" | "vault";
+type ToolKey = "clipboard" | "screenshot" | "launcher" | "workflow" | "phrases" | "vault" | "runtime";
 
 // 二级目录的分组标识：目录项按这个分三段展示，避免六个功能平铺成一长条看不出主次。
-type GroupKey = "common" | "auto" | "security";
+type GroupKey = "common" | "auto" | "security" | "env";
 
 // 分组的展示顺序与标题词条。顺序即渲染顺序，整组的项都不可用时该组自动不出现。
 const GROUPS: { key: GroupKey; labelKey: string }[] = [
   { key: "common", labelKey: "tools.groupCommon" },
   { key: "auto", labelKey: "tools.groupAuto" },
   { key: "security", labelKey: "tools.groupSecurity" },
+  { key: "env", labelKey: "tools.groupEnv" },
 ];
 
 // 二级目录清单：labelKey 复用设置页原有词条，avail 决定是否显示。
@@ -37,6 +39,8 @@ const ITEMS: { key: ToolKey; group: GroupKey; labelKey: string; descKey: string;
   { key: "workflow", group: "auto", labelKey: "settings.launcherWorkflows", descKey: "tools.workflowDesc", icon: IconFlow, avail: hasLauncher, full: true },
   { key: "phrases", group: "auto", labelKey: "settings.phrases", descKey: "tools.phrasesDesc", icon: IconPhrase, avail: hasLauncher, wide: true },
   { key: "vault", group: "security", labelKey: "settings.vault", descKey: "tools.vaultDesc", icon: IconLock, avail: hasVault, full: true },
+  // 运行时环境：一张卡片列一个语言，内容比常用语还宽（版本 + 厂商 + 架构 + 来源 + 路径 五列），所以走 wide。
+  { key: "runtime", group: "env", labelKey: "tools.runtime", descKey: "tools.runtimeDesc", icon: IconCpu, avail: hasRuntime, wide: true },
 ];
 
 // 别处（设置页的快捷键总览）要求「跳到某个工具的详情页」时，先把目标记在这里再切一级导航。
@@ -133,6 +137,7 @@ export function Tools() {
             {active === "screenshot" ? <ScreenshotTool /> : null}
             {active === "launcher" ? <LauncherTool /> : null}
             {active === "phrases" ? <PhrasesTool /> : null}
+            {active === "runtime" ? <RuntimeTool /> : null}
           </div>
         </div>
       )}

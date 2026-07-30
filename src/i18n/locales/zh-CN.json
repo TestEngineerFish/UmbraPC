@@ -36,7 +36,10 @@
     "phraseSyncFailed": "同步失败：{{err}}",
     "phraseSyncNever": "尚未同步",
     "phraseSyncJustNow": "刚刚同步",
-    "phraseSyncAgo": "{{n}} 分钟前同步"
+    "phraseSyncAgo": "{{n}} 分钟前同步",
+    "groupEnv": "环境",
+    "runtime": "运行时环境",
+    "runtimeDesc": "看清这台机器上装了哪些 Java / Python、谁在生效、哪里不对。"
   },
   "workspaces": {
     "countLine": "共 {{n}} 个 · {{auto}} 个自动创建",

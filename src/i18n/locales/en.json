@@ -36,7 +36,10 @@
     "phraseSyncFailed": "Sync failed: {{err}}",
     "phraseSyncNever": "Not synced yet",
     "phraseSyncJustNow": "Synced just now",
-    "phraseSyncAgo": "Synced {{n}}m ago"
+    "phraseSyncAgo": "Synced {{n}}m ago",
+    "groupEnv": "Environment",
+    "runtime": "Runtimes",
+    "runtimeDesc": "See which Java / Python versions are installed, which one is active, and what's misconfigured."
   },
   "workspaces": {
     "countLine": "{{n}} total · {{auto}} auto-created",
@@ -55,10 +58,6 @@
     "statOrigin": "Origin",
     "statLastActive": "Last active",
     "statDevice": "Device",
-    "statFixRounds": "Auto-fix",
-    "fixRoundsN": "{{n}} round(s)",
-    "checklist": "Acceptance checklist",
-    "checklistFootnote": "The completion criteria set when the task was created. Only the criteria are listed — the server does not record per-item pass/fail.",
     "relatedJobs": "Related tasks",
     "viewAllInTasks": "See all in Tasks",
     "noRelatedJobs": "No task in this workspace yet",
@@ -387,6 +386,10 @@
     "pickOne": "Pick a task on the left to see its detail",
     "statMilestone": "Milestones",
     "statDevice": "Device",
+    "statFixRounds": "Auto-fix",
+    "fixRoundsN": "{{n}} round(s)",
+    "checklist": "Acceptance checklist",
+    "checklistFootnote": "The completion criteria set when the task was created. Only the criteria are listed — the server does not record per-item pass/fail.",
     "statDuration": "Duration",
     "statCreated": "Created",
     "statUpdated": "Updated",

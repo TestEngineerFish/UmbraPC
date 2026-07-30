@@ -14,6 +14,7 @@ import { ClipboardManager } from "./core/clipboard";
 import { ScreenshotManager } from "./core/screenshot";
 import { LauncherManager } from "./core/launcher";
 import { VaultManager } from "./core/vault";
+import { registerRuntimeIpc } from "./core/runtime";
 import { getMainLocale, resolveLocale, setMainLocale } from "./i18n";
 import { cancelAgentTask, killAllAgentChildren } from "./core/providers/agent";
 
@@ -416,6 +417,9 @@ app.whenReady().then(async () => {
   setMainLocale(resolveLocale(store.get().locale));
   executor = new TaskExecutor(store);
   registerIpc();
+  // 运行时环境探测（只读）。放在 fixPath() 之后 —— 它要靠补全过的 PATH 才能找到
+  // pyenv / uv 这些装在 homebrew 或 ~/.local/bin 下的管理器。
+  registerRuntimeIpc();
   createWindow();
   if (store.get().trayEnabled !== false) createTray(); // 菜单栏常驻图标：关窗后仍可唤起
   pruneLogs();
