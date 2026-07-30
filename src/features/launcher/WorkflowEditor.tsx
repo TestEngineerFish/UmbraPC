@@ -480,12 +480,17 @@ function Palette({ canConnect, onPick, onClose }: { canConnect: boolean; onPick:
 // 默认收起（顶栏「对象库」按钮切换），画布因此能占满整个宽度；需要挑对象时再拉出来。
 // 分组可逐个折叠，顶部一个搜索框 + 全部展开/全部折叠两个箭头。
 // 每个分类右侧的数字是这一类有几个对象；悬停某一项能看到它的说明。
-function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose }: {
+// 对象库。**点击不再加节点** —— 点击是「选中并展开它的说明」，再点一次收起。
+// 加节点只有一条路：拖到画布上。这样「点」和「拖」各司其职，不会点一下就多出个节点。
+function ObjectLibrary({ prefabs, canAdd, onDragItem, onPrefab, onDelPrefab, onClose }: {
   prefabs: WFPrefab[]; canAdd: boolean;
-  onAdd: (type: string, alt: boolean) => void;
+  /** 按下条目：交给上层判断这是点击还是拖拽（移动超过阈值才算拖） */
+  onDragItem: (type: string, e: React.MouseEvent) => void;
   onPrefab: (p: WFPrefab) => void; onDelPrefab: (p: WFPrefab) => void; onClose: () => void;
 }) {
   const [q, setQ] = useState("");
+  // 展开说明的那一个。同一时刻只有一个 —— 全展开会把列表拉得很长，反而找不到东西。
+  const [sel, setSel] = useState("");
   // 折叠状态：key 是分类名（"预制件" 单独一个 key），true = 收起。默认全展开。
   const [fold, setFold] = useState<Record<string, boolean>>({});
   const kw = q.trim().toLowerCase();
@@ -504,7 +509,23 @@ function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose 
     open ? "bg-card border-border" : "bg-transparent border-transparent"}`;
   // 组内条目：靠左边一条竖线归拢在分组下面（Alfred 的 Objects 面板也是这个层次感）。
   const nest = "flex flex-col gap-px mt-[3px] mb-2 ml-[15px] pl-[9px] border-l border-border";
+  // 预制件那一行还是老样式（它的点击行为是「落地到画布中央」，和节点条目不是一回事）。
   const row = "w-full flex items-center gap-[9px] px-2 py-1.5 rounded-[7px] text-[12px] text-left";
+
+  // 节点条目。透明边框是**占位**：选中时要描一圈橙边，没有这层占位边框会让整行跳 1px。
+  //
+  // 顺带记一笔：设计规范里还有「待实现」这一态（条目置灰 cursor:default、hover 无反馈、
+  // 标题右侧一个 1px 描边的圆角徽标、10px --faint）。对象库里现在每一项都能用，
+  // 那一态没有任何条目会进，所以不写成分支 —— 真要再摆占位项时照这段描述加回来即可。
+  const item = (on: boolean) => [
+    "w-full flex flex-col items-start gap-[5px] px-[8px] py-[6px] rounded-[7px] text-[12px]",
+    "border border-solid",
+    on ? "border-orange bg-orange-soft text-orange-text font-semibold"
+       : "border-transparent bg-transparent text-text font-normal hover:bg-hover",
+  ].join(" ");
+  const itemIcon = (on: boolean) =>
+    `w-[20px] h-[20px] flex-none rounded-[5px] flex items-center justify-center ${
+      on ? "bg-[rgba(232,89,12,.14)] text-orange-text" : "bg-transparent text-muted"}`;
 
   return (
     <div className="w-[272px] flex-none border-l border-border bg-card flex flex-col min-h-0">
@@ -519,7 +540,7 @@ function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose 
           <button className="w-[26px] h-[26px] flex-none flex items-center justify-center bg-transparent border border-border rounded-[7px] text-muted hover:bg-hover" title="全部折叠" onClick={() => setAll(true)}><IconChevronRight size={13} /></button>
           <button className="w-[26px] h-[26px] flex-none flex items-center justify-center bg-transparent border border-border rounded-[7px] text-muted hover:bg-hover" title="收起对象库" onClick={onClose}><IconX size={13} /></button>
         </div>
-        <div className="text-[11px] text-faint leading-[1.5]">点一下加到画布 · <span className="font-mono">⌥</span> 点击接到选中节点后面</div>
+        <div className="text-[11px] text-faint leading-[1.5]">拖到画布上放置 · 点一下看它做什么</div>
       </div>
       <div className="flex-1 overflow-y-auto p-2">
         {/* 预制件（E3）：点一下就落在画布中央，右键菜单里也有一份。和对象分组同一套外观。 */}
@@ -557,15 +578,28 @@ function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose 
               </button>
               {open ? (
                 <div className={nest}>
-                  {g.items.map((it) => (
-                    <button key={it.type} disabled={!canAdd}
-                      title={it.hint || it.type}
-                      onClick={(e) => onAdd(it.type, e.altKey)}
-                      className={`${row} bg-transparent hover:bg-hover disabled:opacity-40`}>
-                      <span className="w-5 h-5 flex-none flex items-center justify-center rounded-[5px] text-muted"><it.icon size={14} /></span>
-                      <span className="flex-1 min-w-0 truncate">{it.label}</span>
-                    </button>
-                  ))}
+                  {g.items.map((it) => {
+                    const on = sel === it.type;
+                    return (
+                      <button key={it.type} disabled={!canAdd}
+                        title={it.hint || it.type}
+                        onMouseDown={(e) => onDragItem(it.type, e)}
+                        onClick={() => setSel(on ? "" : it.type)}
+                        className={`${item(on)} disabled:opacity-40`}>
+                        <span className="flex items-center gap-[9px] w-full">
+                          <span className={itemIcon(on)}><it.icon size={14} /></span>
+                          <span className="flex-1 min-w-0 text-left truncate whitespace-nowrap">{it.label}</span>
+                        </span>
+                        {/* 说明只在选中时出现。左边距 29px = 图标 20 + 间距 9，和标题左缘对齐。
+                            字重/颜色要显式写回来 —— 选中态的容器是 600 字重 + 橙字，说明不该跟着变。 */}
+                        {on ? (
+                          <span className="pl-[29px] text-[11px] leading-[1.6] font-normal text-muted text-left [text-wrap:pretty]">
+                            {NODE_SUB[it.type] ? `${NODE_SUB[it.type]}。` : it.type}
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
                 </div>
               ) : null}
             </div>
@@ -812,8 +846,9 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
 
   // 节点增删改
   // connectFrom：⌥ 添加（E2）时的上游节点 id —— 新节点自动接到它的默认出口后面，并顺势排在它右边。
-  const addNode = (type: string, x?: number, y?: number, connectFrom?: string) => {
-    if (!cur) return;
+  // 返回新节点的 id：拖拽落地后要立刻打开它的配置弹窗，得知道开哪个。
+  const addNode = (type: string, x?: number, y?: number, connectFrom?: string): string | null => {
+    if (!cur) return null;
     const src = connectFrom ? cur.nodes.find((n) => n.id === connectFrom) : undefined;
     const n: WFNode = {
       id: uid(), type,
@@ -825,6 +860,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
       connections: src ? [...w.connections, { from: src.id, to: n.id, mod: "", fromPort: "" }] : w.connections,
     }));
     setSelNode(n.id);
+    return n.id;
   };
   const insertAfter = (n: WFNode, type: string) => {
     const nn: WFNode = { id: uid(), type, x: n.x + NODE_W + 60, y: n.y, config: defaultConfig(type) };
@@ -904,6 +940,72 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     const alive = new Set((changed ? outPorts(changed) : []).map((p) => p.port));
     return { ...w, nodes, connections: w.connections.filter((c) => c.from !== id || alive.has(c.fromPort || "")) };
   });
+
+  // ── 从对象库拖到画布 ────────────────────────────────────────────────────────
+  //
+  // 用指针事件自己实现，不用 HTML5 的 drag & drop，两个原因：
+  //   · 要让跟着鼠标走的是一张**长得像画布节点的卡片**。HTML5 的拖影是元素快照，
+  //     样式改不动、各平台渲染还不一样，做不出「拖的就是那张卡片」的感觉。
+  //   · 画布上拖节点、拉线、框选本来就都是指针事件，多一套 DnD 只会多一套坑。
+  //
+  // 点击加节点的老行为要保住，所以按住不动不算拖 —— 移动超过阈值才进入拖拽态，
+  // 在阈值内松手仍然当成一次点击（含 ⌥ 点击接到选中节点后面）。
+  const [libDrag, setLibDrag] = useState<{ type: string; x: number; y: number; over: boolean } | null>(null);
+  // 按下时先记住起点和类型，够不上阈值就不动声色。
+  const libArm = useRef<{ type: string; sx: number; sy: number } | null>(null);
+  const DRAG_START = 4;   // 像素。再小会把手抖判成拖拽，再大会让轻拖没反应
+  // 卡片相对光标的偏移：让光标「捏着」卡片左上角附近，而不是压在卡片正中间遮住图标。
+  const DRAG_GRAB = 14;
+
+  const armDrag = (type: string, e: React.MouseEvent) => {
+    if (!cur || e.button !== 0) return;
+    libArm.current = { type, sx: e.clientX, sy: e.clientY };
+  };
+
+  useEffect(() => {
+    const move = (e: MouseEvent) => {
+      const a = libArm.current;
+      if (a && !libDrag) {
+        if (Math.abs(e.clientX - a.sx) + Math.abs(e.clientY - a.sy) < DRAG_START) return;
+        setLibDrag({ type: a.type, x: e.clientX, y: e.clientY, over: overCanvas(e.clientX, e.clientY) });
+        return;
+      }
+      if (libDrag) setLibDrag({ ...libDrag, x: e.clientX, y: e.clientY, over: overCanvas(e.clientX, e.clientY) });
+    };
+    const up = (e: MouseEvent) => {
+      const a = libArm.current;
+      libArm.current = null;
+      if (!libDrag) return;                       // 没进入拖拽态：交给按钮自己的 onClick
+      setLibDrag(null);
+      if (!overCanvas(e.clientX, e.clientY)) return;   // 松在画布外 = 放弃，不加节点
+      // 落点取卡片左上角，和拖拽时看到的位置一致 —— 所见即所得，别让节点跳到别处
+      const w = toWorld(e.clientX - DRAG_GRAB, e.clientY - DRAG_GRAB);
+      const id = addNode(a?.type || libDrag.type, Math.round(w.x), Math.round(w.y));
+      // 落地即打开配置弹窗：拖一个节点过来，下一步几乎总是要配它
+      if (id) setEditNode(id);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !libDrag) return;
+      e.preventDefault(); e.stopPropagation();
+      libArm.current = null;
+      setLibDrag(null);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+    window.addEventListener("keydown", key, true);
+    return () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      window.removeEventListener("keydown", key, true);
+    };
+  });
+
+  // 光标在画布范围内吗（拖拽落点判定用）。
+  const overCanvas = (cx: number, cy: number): boolean => {
+    const r = canvasRef.current?.getBoundingClientRect();
+    if (!r) return false;
+    return cx >= r.left && cx <= r.right && cy >= r.top && cy <= r.bottom;
+  };
 
   // 坐标：屏幕 → 世界
   const toWorld = (clientX: number, clientY: number) => {
@@ -1314,6 +1416,11 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           style={{ background: CV.bg, backgroundImage: "radial-gradient(rgba(255,255,255,.075) 1px,transparent 1px)", backgroundSize: `${18 * scale}px ${18 * scale}px`, backgroundPosition: `${pan.x}px ${pan.y}px`, cursor: "grab" }}
           onMouseDown={onCanvasDown} onContextMenu={openCanvasMenu} onWheel={onWheel}
           onDoubleClick={(e) => { if (cur) setPalette(toWorld(e.clientX, e.clientY)); }}>
+          {/* 拖着对象经过画布时给一圈橙边：告诉用户「松手就落在这儿」。不吃鼠标事件。 */}
+          {libDrag?.over ? (
+            <div className="absolute inset-0 pointer-events-none z-[5]"
+              style={{ boxShadow: `inset 0 0 0 2px ${CV.orange}`, background: "rgba(232,89,12,.06)" }} />
+          ) : null}
           {!cur ? <div className="absolute inset-0 flex items-center justify-center text-[13px] text-white/40">新建或选择一个工作流</div> : null}
           {cur ? (
             <div className="absolute top-0 left-0" style={{ width: WORLD_W, height: WORLD_H, transform: `translate(${pan.x}px,${pan.y}px) scale(${scale})`, transformOrigin: "0 0" }}>
@@ -1484,7 +1591,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
         {/* 右：对象库（默认收起，顶栏 ▤ 按钮切换） */}
         {lib ? (
           <ObjectLibrary prefabs={prefabs} canAdd={!!cur}
-            onAdd={(type, alt) => addNode(type, undefined, undefined, alt && selNode ? selNode : undefined)}
+            onDragItem={armDrag}
             onPrefab={(p) => { const c = canvasCenter(); placePrefab(p, c.x, c.y); }}
             onDelPrefab={(p) => { savePrefabs(prefabs.filter((x) => x.id !== p.id)); setNote(`已删除预制件「${p.name}」`); }}
             onClose={() => setLib(false)} />
@@ -1504,7 +1611,39 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           onPick={(type, connect) => addNode(type, palette.x, palette.y, connect && selNode ? selNode : undefined)}
           onClose={() => setPalette(null)} />
       ) : null}
-      {editNode && cur ? (
+      {/* 拖拽中跟着光标走的卡片。长得和画布上的节点一样（同一套硬编码深色），
+          并按当前缩放同步缩放 —— 所见即所得：看到多大、落下去就是多大。
+          缩放下限 0.5，缩得太小就认不出拖的是什么了。 */}
+      {libDrag ? (() => {
+        const meta = TYPE_META[libDrag.type] || { label: libDrag.type, icon: IconFile, kind: "action" };
+        const kind = KIND_STYLE[meta.kind] || { label: "对象", bg: "rgba(255,255,255,.06)", fg: CV.muted };
+        const k = Math.max(0.5, scale);
+        return (
+          <div className="fixed pointer-events-none z-[80]"
+            style={{ left: libDrag.x - DRAG_GRAB, top: libDrag.y - DRAG_GRAB, width: NODE_W,
+              transform: `scale(${k})`, transformOrigin: "0 0", opacity: libDrag.over ? 1 : 0.55 }}>
+            <div className="rounded-[11px] overflow-hidden"
+              style={{ background: CV.node, color: CV.text, border: `1px solid ${CV.nodeBorder}`,
+                boxShadow: "0 12px 32px rgba(0,0,0,.5)" }}>
+              <div className="flex items-center gap-[9px] px-[11px] py-[9px]"
+                style={{ borderBottom: `1px solid ${CV.nodeLine}`, background: "rgba(255,255,255,.03)" }}>
+                <span className="w-[22px] h-[22px] flex-none rounded-md flex items-center justify-center"
+                  style={{ background: kind.bg, color: kind.fg }}><meta.icon size={13} /></span>
+                <span className="flex-1 min-w-0 truncate text-[12.5px] font-semibold">{meta.label}</span>
+                <span className="flex-none text-[10px] px-1.5 py-px rounded-full"
+                  style={{ background: kind.bg, color: kind.fg }}>{kind.label}</span>
+              </div>
+              <div className="px-[11px] py-[9px] text-[11px]" style={{ color: CV.faint }}>
+                {libDrag.over ? "松手放在这里" : "拖到画布上松手"}
+              </div>
+            </div>
+          </div>
+        );
+      })() : null}
+
+      {/* 找不到那个节点就不渲染：拖拽落地是「加节点 + 开弹窗」两个 setState，
+          万一将来被拆到不同的批次里，这里的非空断言会直接把编辑器打崩。 */}
+      {editNode && cur?.nodes.some((n) => n.id === editNode) ? (
         <NodeConfig node={cur.nodes.find((n) => n.id === editNode)!} onClose={() => setEditNode(null)}
           onSave={(cfg) => { setNodeConfig(editNode, cfg); setEditNode(null); }}
           onDelete={() => { delNode(editNode); setEditNode(null); }} />

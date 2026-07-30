@@ -19,12 +19,23 @@ describe("弹窗副标题", () => {
     expect(NODE_SUB[type]).toBeTruthy();
   });
 
+  // NODE_SUB 一份两用：弹窗头部的副标题（单行、会被省略号截断），
+  // 以及对象库条目选中时展开的那行说明（渲染时补一个句号）。
+  // 刻意不为这两处各写一份 —— 同一个节点「它做什么」只该有一个答案，两份必然走岔。
   it("副标题不能只是把标题换个说法 —— 要说它干什么，且一行放得下", () => {
     for (const type of ALL) {
       const sub = NODE_SUB[type];
-      expect(sub.length).toBeLessThanOrEqual(28);   // 再长就被省略号截掉了
+      expect(sub.length).toBeLessThanOrEqual(28);   // 再长就被弹窗头部的省略号截掉了
       expect(sub).not.toContain("\n");
     }
+  });
+
+  it("对象库那行说明补上句号后不超过 30 字（设计规范的上限）", () => {
+    for (const type of ALL) expect(`${NODE_SUB[type]}。`.length).toBeLessThanOrEqual(30);
+  });
+
+  it("副标题自己不带句号 —— 带了渲染出来就是两个句号", () => {
+    for (const type of ALL) expect(NODE_SUB[type].endsWith("。")).toBe(false);
   });
 
   it("每个分类前缀都有中文名", () => {
