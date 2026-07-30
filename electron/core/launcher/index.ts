@@ -6,8 +6,7 @@ import * as path from "node:path";
 import { promises as fs } from "node:fs";
 import { ConfigStore, expandHome, LauncherFolder, LauncherScript, Phrase, Workflow, WorkflowPrefab } from "../config";
 import { PhraseSync, collectTombs, stampUpdated } from "./phrases-sync";
-import { ClipStore } from "../clipboard/store";
-import { writeToClipboard, simulatePaste } from "../clipboard/paste";
+import { simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
 import { suppressAppActivate } from "../activation";
@@ -21,7 +20,7 @@ import { ensureWorkflowDir } from "./workspace";
 
 // ── 结果与动作类型 ──
 export interface LauncherAction {
-  kind: "open_app" | "open_path" | "paste_clip" | "paste_text" | "copy" | "run_script" | "workflow" | "assistant";
+  kind: "open_app" | "open_path" | "paste_text" | "copy" | "run_script" | "workflow" | "assistant";
   payload: Record<string, unknown>;
 }
 export interface LauncherResult {
@@ -79,7 +78,7 @@ export class LauncherManager {
   private rerunTimer: NodeJS.Timeout | undefined;          // Script Filter 的 rerun 定时器（W3）
   private phraseSync: PhraseSync;                          // 常用语云端同步（按条目合并 + 删除墓碑）
 
-  constructor(private cfg: ConfigStore, private clipStore: ClipStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
+  constructor(private cfg: ConfigStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
     this.usageFile = path.join(userData, "launcher-usage.json");
     // 同步结果落地后广播，让设置页和快捷入口面板都拿到最新的常用语。
     this.phraseSync = new PhraseSync(cfg, () => this.broadcastPhrases());
@@ -273,13 +272,15 @@ export class LauncherManager {
     const wf = await this.engine.query(q).catch(() => [] as LauncherResult[]);
     if (wf.length) return this.finalize(q, wf);
 
-    // ② 普通：并发 app/剪贴板 + 常用语 + 「始终触发」工作流（计算器/单位换算等）。
-    const [apps, clips, always] = await Promise.all([
+    // ② 普通：并发 app + 常用语 + 「始终触发」工作流（计算器/单位换算等）。
+    // 刻意**不搜剪贴板历史**：剪贴板里全是正文，随便几个字母就能蹭上一堆条目，
+    // 把真正想要的应用挤到下面去 —— 压低基准分也治不住，因为噪音是量的问题不是分的问题。
+    // 要翻剪贴板走它自己的面板（⌘⌥V），那里有分类、收藏和预览，比在这儿混着搜好用得多。
+    const [apps, always] = await Promise.all([
       this.searchApps(q).catch(() => []),
-      Promise.resolve(this.searchClipboard(q)),
       this.engine.queryAlways(q).catch(() => [] as LauncherResult[]),
     ]);
-    results.push(...always, ...this.searchPhrases(q), ...apps, ...clips);
+    results.push(...always, ...this.searchPhrases(q), ...apps);
     // ③ 兜底搜索：什么都没搜到时补一条「问秘书」可执行项（只在有输入且开关打开时）。
     //    注意这是一条可执行项，不是「最近使用」列表 —— 空结果下不做任何历史回填。
     if (!results.length && q && this.cfg.get().launcherFallbackAssistant !== false) {
@@ -515,24 +516,6 @@ export class LauncherManager {
     return hits.map((h) => h.p);
   }
 
-  // Provider③：剪贴板历史（搜索文本，回车粘贴）。
-  private searchClipboard(q: string): LauncherResult[] {
-    if (q.length < 1) return [];
-    const items = this.clipStore.list("text", q).slice(0, 8);
-    return items.map((it): LauncherResult => {
-      const title = (it.preview || it.content || "").slice(0, 80);
-      const m = Math.max(0, bestMatch(q, [title]));
-      return {
-        id: `clip:${it.id}`,
-        title,
-        subtitle: "剪贴板 · 回车粘贴",
-        // 剪贴板条目基准分刻意压低：同样能匹配上时，启动应用几乎总是用户更想要的。
-        icon: "📋", source: "clipboard", score: 55 + Math.round(m * 0.35), match: m,
-        action: { kind: "paste_clip", payload: { id: it.id } },
-      };
-    });
-  }
-
   // 「发给秘书」：把当前输入直接发到 PC 聊天主会话（跳转聊天页 + 发送）。由 main.ts 注入回调。
   private chatSender?: (text: string) => void;
   setChatSender(fn: (text: string) => void): void { this.chatSender = fn; }
@@ -585,15 +568,6 @@ export class LauncherManager {
       if (res.code !== 0) return `脚本出错：${out.slice(0, 40) || "非零退出"}`;
       if ((a.payload.output || "copy") === "copy" && out) { await clip(out); return `已复制：${out.slice(0, 30)}`; }
       return "已执行 ✓";
-    }
-    if (a.kind === "paste_clip") {
-      const it = this.clipStore.get(Number(a.payload.id));
-      if (!it) return "";
-      await writeToClipboard(it);
-      await this.hide(true);                       // 隐藏并把焦点还给原应用
-      await new Promise((rr) => setTimeout(rr, 180));
-      await simulatePaste();
-      return "";
     }
     if (a.kind === "paste_text") {
       const text = String(a.payload.text || "");

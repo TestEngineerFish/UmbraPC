@@ -442,7 +442,7 @@ app.whenReady().then(async () => {
   clipboard = new ClipboardManager(store, app.getPath("userData"), winOpts, reregisterShortcuts);
   screenshot = new ScreenshotManager(store, winOpts, reregisterShortcuts);
   // 快捷入口：复用剪贴板的存储实例（避免两份读写同一文件）。
-  launcher = new LauncherManager(store, clipboard.getStore(), app.getPath("userData"), winOpts, reregisterShortcuts);
+  launcher = new LauncherManager(store, app.getPath("userData"), winOpts, reregisterShortcuts);
   // 快捷入口「发给秘书」：跳出主窗口聊天页并发送这条消息。
   launcher.setChatSender((text: string) => {
     showMainWindow();

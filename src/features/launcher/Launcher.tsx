@@ -59,10 +59,29 @@ export function Launcher() {
   const timer = useRef<number | undefined>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLDivElement>(null);
+  // 鼠标悬停接管选中项 —— 但必须是「指针真的动了」才算。
+  //
+  // 有两种情况浏览器会派发 mousemove 而指针一动没动：面板刚弹出来（列表出现在光标底下）、
+  // 按方向键时 scrollIntoView 让行滑过光标。这两种都不该改选中项：
+  // 前者会让「默认选中第一个」当场失效（光标正好压在第三行，高亮就跑到第三行），
+  // 后者会把键盘刚选好的那一项抢回鼠标那儿。
+  //
+  // 做法：记住上一次的指针坐标。每次结果变化就把基准清掉，之后**第一个** mousemove
+  // 只用来记坐标、不改选中；再来的 mousemove 坐标真变了才接管。
+  // 清基准放在 setResults 之前（而不是 results 的 useEffect 里）—— useEffect 在绘制之后跑，
+  // 而那个假 mousemove 是布局一变就派发的，顺序赌不起。
+  const ptr = useRef<{ x: number; y: number } | null>(null);
+  const hover = (i: number, e: React.MouseEvent) => {
+    const prev = ptr.current;
+    ptr.current = { x: e.clientX, y: e.clientY };
+    if (!prev || (prev.x === e.clientX && prev.y === e.clientY)) return;
+    setSel(i);
+  };
 
   // 唤起时：清空、聚焦。
   useEffect(() => {
     const off = api.onShown(() => {
+      ptr.current = null;
       setQ(""); setResults([]); setSel(0);
       setTimeout(() => inputRef.current?.focus(), 30);
     });
@@ -75,6 +94,7 @@ export function Launcher() {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(async () => {
       const r = await api.query(q);
+      ptr.current = null;
       setResults(r);
       setSel(0);
     }, 120);
@@ -87,6 +107,7 @@ export function Launcher() {
   useEffect(() => {
     return api.onResults((p) => {
       if (p.q !== q.trim()) return;
+      ptr.current = null;
       setResults(p.results);
     });
   }, [q]);
@@ -160,7 +181,7 @@ export function Launcher() {
             ref={inputRef}
             className="q"
             value={q}
-            placeholder="搜索应用、文件夹、剪贴板…"
+            placeholder="搜索应用、文件夹、常用语…"
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={onKey}
             autoFocus
@@ -175,7 +196,7 @@ export function Launcher() {
         {results.length ? (
           <div className="list" ref={listRef}>
             {results.map((r, i) => (
-              <div key={r.id} className={`row ${i === sel ? "sel" : ""}`} onMouseMove={() => setSel(i)} onClick={() => runAt(i)}>
+              <div key={r.id} className={`row ${i === sel ? "sel" : ""}`} onMouseMove={(e) => hover(i, e)} onClick={() => runAt(i)}>
                 <span className="ico">
                   {r.icon && r.icon.startsWith("data:") ? <img src={r.icon} alt="" /> : <span>{r.icon || "•"}</span>}
                 </span>

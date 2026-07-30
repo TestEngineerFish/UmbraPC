@@ -1142,7 +1142,9 @@ const TOOL_ICON: Record<UITool, React.ReactNode> = {
       <ellipse cx="12" cy="12" rx="8.5" ry="6.5" />
     </svg>
   ),
-  arrow: <Ic d="M6 18L18 6|10 6h8v8" />,
+  // 两段：斜杆 + 箭头。第二段的 M 千万别省 —— Ic 是把 "|" 拆成一个个独立的 <path>，
+  // 每段都是自己的 d，没有 M 起笔就是非法路径，整段静默不画，图标只剩一根没头的斜杆。
+  arrow: <Ic d="M6 18L18 6|M10 6h8v8" />,
   pen: <Ic d="M4 20l1-4L16.5 4.5a2.1 2.1 0 0 1 3 3L8 19l-4 1z" />,
   mosaic: (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
