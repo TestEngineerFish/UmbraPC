@@ -9,7 +9,11 @@ import { IconChevronRight } from "../../components/icons";
 // count：分类行右侧的「已实现/总数」；keyHint：动作行右侧的快捷键；title：面板顶部的分区小标题。
 export interface MenuItem { label?: string; icon?: ReactNode; count?: string; keyHint?: string; onClick?: () => void; sub?: MenuItem[]; danger?: boolean; sep?: boolean }
 // 菜单面板宽度（用来判断子菜单往右还是往左展开），和 min-w 保持一致。
+// narrow 那档给「行右键」这种只有短动作名的菜单用（工作流列表行要求 168px）：
+// min-w 是内容区宽度，加上 p-1 的左右各 4px 和 1px 边框才是外框宽度，所以 158 → 168。
 const MENU_W = 224;
+const MENU_W_NARROW = 168;
+const panelW = (narrow?: boolean) => (narrow ? MENU_W_NARROW : MENU_W);
 // 面板的落点。left 必给；top / bottom 二选一（点在下半屏时用 bottom 向上生长）；
 // maxH 是这块面板自己的高度上限，超了它自己滚。
 interface MenuAt { left: number; top?: number; bottom?: number; maxH: number }
@@ -22,13 +26,14 @@ interface MenuAt { left: number; top?: number; bottom?: number; maxH: number }
 // 结果二级菜单被那个滚动容器裁掉了（横竖都被切，还多出一条横向滚动条）。
 // fixed 不受祖先 overflow 裁剪（祖先里没有 transform / filter，不会成为 fixed 的包含块），
 // 所以每级都 fixed 之后，每级面板都能独立带上自己的 max-height + 滚动，且不裁下一级。
-function MenuList({ items, onClose, dark, title, at }: {
-  items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string; at: MenuAt;
+function MenuList({ items, onClose, dark, title, at, narrow }: {
+  items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string; at: MenuAt; narrow?: boolean;
 }) {
   const [open, setOpen] = useState<{ i: number; at: MenuAt } | null>(null);
+  const wide = narrow ? "min-w-[158px]" : "min-w-[208px]";
   const panel = dark
-    ? "bg-[rgba(31,28,24,.98)] border border-[#3A342B] rounded-[10px] p-1 shadow-[0_10px_30px_rgba(0,0,0,.45)] min-w-[208px] overflow-y-auto"
-    : "bg-card border border-border rounded-[10px] p-1 shadow-2xl min-w-[208px] overflow-y-auto";
+    ? `bg-[rgba(31,28,24,.98)] border border-[#3A342B] rounded-[10px] p-1 shadow-[0_10px_30px_rgba(0,0,0,.45)] ${wide} overflow-y-auto`
+    : `bg-card border border-border rounded-[10px] p-1 shadow-2xl ${wide} overflow-y-auto`;
   const row = "w-full flex items-center gap-[9px] px-[9px] py-[5px] rounded-md text-[12px] text-left bg-transparent";
   const rowTone = dark ? "text-[#D8D3CA] hover:bg-[rgba(232,89,12,.16)] hover:text-[#F0A878]" : "text-text hover:bg-orange-soft hover:text-orange-text";
   const iconTone = dark ? "text-[#8A837A]" : "text-muted";
@@ -39,7 +44,8 @@ function MenuList({ items, onClose, dark, title, at }: {
   const enter = (i: number, hasSub: boolean, e: React.MouseEvent<HTMLDivElement>) => {
     if (!hasSub) { setOpen(null); return; }
     const r = e.currentTarget.getBoundingClientRect();
-    const left = r.right + MENU_W + 8 <= window.innerWidth ? r.right + 2 : Math.max(8, r.left - MENU_W - 2);
+    const w = panelW(narrow);
+    const left = r.right + w + 8 <= window.innerWidth ? r.right + 2 : Math.max(8, r.left - w - 2);
     const top = Math.max(8, Math.min(r.top - 5, window.innerHeight - 148));
     setOpen({ i, at: { left, top, maxH: window.innerHeight - top - 8 } });
   };
@@ -64,14 +70,14 @@ function MenuList({ items, onClose, dark, title, at }: {
         ))}
       </div>
       {/* 子菜单画在本级面板外面（同为 fixed），所以不会被本级的滚动容器裁掉。 */}
-      {open && items[open.i]?.sub ? <MenuList items={items[open.i].sub!} onClose={onClose} dark={dark} at={open.at} /> : null}
+      {open && items[open.i]?.sub ? <MenuList items={items[open.i].sub!} onClose={onClose} dark={dark} at={open.at} narrow={narrow} /> : null}
     </>
   );
 }
 // 根级落点：水平按视口宽度夹住（右键点在最右边时菜单不溢出）；
 // 点在下半屏时用 bottom 贴住点击位置向上生长，免得被窗口底边切掉。
-export function ContextMenu({ x, y, items, onClose, dark, title }: { x: number; y: number; items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string }) {
-  const left = Math.max(8, Math.min(x, window.innerWidth - MENU_W - 8));
+export function ContextMenu({ x, y, items, onClose, dark, title, narrow }: { x: number; y: number; items: MenuItem[]; onClose: () => void; dark?: boolean; title?: string; narrow?: boolean }) {
+  const left = Math.max(8, Math.min(x, window.innerWidth - panelW(narrow) - 8));
   const upward = y > window.innerHeight / 2;
   const at: MenuAt = upward
     ? { left, bottom: window.innerHeight - y, maxH: y - 8 }
@@ -80,7 +86,7 @@ export function ContextMenu({ x, y, items, onClose, dark, title }: { x: number; 
     <div className="fixed inset-0 z-[70]" onMouseDown={onClose} onWheel={(e) => e.stopPropagation()}
       onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
       <div onMouseDown={(e) => e.stopPropagation()}>
-        <MenuList items={items} onClose={onClose} dark={dark} title={title} at={at} />
+        <MenuList items={items} onClose={onClose} dark={dark} title={title} at={at} narrow={narrow} />
       </div>
     </div>
   );

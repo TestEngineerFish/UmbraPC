@@ -10,7 +10,7 @@ import {
   IconExternal, IconEye,
   IconFit, IconMinus,
   IconEyeOff, IconFile, IconFilter, IconFlow, IconFolder, IconGear, IconGlobe, IconGrid, IconInfinity, IconKeyboard,
-  IconLink, IconList, IconMusic, IconPanel, IconPlay, IconPlus, IconRedo, IconRefresh, IconRocket,
+  IconLink, IconList, IconMusic, IconPanel, IconPencil, IconPlay, IconPlus, IconRedo, IconRefresh, IconRocket,
   IconRuler, IconScissors, IconSearch, IconTag, IconTarget, IconTerminal, IconText, IconTrash, IconUndo,
   IconVolume, IconWindow, IconX,
 } from "../../components/icons";
@@ -38,7 +38,14 @@ export interface WFConfigField {
   type: "text" | "password" | "file" | "select" | "checkbox";
   default?: string; help?: string; options?: string[];
 }
-export interface WF { id: string; name: string; icon?: string; desc?: string; enabled: boolean; config?: WFConfigField[]; variables?: Record<string, string>; nodes: WFNode[]; connections: WFConn[] }
+// icon / ic 的分工（**别再加第三个图标字段**）：
+//   icon —— 自定义图片。dataURL 或本地路径，也是**主进程给快捷入口结果用的那个图标**
+//           （引擎按 `含 "/"` 判断是路径并去加载）。设计稿里叫 img。
+//   ic   —— 内置线性图标的 key（见 WF_ICONS）。只有编辑器这边用得上 —— 快捷入口的结果
+//           图标只吃 emoji 或 dataURL，渲染不了 SVG，所以内置图标不往主进程传。
+// 两个都有时 icon 优先（设计稿：img 非空时优先于 ic）。
+// 老数据的 icon 存的是 emoji，用 hasImg() 判一下就自然落到 ic 那条路，不用写迁移。
+export interface WF { id: string; name: string; icon?: string; ic?: string; desc?: string; enabled: boolean; config?: WFConfigField[]; variables?: Record<string, string>; nodes: WFNode[]; connections: WFConn[] }
 
 // 调试轨迹（W8）：结构与主进程 electron/core/launcher/trace.ts 一一对应，改一边要同步另一边。
 export interface TraceStep {
@@ -88,15 +95,27 @@ const LS_LIB = "umbra.wf.lib";
 // 顶栏连体图标条里单个按钮的公共类名。分隔线（border-r）与选中态背景在使用处按需拼，
 // 因为「有右边线 / 没右边线」和「橙底 / 透明底」都属于同类工具类，靠 className 顺序覆盖不了。
 const TB = "w-8 h-[30px] flex-none flex items-center justify-center bg-transparent";
-// 工作流列表每行第二行的说明文字：几个节点 + 靠什么触发。
-// 触发方式取第一个 trigger.* 节点，一条工作流通常只有一个；一个都没有时说清楚「还没有触发器」。
-const TRIGGER_SHORT: Record<string, string> = {
-  "trigger.keyword": "关键词", "trigger.hotkey": "热键", "trigger.always": "每次输入",
-  "trigger.universal": "选中即用",
-};
-function wfMeta(w: WF): string {
-  const t = w.nodes.find((n) => n.type.startsWith("trigger."));
-  return `${w.nodes.length} 个节点 · ${t ? TRIGGER_SHORT[t.type] || "触发器" : "无触发器"}`;
+// 工作流的内置图标。顺序就是弹窗里图标网格的排列顺序。
+// 全是线性描边图标 —— 设计规范禁掉了填充图标、彩色图标、emoji 和用字符代替图标。
+export const WF_ICONS: { key: string; Icon: IconComp }[] = [
+  { key: "folder", Icon: IconFolder }, { key: "globe", Icon: IconGlobe },
+  { key: "code", Icon: IconCode }, { key: "link", Icon: IconLink },
+  { key: "calc", Icon: IconCalc }, { key: "ruler", Icon: IconRuler },
+  { key: "script", Icon: IconTerminal }, { key: "clip", Icon: IconClip },
+  { key: "list", Icon: IconList }, { key: "book", Icon: IconBook },
+  { key: "apps", Icon: IconGrid }, { key: "filter", Icon: IconFilter },
+];
+const WF_ICON_MAP = new Map(WF_ICONS.map((x) => [x.key, x.Icon]));
+
+// icon 里存的是图片吗？判定和主进程一致（引擎也是按 `含 "/"` 认路径的）——
+// 两边判不一样的话，会出现「列表里显示图片、快捷入口里显示 emoji」这种对不上。
+export const hasImg = (v?: string | null): boolean => !!v && (v.startsWith("data:") || v.includes("/"));
+
+// 一条工作流的图标。有图片用图片，否则用内置图标，都没有就用默认的流程图标。
+function WfIcon({ w, size }: { w: { icon?: string; ic?: string }; size: number }) {
+  if (hasImg(w.icon)) return <img src={w.icon} alt="" className="w-full h-full object-cover rounded-[5px]" />;
+  const I = WF_ICON_MAP.get(String(w.ic || "")) || IconFlow;
+  return <I size={size} />;
 }
 
 // 对象清单：分组和命名对齐 Alfred，方便从 Alfred 迁过来的人直接照着找。
@@ -695,6 +714,10 @@ function Field({ label, v, danger }: { label: string; v: string; danger?: boolea
 export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () => void; embedded?: boolean; onPopout?: () => void }) {
   const [wfs, setWfs] = useState<WF[]>([]);
   const [curId, setCurId] = useState<string>("");
+  // 工作流的新建/编辑弹窗。null=关着；{id:""}=新建；{id:"wf_x"}=编辑那一条。
+  const [wfDlg, setWfDlg] = useState<{ id: string } | null>(null);
+  const [wfDel, setWfDel] = useState<string>("");        // 待删除的工作流 id
+  const [wfMenu, setWfMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const [editNode, setEditNode] = useState<string | null>(null);
   const [showVars, setShowVars] = useState(false);
   const [showCfg, setShowCfg] = useState(false);   // W10 配置面板
@@ -805,13 +828,42 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   }, [syncHist]);
 
   // 工作流增删
-  const newWf = () => {
+  // 新建：弹窗确认之后才真的建。默认**停用** —— 刚建出来的工作流还没配好，
+  // 直接启用等于让一条半成品去抢关键词和热键。
+  const newWf = (v: { name: string; desc: string; ic: string; icon: string }) => {
     const id = uid();
-    const wf: WF = { id, name: "新工作流", icon: "🧩", desc: "", enabled: true, variables: {},
-      nodes: [{ id: "n1", type: "trigger.keyword", x: 80, y: 140, config: defaultConfig("trigger.keyword") }], connections: [] };
+    const wf: WF = {
+      id, name: v.name, ic: v.ic, icon: v.icon, desc: v.desc || "还没写描述",
+      enabled: false, variables: {},
+      nodes: [{ id: "n1", type: "trigger.keyword", x: 80, y: 140, config: defaultConfig("trigger.keyword") }], connections: [],
+    };
     commit([...wfsRef.current, wf]); setCurId(id); setSelNode(null); setSelConn(null); setSelSet([]);
   };
-  const delWf = (id: string) => { commit(wfsRef.current.filter((w) => w.id !== id)); if (curId === id) setCurId(""); };
+  const editWf = (id: string, v: { name: string; desc: string; ic: string; icon: string }) => {
+    commit(wfsRef.current.map((w) => (w.id === id ? { ...w, name: v.name, ic: v.ic, icon: v.icon, desc: v.desc || "还没写描述" } : w)));
+    setCurId(id);
+  };
+  const delWf = (id: string) => {
+    const next = wfsRef.current.filter((w) => w.id !== id);
+    commit(next);
+    // 删的是当前选中项时跳到第一条，而不是留一个空画布让人自己再点一下。
+    if (curId === id) setCurId(next[0]?.id || "");
+  };
+  const toggleWf = (id: string) => commit(wfsRef.current.map((w) => (w.id === id ? { ...w, enabled: w.enabled === false } : w)));
+  // 复制：副本插在原条目下面（而不是列表末尾），名字撞了就往后加序号。
+  // 副本默认停用 —— 两条同样的工作流同时启用，关键词/热键会互相抢。
+  const dupWf = (id: string) => {
+    const list = wfsRef.current;
+    const i = list.findIndex((w) => w.id === id);
+    if (i < 0) return;
+    const src = list[i];
+    const used = new Set(list.map((w) => w.name));
+    let name = `${src.name} 副本`;
+    for (let n = 2; used.has(name); n++) name = `${src.name} 副本 ${n}`;
+    const copy: WF = { ...clone(src), id: uid(), name, enabled: false };
+    commit([...list.slice(0, i + 1), copy, ...list.slice(i + 1)]);
+    setCurId(copy.id); setSelNode(null); setSelConn(null); setSelSet([]);
+  };
 
   // 导出（W9）：统一信封 {umbraWorkflows:1, exportedAt, workflows:[…]}，单个/全部共用一种格式。
   const exportWfs = (list: WF[], filename: string) => {
@@ -832,7 +884,10 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
       list = (Array.isArray(data) ? data : Array.isArray(box.workflows) ? box.workflows : box.nodes ? [data] : []) as WF[];
     } catch { setNote("导入失败：不是合法的 JSON"); return; }
     const valid = (list || []).filter((w) => w && typeof w === "object" && Array.isArray(w.nodes)).map((w) => ({
-      ...w, icon: w.icon || "🧩", enabled: w.enabled !== false, variables: w.variables || {},
+      // 不给 icon 补默认值：icon 现在只放自定义图片，没图片就该留空，
+      // 由编辑器退回内置线性图标（ic）、主进程退回它自己那套 emoji 兜底。
+      // 早先这里补的是 "🧩"，等于把兜底值当真值写进数据，再也分不清用户到底选没选。
+      ...w, enabled: w.enabled !== false, variables: w.variables || {},
       nodes: w.nodes.map((n) => ({ ...n, config: (n.config || {}) as Record<string, unknown> })),
       connections: Array.isArray(w.connections) ? w.connections : [],
     }));
@@ -1313,24 +1368,22 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           画布缩放在画布自己的右上角浮层，顶栏因此一行放得下，内嵌到主窗口右侧也不挤。 */}
       <div className="h-[52px] flex-none flex items-center gap-[10px] px-[14px] border-b border-border bg-card">
         {cur ? (<>
-          {/* 图标方块：留空时显示线性占位图标，输入框透明地盖在上面，点一下就能改。 */}
-          <span className="relative w-7 h-7 flex-none rounded-lg bg-orange-soft text-orange-text flex items-center justify-center">
-            {cur.icon ? null : <IconFlow size={15} />}
-            <input value={cur.icon || ""} onChange={(e) => updateCur((w) => ({ ...w, icon: e.target.value }))} maxLength={2} title="图标（留空显示默认图标）"
-              className="absolute inset-0 w-full h-full bg-transparent border-none outline-none text-center text-[15px] leading-none" />
+          {/* 头部这块是**只读**的：名称/描述/图标都在「编辑工作流」弹窗里改。
+              原来这里是三个无边框输入框，改一个字就落一次盘、还各带一条撤销记录，
+              而且和弹窗里同一份字段两套写法，迟早对不上。 */}
+          <span className="w-7 h-7 flex-none rounded-lg overflow-hidden bg-orange-soft text-orange-text flex items-center justify-center">
+            <WfIcon w={cur} size={15} />
           </span>
-          <span className="flex flex-col gap-px min-w-0">
-            <span className="flex items-center gap-[7px]">
-              {/* 名称做成无边框输入：平时就是一行标题，点上去才是可编辑的。 */}
-              <input value={cur.name} onChange={(e) => updateCur((w) => ({ ...w, name: e.target.value }))} placeholder="名称"
-                className="w-[150px] flex-none bg-transparent border-none outline-none text-[14px] font-semibold" />
+          <span className="flex flex-col gap-px min-w-0 max-w-[300px]">
+            <span className="flex items-center gap-[7px] min-w-0">
+              <span className="min-w-0 truncate text-[14px] font-semibold" title={cur.name}>{cur.name}</span>
               {cur.enabled === false
                 ? <span className="flex-none whitespace-nowrap px-[7px] py-px rounded-full bg-chip text-muted text-[10.5px] font-semibold">已停用</span>
                 : <span className="flex-none whitespace-nowrap px-[7px] py-px rounded-full bg-success-soft text-success text-[10.5px] font-semibold">已启用</span>}
+              <button className="flex-none whitespace-nowrap text-[11px] text-muted bg-transparent hover:text-orange-text" title="改名称、描述、图标" onClick={() => setWfDlg({ id: cur.id })}>编辑…</button>
               <button className="flex-none whitespace-nowrap text-[11px] text-muted bg-transparent hover:text-orange-text" title="配置项：给使用者填的表单（密钥进保险箱）" onClick={() => setShowCfg(true)}>配置工作流…</button>
             </span>
-            <input value={cur.desc || ""} onChange={(e) => updateCur((w) => ({ ...w, desc: e.target.value }))}
-              className="bg-transparent border-none outline-none text-[11px] text-faint" placeholder="加一句描述…" />
+            <span className="text-[11px] leading-[1.55] text-faint truncate" title={cur.desc || "还没写描述"}>{cur.desc || "还没写描述"}</span>
           </span>
         </>) : <span className="text-[12.5px] text-muted whitespace-nowrap">← 左侧新建或选择一个工作流</span>}
         <span className="flex-1" />
@@ -1377,7 +1430,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           <div className="flex-none flex flex-col gap-[9px] px-3 pt-[13px] pb-[10px] border-b border-border-soft">
             <div className="flex items-center justify-between gap-2">
               <span className="flex-none whitespace-nowrap text-[12.5px] font-semibold">工作流</span>
-              <button className="flex-none whitespace-nowrap flex items-center gap-1 px-2 py-[3px] rounded-[7px] border border-border bg-transparent text-muted text-[11.5px] hover:border-orange hover:text-orange-text" onClick={newWf}>
+              <button className="flex-none whitespace-nowrap flex items-center gap-1 px-2 py-[3px] rounded-[7px] border border-border bg-transparent text-muted text-[11.5px] hover:border-orange hover:text-orange-text" onClick={() => setWfDlg({ id: "" })}>
                 <IconPlus size={11} />新建
               </button>
             </div>
@@ -1391,19 +1444,32 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
             {wfList.map((w) => {
               const sel = w.id === curId;
               return (
-                <div key={w.id} onClick={() => { setCurId(w.id); setSelNode(null); setSelConn(null); setSelSet([]); }}
-                  className={`group flex items-center gap-[9px] px-2 py-[7px] rounded-lg cursor-pointer text-[12.5px] ${sel ? "bg-orange-soft text-orange-text font-semibold" : "hover:bg-hover"}`}>
-                  <span className={`w-6 h-6 flex-none rounded-md flex items-center justify-center text-[13px] ${sel ? "bg-orange-soft text-orange-text" : "text-muted"}`}>
-                    {w.icon || <IconFlow size={13} />}
+                <button key={w.id} title={w.desc || "还没写描述"}
+                  onClick={() => { setCurId(w.id); setSelNode(null); setSelConn(null); setSelSet([]); }}
+                  onContextMenu={(e) => {
+                    // 先把这一行设为选中项再开菜单：菜单里的操作都是针对「这一条」的，
+                    // 不先选中的话用户看着菜单、改的却是另一条。
+                    e.preventDefault(); e.stopPropagation();
+                    setCurId(w.id); setSelNode(null); setSelConn(null); setSelSet([]);
+                    setWfMenu({ x: e.clientX, y: e.clientY, id: w.id });
+                  }}
+                  className={`w-full flex items-center gap-[9px] px-[8px] py-[7px] rounded-[8px] border-none text-[12.5px] ${
+                    sel ? "bg-orange-soft text-orange-text font-semibold" : "bg-transparent text-text font-normal hover:bg-hover"}`}>
+                  <span className={`w-[24px] h-[24px] flex-none rounded-[6px] overflow-hidden flex items-center justify-center ${
+                    sel ? "bg-[rgba(232,89,12,.14)] text-orange-text" : "bg-chip text-muted"}`}>
+                    <WfIcon w={w} size={14} />
                   </span>
-                  <span className="flex-1 min-w-0">
-                    <span className={`block truncate ${w.enabled === false ? "line-through" : ""}`}>{w.name}</span>
-                    <span className="block mt-px text-[10.5px] font-normal text-faint truncate">{wfMeta(w)}</span>
+                  <span className="flex-1 min-w-0 text-left">
+                    <span className="block overflow-hidden text-ellipsis whitespace-nowrap">{w.name}</span>
+                    {/* 第二行是描述而不是「N 个节点 · 关键词」：节点数看一眼画布就知道，
+                        而「这条工作流是干什么的」只有描述答得上来。最多两行，超出省略，完整走 title。 */}
+                    <span className="block mt-[2px] text-[10.5px] leading-[1.5] font-normal text-faint [display:-webkit-box] [-webkit-line-clamp:2] [-webkit-box-orient:vertical] overflow-hidden [text-wrap:pretty]">
+                      {w.desc || "还没写描述"}
+                    </span>
                   </span>
-                  {/* 启停指示：启用是实心绿点，停用是空心圈 —— 和徽章语义一套（绿=在线，灰=未启用）。 */}
-                  <span className={`w-1.5 h-1.5 flex-none rounded-full ${w.enabled === false ? "border-[1.5px] border-border" : "bg-success"}`} />
-                  <button className="flex-none text-danger bg-transparent opacity-0 group-hover:opacity-100" title="删除这条工作流" onClick={(e) => { e.stopPropagation(); delWf(w.id); }}><IconTrash size={12} /></button>
-                </div>
+                  {/* 启停指示：启用是实心绿点，停用是空心圈 —— 和头部徽标同一套语义。 */}
+                  <span className={`w-[6px] h-[6px] flex-none rounded-full ${w.enabled === false ? "border-[1.5px] border-border" : "bg-success"}`} />
+                </button>
               );
             })}
             {!wfs.length ? <div className="px-2 py-3 text-[11.5px] text-muted leading-[1.6]">还没有工作流，点右上角「新建」开一条。</div> : null}
@@ -1663,6 +1729,43 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
         <VarsEditor vars={cur.variables || {}} onClose={() => setShowVars(false)} onSave={(v) => { updateCur((w) => ({ ...w, variables: v })); setShowVars(false); }} />
       ) : null}
       {menu ? <ContextMenu x={menu.x} y={menu.y} items={menu.items} dark={menu.dark} title={menu.title} onClose={() => setMenu(null)} /> : null}
+
+      {/* 新建 / 编辑同一个弹窗。taken 是判重名用的「别人的名字」——
+          编辑时要把自己排除掉，否则原地保存会被自己的名字挡住。 */}
+      {wfDlg ? (() => {
+        const target = wfDlg.id ? wfs.find((w) => w.id === wfDlg.id) : null;
+        // 要编辑的那条被别处删掉了（比如内嵌那份重新拉了数据）：直接把弹窗关掉，
+        // 别拿 null 当「新建」用 —— 用户点的是编辑，弹出个新建框更让人懵。
+        if (wfDlg.id && !target) { setWfDlg(null); return null; }
+        return (
+          <WfDialog init={target || null}
+            taken={wfs.filter((w) => w.id !== wfDlg.id).map((w) => w.name)}
+            onClose={() => setWfDlg(null)}
+            onOk={(v) => { if (target) editWf(target.id, v); else newWf(v); setWfDlg(null); }} />
+        );
+      })() : null}
+
+      {wfDel && wfs.some((w) => w.id === wfDel) ? (
+        <WfDelConfirm name={wfs.find((w) => w.id === wfDel)!.name}
+          onClose={() => setWfDel("")}
+          onOk={() => { delWf(wfDel); setWfDel(""); }} />
+      ) : null}
+
+      {/* 列表行右键菜单。窄一档（168px）：这里全是短动作名，用 224px 那档会空一大半。 */}
+      {wfMenu && wfs.some((w) => w.id === wfMenu.id) ? (() => {
+        const w = wfs.find((x) => x.id === wfMenu.id)!;
+        const items: MenuItem[] = [
+          { label: w.enabled === false ? "启用" : "停用", icon: w.enabled === false ? <IconCheck size={14} /> : <IconEyeOff size={14} />, onClick: () => toggleWf(w.id) },
+          { label: "编辑…", icon: <IconPencil size={14} />, onClick: () => setWfDlg({ id: w.id }) },
+          { label: "在目录中打开", icon: <IconFolder size={14} />, onClick: () => void api.openWorkflowDir(w.id).then((r) => { if (!r.ok) setNote(`打不开目录：${r.error}`); }) },
+          { sep: true },
+          { label: "复制", icon: <IconCopy size={14} />, onClick: () => dupWf(w.id) },
+          { label: "导出…", icon: <IconExternal size={14} />, onClick: () => exportWfs([w], `${w.name || "workflow"}.json`) },
+          { sep: true },
+          { label: "删除", icon: <IconTrash size={14} />, danger: true, onClick: () => setWfDel(w.id) },
+        ];
+        return <ContextMenu x={wfMenu.x} y={wfMenu.y} items={items} narrow onClose={() => setWfMenu(null)} />;
+      })() : null}
     </div>
   );
 }
@@ -2239,6 +2342,180 @@ function KVEditor({ kv, onChange }: { kv: Record<string, string>; onChange: (v: 
           onChange={(e) => push(all.map((x, j) => (j === i ? { ...x, v: e.target.value } : x)))} />,
       ]}
     />
+  );
+}
+
+// ── 工作流的新建 / 编辑弹窗 ────────────────────────────────────────────────────
+//
+// 「新建」不再直接建一条空工作流，先过这个弹窗把名字、描述、图标定下来。
+// 新建与编辑共用同一个组件，只有标题和主按钮文案不同 —— 两个界面各写一份，
+// 迟早出现「新建能填的东西编辑里填不了」。
+//
+// 没有复用节点配置那套 Dlg：那边宽度是 440/560/720 三档、标签列 110px、底栏左边挂
+// 「删除节点」；这里是 460px、标签列 66px、底栏左边是校验提示。硬凑成一个壳，
+// 两边的参数都会被对方拖着走。
+function WfDialog({ init, taken, onOk, onClose }: {
+  /** null = 新建 */
+  init: WF | null;
+  /** 已有的工作流名字（编辑时**不含自身**），用来判重名 */
+  taken: string[];
+  onOk: (v: { name: string; desc: string; ic: string; icon: string }) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(init?.name || "");
+  const [desc, setDesc] = useState(init?.desc && init.desc !== "还没写描述" ? init.desc : "");
+  const [ic, setIc] = useState(init?.ic || "script");
+  const [icon, setIcon] = useState(hasImg(init?.icon) ? String(init?.icon) : "");
+  const [grid, setGrid] = useState(false);
+  const [over, setOver] = useState(false);   // 图片正拖在预览方块上
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const trimmed = name.trim();
+  // 禁用原因和底部提示是同一件事的两面，所以一处算出来 —— 分开写必然出现
+  // 「按钮灰着但底下没说为什么」。
+  const problem = !trimmed ? "先填标题"
+    : taken.some((n) => n.trim() === trimmed) ? "已经有同名工作流了" : "";
+
+  const readImage = (f: File | undefined | null) => {
+    if (!f || !f.type.startsWith("image/")) return;
+    const r = new FileReader();
+    // 读成 dataURL 而不是记住路径：dataURL 跟着工作流一起导出，换台电脑图标还在；
+    // 记路径的话导出文件到别人机器上就是一个红叉。
+    r.onload = () => { setIcon(String(r.result || "")); setGrid(false); };
+    r.readAsDataURL(f);
+  };
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); e.stopPropagation(); onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+
+  const lab = "w-[66px] flex-none whitespace-nowrap text-[12.5px] text-muted";
+  const fld = "flex-1 min-w-0 px-[9px] py-[6px] border border-border rounded-[8px] bg-bg text-text text-[12.5px] outline-none focus:border-orange focus:shadow-[0_0_0_3px_var(--orange-soft)]";
+  const mini = "flex-none whitespace-nowrap px-[9px] py-[4px] border border-border rounded-[7px] text-[11.5px] bg-transparent text-text hover:border-orange hover:text-orange-text";
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/[.32]" onMouseDown={onClose}>
+      <div className="w-[460px] max-h-[86vh] bg-card border border-border rounded-[12px] shadow-[0_18px_48px_rgba(0,0,0,.22)] overflow-hidden flex flex-col"
+        onMouseDown={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-[11px] px-[15px] py-[13px] border-b border-border flex-none">
+          <span className="flex-1 min-w-0 text-[13.5px] font-semibold">{init ? "编辑工作流" : "新建工作流"}</span>
+          <button title="关闭" onClick={onClose}
+            className="w-[26px] h-[26px] flex-none rounded-[7px] bg-transparent text-muted flex items-center justify-center hover:bg-hover hover:text-text"><IconX size={14} /></button>
+        </div>
+
+        <div className="px-[15px] pt-[2px] pb-[14px] overflow-y-auto">
+          {/* 图标：一行解决。预览方块本身就是拖放目标，别做成一个大区块。 */}
+          <div className="flex items-start gap-[12px] py-[11px] border-b border-border-soft">
+            <span className={`${lab} pt-[7px]`}>图标</span>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-[8px]">
+                <button title="拖图片进来，或点一下换图标" onClick={() => setGrid((v) => !v)}
+                  onDragOver={(e) => { e.preventDefault(); setOver(true); }}
+                  onDragLeave={() => setOver(false)}
+                  onDrop={(e) => { e.preventDefault(); setOver(false); readImage(e.dataTransfer.files?.[0]); }}
+                  className={`w-[34px] h-[34px] flex-none rounded-[8px] overflow-hidden p-0 flex items-center justify-center transition-[border-color,background] duration-150 ${
+                    over ? "border-[1.5px] border-dashed border-orange bg-orange-soft text-orange-text"
+                    : icon ? "border border-border bg-bg"
+                    : "border-[1.5px] border-dashed border-border bg-bg text-muted"}`}>
+                  {icon ? <img src={icon} alt="" className="w-full h-full object-cover" />
+                        : <WfIcon w={{ ic }} size={16} />}
+                </button>
+                <button className={mini} onClick={() => setGrid((v) => !v)}>换图标</button>
+                <button className={mini} onClick={() => fileRef.current?.click()}>选本地图片</button>
+                {icon ? (
+                  <button className="flex-none whitespace-nowrap px-[9px] py-[4px] rounded-[7px] text-[11.5px] bg-transparent text-muted hover:text-danger"
+                    onClick={() => setIcon("")}>移除图片</button>
+                ) : null}
+                <span className="flex-1 min-w-0 text-[11px] text-faint truncate">
+                  {over ? "松手即用这张图片" : icon ? "已用本地图片" : "也可以把图片拖到方块里"}
+                </span>
+              </div>
+              {grid ? (
+                <div className="mt-[8px] border border-border rounded-[8px] bg-rail p-[6px] flex flex-wrap gap-[4px]">
+                  {WF_ICONS.map(({ key, Icon }) => (
+                    <button key={key} title={key} onClick={() => { setIc(key); setIcon(""); }}
+                      className={`w-[26px] h-[26px] flex-none rounded-[7px] border flex items-center justify-center ${
+                        !icon && ic === key ? "border-orange bg-orange-soft text-orange-text" : "border-border bg-card text-muted hover:border-orange hover:text-orange-text"}`}>
+                      <Icon size={14} />
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              <input ref={fileRef} type="file" accept="image/*" className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; readImage(f); }} />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-[12px] py-[11px] border-b border-border-soft">
+            <span className={lab}>标题</span>
+            <input autoFocus className={fld} value={name} onChange={(e) => setName(e.target.value)} placeholder="例如 有道翻译" />
+          </div>
+
+          <div className="flex items-start gap-[12px] py-[11px]">
+            <span className={`${lab} pt-[7px]`}>描述</span>
+            <div className="flex-1 min-w-0">
+              <textarea className={`${fld} w-full h-[60px] resize-y leading-[1.65]`} value={desc} onChange={(e) => setDesc(e.target.value)}
+                placeholder="一句话说清这条工作流干什么，会显示在左侧列表里" />
+              <div className="mt-[6px] text-[11.5px] text-faint">
+                {desc.trim() ? `${desc.trim().length} 字 · 列表里显示两行，超出省略` : "留空则列表里只显示标题"}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-[8px] px-[15px] py-[11px] border-t border-border bg-rail flex-none">
+          <span className="flex-1 min-w-0 text-[11.5px] text-faint truncate">{problem}</span>
+          <button onClick={onClose}
+            className="flex-none whitespace-nowrap px-[14px] py-[6px] border border-border rounded-[8px] text-[12.5px] bg-transparent hover:bg-hover">取消</button>
+          <button disabled={!!problem}
+            onClick={() => onOk({ name: trimmed, desc: desc.trim(), ic, icon })}
+            className={`flex-none whitespace-nowrap px-[16px] py-[6px] rounded-[8px] text-[12.5px] font-semibold ${
+              problem ? "bg-chip text-faint cursor-not-allowed" : "bg-orange text-white cursor-pointer hover:bg-orange-deep"}`}>
+            {init ? "保存" : "新建"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── 删除工作流的二次确认 ──────────────────────────────────────────────────────
+// 只有确认弹窗里允许出现实心红按钮 —— 别处的危险操作一律描边。
+function WfDelConfirm({ name, onOk, onClose }: { name: string; onOk: () => void; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); e.stopPropagation(); onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
+  return (
+    <div className="fixed inset-0 z-[65] flex items-center justify-center bg-black/[.32]" onMouseDown={onClose}>
+      <div className="w-[400px] bg-card border border-border rounded-[12px] p-[18px] shadow-[0_18px_48px_rgba(0,0,0,.22)]"
+        onMouseDown={(e) => e.stopPropagation()}>
+        <div className="flex items-start gap-[11px]">
+          <span className="w-[30px] h-[30px] flex-none rounded-[8px] bg-danger-soft text-danger flex items-center justify-center"><IconTrash size={16} /></span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[13.5px] font-semibold">删除「{name}」？</div>
+            <div className="mt-[6px] text-[12.5px] leading-[1.7] text-muted [text-wrap:pretty]">
+              这条工作流的节点、变量和配置项都会一起清掉，无法恢复。已经导出的文件不受影响。
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-end gap-[8px] mt-[16px]">
+          <button onClick={onClose}
+            className="flex-none whitespace-nowrap px-[14px] py-[6px] border border-border rounded-[8px] text-[12.5px] bg-transparent hover:bg-hover">取消</button>
+          <button onClick={onOk}
+            className="flex-none whitespace-nowrap px-[16px] py-[6px] rounded-[8px] text-[12.5px] font-semibold bg-danger text-white">删除</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
