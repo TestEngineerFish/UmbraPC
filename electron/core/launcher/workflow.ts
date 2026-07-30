@@ -80,6 +80,54 @@ export interface WorkflowDeps {
   getSecret?: (ref: string) => string | null;
 }
 
+// ── 一次执行的上下文：这次运行**有没有人在看** ────────────────────────────────
+//
+// 到目前为止工作流只有一条入口：人按了快捷键 / 在快捷入口挑了一项。所以引擎可以理直气壮地
+// 去收面板、弹浮层、往前台应用里发按键 —— 反正屏幕前就坐着那个人。
+//
+// 接下来工作流要变成一项「设备能力」，可能由服务端远程调起。那时候屏幕前没人，
+// 上面每一件事的含义都变了：收面板没有面板可收；弹一个大字浮层没人看见还挡住别人干活；
+// 往前台应用里发按键更糟 —— 前台是哪个应用完全不确定，可能把内容打进别人正在写的邮件里。
+//
+// 所以把「碰界面」这件事收成两套上下文，而不是在十几个节点里各写一句 if：
+//   ui       —— 有人在看：ui 面就是真正的 deps，行为和以前完全一样。
+//   headless —— 没人在看：ui 面换成一个不碰界面的替身；展示类节点的内容改为**收集起来**
+//               交回调用方；少数几个「必须有人在场」的节点直接拦下（见 HEADLESS_BLOCK）。
+//
+// 关键取舍：上下文是**按次运行**传下去的，不是引擎上的一个字段。一次远程调用和一次
+// 本人操作完全可能在时间上交叠，字段会串味。
+export type RunSurface = "ui" | "headless";
+
+// 无人在看时，展示类节点收集下来的内容。调用方（将来的设备技能层）把它当返回值。
+export interface RunOutput { kind: "largetype" | "textview"; title?: string; text: string }
+
+export interface RunCtx {
+  surface: RunSurface;
+  /** 碰界面的那一面。ui 上下文里就是真 deps；headless 里是替身 */
+  ui: WorkflowDeps;
+  /** headless 时展示类节点的内容落在这里；ui 时始终为空 */
+  outputs: RunOutput[];
+}
+
+// 无人在看时**必须拦下**的节点，值是拦下的理由（直接回给调用方，不用再翻代码猜）。
+//
+// 收录标准只有一条：**没人在场时它的后果不可预期或不可控**。
+//   · paste / keycombo 往「当时的前台应用」里注入内容，而没人看着时前台是哪个完全不确定；
+//   · dialog 要等人点按钮，而系统消息框不会超时，没人点就一直挂着。
+// 反过来，openurl / launch / terminal / reveal 这些「让我的电脑去做件事」不在此列 ——
+// 它们会抢焦点，但那正是远程调用想要的结果，拦掉等于把这个功能废掉一半。
+// notify 也不拦：系统通知恰恰就是「人不在看应用时告诉他一声」的机制。
+// 被拦节点的中文名。引擎侧本来没有标签表（标签在编辑器的 CATALOG 里），
+// 这里只给被拦的这几个各留一个 —— 报错里写「utility.dialog」对用户毫无意义。
+const BLOCKED_LABEL: Record<string, string> = {
+  "action.paste": "粘贴到前台", "output.keycombo": "发送按键", "utility.dialog": "对话框",
+};
+const HEADLESS_BLOCK: Record<string, string> = {
+  "action.paste": "模拟粘贴会把内容打进当时的前台应用，而没人看着时前台是哪个完全不确定",
+  "output.keycombo": "模拟按键会发给当时的前台应用，没人看着时不该乱按",
+  "utility.dialog": "对话框要等人点按钮，没人可问",
+};
+
 const SCRIPT_TIMEOUT = 20000;
 // 问秘书 / 设备派发走 HTTP，比本地脚本慢得多，单独给一个更长的超时。
 const REMOTE_TIMEOUT = 120000;
@@ -377,6 +425,34 @@ export class WorkflowEngine {
   private fileBuffers = new Map<string, string[]>();
 
   constructor(private cfg: ConfigStore, private deps: WorkflowDeps) {}
+
+  // 有人在看：ui 面直接就是真 deps，行为和加这套上下文之前逐字一致。
+  private uiCtx(): RunCtx {
+    return { surface: "ui", ui: this.deps, outputs: [] };
+  }
+
+  // 没人在看：换一个不碰界面的替身。
+  // 逐项说明为什么这么替，而不是笼统「都变空操作」：
+  //   hide / showPanel  —— 没有面板可收也没有可唤起的，空操作即正确。
+  //   showLargeType     —— 大字浮层没人看见，还会挡住别人正在干的事。内容收进 outputs。
+  //   showTextView      —— 同上。它本来就是「把一段文本给人看」，收集起来交回调用方最贴近原意。
+  //   sendAssistant     —— **不替**。它不是「显示」，是真把消息发给秘书，远程调起时照样该发。
+  //   getSecret         —— 不替。取密钥和有没有人看无关。
+  private headlessCtx(): RunCtx {
+    const outputs: RunOutput[] = [];
+    return {
+      surface: "headless",
+      outputs,
+      ui: {
+        sendAssistant: (t) => this.deps.sendAssistant(t),
+        hide: async () => { /* 无面板可收 */ },
+        showPanel: async () => { /* 无面板可唤起 */ },
+        showLargeType: (text) => { outputs.push({ kind: "largetype", text }); },
+        showTextView: (p) => { outputs.push({ kind: "textview", title: p.title, text: p.text }); },
+        getSecret: (ref) => this.deps.getSecret?.(ref) ?? null,
+      },
+    };
+  }
 
   private workflows(): Workflow[] {
     return (this.cfg.get().launcherWorkflows || []).filter((w) => w && w.enabled !== false);
@@ -890,9 +966,10 @@ export class WorkflowEngine {
     const visited = new Set<string>();
     // 调试轨迹：一次「选中结果并回车/修饰键执行」= 一条运行记录。
     const tr = this.trace.begin(wf.id, wf.name, m ? `${m} 分支` : "回车", arg);
+    const rc = this.uiCtx();   // 人刚在快捷入口挑了一项，屏幕前一定有人
     let fb = "";
     try {
-      for (const conn of conns) fb = (await this.runNode(wf, conn.to, arg, vars, visited, tr)) || fb;
+      for (const conn of conns) fb = (await this.runNode(wf, conn.to, arg, vars, visited, rc, tr)) || fb;
     } finally {
       this.trace.end(tr);   // 中途抛异常也要把已记录的步数留下，否则最需要看的那次反而丢了
     }
@@ -905,7 +982,9 @@ export class WorkflowEngine {
   // fan：当前所处的扇出批次（上游有 Split 且走「参数列表」输出时才非空），同样一路往下传给 Join 用。
   // override：上游的 JSON Config 节点用 {"alfredworkflow":{"config":{…}}} 临时改写本节点的配置。
   // 只对**这一次执行**生效，所以是拷一份 node 再合并，绝不去动存着的那份配置。
-  private async runNode(wf: Workflow, nodeId: string, arg: string, varsIn: Record<string, string>, visited: Set<string>, tr: TraceRun | null = null, fan: FanCtx | null = null, override: Record<string, unknown> | null = null): Promise<string> {
+  // rc：这次运行的上下文（有人在看 / 没人在看）。**必传**，不给默认值 ——
+  // 给了默认值就等于「忘了传的地方悄悄当成有人在看」，而那正是会往用户前台应用里乱发按键的情形。
+  private async runNode(wf: Workflow, nodeId: string, arg: string, varsIn: Record<string, string>, visited: Set<string>, rc: RunCtx, tr: TraceRun | null = null, fan: FanCtx | null = null, override: Record<string, unknown> | null = null): Promise<string> {
     if (visited.has(nodeId)) return "";  // 防环
     visited.add(nodeId);
     const stored = this.node(wf, nodeId);
@@ -919,7 +998,7 @@ export class WorkflowEngine {
       this.trace.stepEnd(skipStep, skipAt, { outArg: arg, skipped: true });
       let fb = "";
       for (const c of this.outConns(wf, nodeId, "", "")) {
-        const r = await this.runNode(wf, c.to, arg, vars, visited, tr, fan);
+        const r = await this.runNode(wf, c.to, arg, vars, visited, rc, tr, fan);
         if (r) fb = r;
       }
       return fb;
@@ -942,6 +1021,13 @@ export class WorkflowEngine {
     let exitCode: number | undefined;
     const step = this.trace.stepStart(tr, node.id, node.type, arg, vars);
     const startedAt = Date.now();
+    // 无人在看时的策略拦截。先记进轨迹再中断 —— 调用方和事后看记录的人都得能分清
+    // 「被策略拦下」和「跑到一半没了」，后者是要去查 bug 的，前者是设计如此。
+    if (rc.surface === "headless" && HEADLESS_BLOCK[node.type]) {
+      const why = HEADLESS_BLOCK[node.type];
+      this.trace.stepEnd(step, startedAt, { outArg: arg, error: `无人在看时不执行：${why}`, stopped: true });
+      return `这条链路里的「${BLOCKED_LABEL[node.type] || node.type}」需要有人在场：${why}`;
+    }
     try {
     switch (node.type) {
       // ── 工具：Args & Vars —— 改写下游 arg，并写入/覆盖变量（整个工作流的地基节点）──
@@ -1288,7 +1374,7 @@ export class WorkflowEngine {
         const cancelId = Math.max(0, Math.min(Math.trunc(Number(node.config.cancelIndex ?? 0)) || 0, btns.length - 1));
         const defaultId = Math.max(0, Math.min(Math.trunc(Number(node.config.defaultIndex ?? btns.length - 1)) || 0, btns.length - 1));
         const kind = String(node.config.kind || "none");
-        await this.deps.hide(true);   // 见上面第 1 条：不收面板的话框会被盖住
+        await rc.ui.hide(true);   // 见上面第 1 条：不收面板的话框会被盖住
         const { dialog } = await import("electron");
         const r = await dialog.showMessageBox({
           type: (["none", "info", "warning", "error"].includes(kind) ? kind : "none") as "none",
@@ -1307,10 +1393,10 @@ export class WorkflowEngine {
       // 「主面板」= 快捷入口那个浮层。链路中间先收起它去干活（不然新开的窗口会被它挡住），
       // 干完再叫回来接着挑下一项。hide 的 returnFocus=true：把焦点还给刚才那个应用。
       case "utility.hide":
-        await this.deps.hide(true);
+        await rc.ui.hide(true);
         break;
       case "utility.show":
-        await this.deps.showPanel();
+        await rc.ui.showPanel();
         break;
 
       // ── 窗口：Dispatch Key Combo —— 向前台应用发一组按键 ──
@@ -1320,7 +1406,7 @@ export class WorkflowEngine {
         const accel = this.subst(String(node.config.accelerator || ""), arg, vars).trim();
         if (!accel) { feedback = "发送按键：没录键位"; stop = true; break; }
         if (node.config.hideFirst !== false) {
-          await this.deps.hide(true);
+          await rc.ui.hide(true);
           // 给系统一点时间把焦点真正交还给前台应用，不等的话按键会打空
           await new Promise((r) => setTimeout(r, Math.max(0, Math.min(Number(node.config.delayMs ?? 180), 2000))));
         }
@@ -1549,7 +1635,7 @@ export class WorkflowEngine {
         clipboard.writeText(arg); feedback = "已复制 ✓"; break;
       case "action.paste":
         clipboard.writeText(arg);
-        await this.deps.hide(true);
+        await rc.ui.hide(true);
         await new Promise((r) => setTimeout(r, 180));
         await simulatePaste();
         break;
@@ -1560,7 +1646,7 @@ export class WorkflowEngine {
         const br = String(node.config.browser || "").trim();
         const r = await run("open", br ? ["-a", br, url] : [url]);
         if (r.code !== 0 && br) { feedback = `用 ${br} 打开失败：${r.output.trim().slice(0, 60)}`; stop = true; break; }
-        await this.deps.hide(false); break;
+        await rc.ui.hide(false); break;
       }
       // 打开文件：**按行拆**。上游是「文件暂存区」的取出模式时给的就是多行路径，
       // 这两个节点天生要串在一起用；不拆的话等于把一整段多行文本当成一个路径丢给 open，必然失败。
@@ -1573,7 +1659,7 @@ export class WorkflowEngine {
         // 没指定则逐个交给系统，各自按默认应用打开。
         if (app) await run("open", ["-a", app, ...paths]);
         else for (const p of paths) await run("open", [p]);
-        await this.deps.hide(false);
+        await rc.ui.hide(false);
         feedback = paths.length > 1 ? `已打开 ${paths.length} 个 ✓` : "";
         break;
       }
@@ -1590,7 +1676,7 @@ export class WorkflowEngine {
           }
           await run("open", [ep]);
         }
-        await this.deps.hide(false); break;
+        await rc.ui.hide(false); break;
       }
       case "action.script": {
         const script = this.subst(String(node.config.script || ""), arg, vars);
@@ -1644,7 +1730,7 @@ export class WorkflowEngine {
         break;
       }
       case "action.assistant":
-        this.deps.sendAssistant(arg); break;
+        rc.ui.sendAssistant(arg); break;
       case "action.inspiration":
         feedback = await this.postInspiration(arg); break;
 
@@ -1655,17 +1741,17 @@ export class WorkflowEngine {
         const title = this.subst(String(node.config.title || ""), arg, vars) || "秘书";
         const show = node.config.show !== false;   // 默认开文本视图展示，等待期间显示 loading
         if (show) {
-          this.deps.showTextView({ text: content, title, md: true, loading: true });
-          await this.deps.hide(false);
+          rc.ui.showTextView({ text: content, title, md: true, loading: true });
+          await rc.ui.hide(false);
         }
         const r = await this.askAssistant(content);
         if (r.error) {
           feedback = `问秘书失败：${r.error.slice(0, 40)}`;
-          if (show) this.deps.showTextView({ text: feedback, title, md: false });
+          if (show) rc.ui.showTextView({ text: feedback, title, md: false });
           stop = true; break;
         }
         outArg = r.reply;
-        if (show) this.deps.showTextView({ text: r.reply, title, md: true });
+        if (show) rc.ui.showTextView({ text: r.reply, title, md: true });
         else feedback = "秘书已回复 ✓";
         break;
       }
@@ -1707,17 +1793,17 @@ export class WorkflowEngine {
       }
 
       case "output.largetype":
-        this.deps.showLargeType(arg); await this.deps.hide(false); break;
+        rc.ui.showLargeType(arg); await rc.ui.hide(false); break;
 
       // ── 文本视图：把长文摊在浮层里（可 Markdown、可追加），大字显示装不下时用 ──
       case "output.textview": {
-        this.deps.showTextView({
+        rc.ui.showTextView({
           text: arg,
           title: this.subst(String(node.config.title || ""), arg, vars) || wf.name,
           md: node.config.markdown !== false,
           append: !!node.config.append,
         });
-        await this.deps.hide(false);
+        await rc.ui.hide(false);
         break;
       }
 
@@ -1788,7 +1874,7 @@ export class WorkflowEngine {
         ctx.index = i;
         for (const c of this.outConns(wf, nodeId, "", outPort)) {
           // visited 传副本而不是同一个：对上游仍然防环，但下游节点允许每一项各执行一次。
-          const fb = await this.runNode(wf, c.to, fanItems[i], vars, new Set(visited), tr, ctx, cfgOverride);
+          const fb = await this.runNode(wf, c.to, fanItems[i], vars, new Set(visited), rc, tr, ctx, cfgOverride);
           if (fb) feedback = fb;
         }
       }
@@ -1796,7 +1882,7 @@ export class WorkflowEngine {
     }
     // 传给 outPort 出口上的所有下游（回车分支）——链式/扇出都把 arg 与变量继续传递。
     for (const c of this.outConns(wf, nodeId, "", outPort)) {
-      const fb = await this.runNode(wf, c.to, outArg, vars, visited, tr, fanOut, cfgOverride);
+      const fb = await this.runNode(wf, c.to, outArg, vars, visited, rc, tr, fanOut, cfgOverride);
       if (fb) feedback = fb;
     }
     return feedback;
@@ -1987,8 +2073,23 @@ export class WorkflowEngine {
   // nodeId 为空 = 让引擎自己挑入口：优先第一个**没被停用**的触发器节点。
   // 编辑器里选中了某个节点时会把它传进来，这样可以只跑链路的一段。
   // 返回 from 是为了让界面能说清「从哪个节点跑的」，跑完一脸茫然最难受。
+  // 编辑器顶栏的「运行」按钮：人正看着编辑器，属于 ui 上下文。
   async runFromEditor(wfId: string, nodeId: string, arg: string): Promise<{ ok: boolean; from: string; feedback: string; error: string }> {
-    const fail = (error: string) => ({ ok: false, from: "", feedback: "", error });
+    const { outputs, ...rest } = await this.runEntry(wfId, nodeId, arg, this.uiCtx(), "手动运行");
+    void outputs;   // ui 上下文里恒为空，不往外传，免得调用方以为有东西可读
+    return rest;
+  }
+
+  // 无头运行：给将来「工作流作为设备能力」用。屏幕前没人，展示类节点的内容随返回值带回来。
+  //
+  // 有意和 runFromEditor 走同一条 runEntry —— 两条入口如果各写一遍找起点、连线、轨迹的逻辑，
+  // 迟早会一边修了另一边没修，而「远程调用的行为和本地不一样」是最难复现的一类问题。
+  async runHeadless(wfId: string, nodeId: string, arg: string): Promise<{ ok: boolean; from: string; feedback: string; error: string; outputs: RunOutput[] }> {
+    return this.runEntry(wfId, nodeId, arg, this.headlessCtx(), "远程调用");
+  }
+
+  private async runEntry(wfId: string, nodeId: string, arg: string, rc: RunCtx, how: string): Promise<{ ok: boolean; from: string; feedback: string; error: string; outputs: RunOutput[] }> {
+    const fail = (error: string) => ({ ok: false, from: "", feedback: "", error, outputs: rc.outputs });
     const wf = this.workflows().find((w) => w.id === wfId);
     if (!wf) return fail("工作流不存在");
     let start = nodeId ? wf.nodes.find((n) => n.id === nodeId) : undefined;
@@ -2001,18 +2102,19 @@ export class WorkflowEngine {
 
     const vars = this.baseVars(wf);
     const visited = new Set<string>();
-    // 轨迹的触发方式写「手动运行」，和真实触发区分开，回头看记录时不会认错。
-    const tr = this.trace.begin(wf.id, wf.name, "手动运行", arg);
+    // 轨迹里记清楚这次是怎么起来的（手动运行 / 远程调用），和真实触发区分开 ——
+    // 事后看记录时最先要判断的就是「这次是谁点的」。
+    const tr = this.trace.begin(wf.id, wf.name, how, arg);
     let feedback = "";
     try {
-      for (const conn of conns) feedback = (await this.runNode(wf, conn.to, arg, vars, visited, tr)) || feedback;
+      for (const conn of conns) feedback = (await this.runNode(wf, conn.to, arg, vars, visited, rc, tr)) || feedback;
     } catch (e) {
-      return { ok: false, from: start.id, feedback, error: String(e instanceof Error ? e.message : e) };
+      return { ok: false, from: start.id, feedback, error: String(e instanceof Error ? e.message : e), outputs: rc.outputs };
     } finally {
       // 中途抛异常也要把已记录的步数留下 —— 手动运行本来就多半是为了看它错在哪。
       this.trace.end(tr);
     }
-    return { ok: true, from: start.id, feedback, error: "" };
+    return { ok: true, from: start.id, feedback, error: "", outputs: rc.outputs };
   }
 
   async fireHotkey(wfId: string, nodeId: string): Promise<void> {
@@ -2024,7 +2126,7 @@ export class WorkflowEngine {
     const visited = new Set<string>();
     const tr = this.trace.begin(wf.id, wf.name, "快捷键", arg);
     try {
-      for (const conn of this.outConns(wf, nodeId, "")) await this.runNode(wf, conn.to, arg, vars, visited, tr);
+      for (const conn of this.outConns(wf, nodeId, "")) await this.runNode(wf, conn.to, arg, vars, visited, this.uiCtx(), tr);
     } finally {
       this.trace.end(tr);
     }
@@ -2098,7 +2200,7 @@ export class WorkflowEngine {
     const visited = new Set<string>();
     const tr = this.trace.begin(wf.id, wf.name, "Universal Action", arg);
     try {
-      for (const conn of this.outConns(wf, nodeId, "")) await this.runNode(wf, conn.to, arg, vars, visited, tr);
+      for (const conn of this.outConns(wf, nodeId, "")) await this.runNode(wf, conn.to, arg, vars, visited, this.uiCtx(), tr);
     } finally {
       this.trace.end(tr);
     }

@@ -17,8 +17,14 @@ export const shell = {
 // 对话框要按下标返回「用户点了哪个按钮」。测试往 dialogPicks 里塞一个下标，
 // 壳就按它回。不给就当点了第一个。
 export const dialogPicks: number[] = [];
+// 数一下弹了几次框。无头运行时对话框必须**压根不弹** —— 弹了就会一直挂着等人点，
+// 而「挂住」在测试里表现为超时，不看这个计数就只能靠肉眼发现。
+export const dialogCalls = { n: 0 };
 export const dialog = {
-  showMessageBox: (_opts: unknown) => Promise.resolve({ response: dialogPicks.length ? dialogPicks[0] : 0, checkboxChecked: false }),
+  showMessageBox: (_opts: unknown) => {
+    dialogCalls.n++;
+    return Promise.resolve({ response: dialogPicks.length ? dialogPicks[0] : 0, checkboxChecked: false });
+  },
 };
 export const systemPreferences = { canPromptTouchID: () => false };
 export const safeStorage = { isEncryptionAvailable: () => false };

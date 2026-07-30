@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { WorkflowEngine } from "../electron/core/launcher/workflow";
 import type { ConfigStore } from "../electron/core/config";
-import { dialogPicks } from "./stubs/electron";
+import { dialogCalls, dialogPicks, openedUrls } from "./stubs/electron";
 
 interface NodeDef { id: string; type: string; config?: Record<string, unknown> }
 
@@ -22,7 +22,8 @@ const calls = { hide: 0, show: 0 };
 // 引擎会在这个目录下给每条工作流建自己的目录（脚本节点的 cwd 与 data 目录）。
 const TMP_CFG_DIR = mkdtempSync(path.join(tmpdir(), "umbra-cfg-"));
 
-async function runChain(middle: NodeDef[], arg = "输入") {
+// headless=true 走 runHeadless（无人在看那条上下文），否则走 runFromEditor。
+async function runChain(middle: NodeDef[], arg = "输入", headless = false) {
   calls.hide = 0;
   calls.show = 0;
   const nodes = [
@@ -46,11 +47,14 @@ async function runChain(middle: NodeDef[], arg = "输入") {
     getSecret: () => null,
   } as never);
 
-  const r = await engine.runFromEditor("wf", "t", arg);
+  const r = headless
+    ? await engine.runHeadless("wf", "t", arg)
+    : { ...await engine.runFromEditor("wf", "t", arg), outputs: [] as { kind: string; title?: string; text: string }[] };
   const run = engine.trace.list("wf")[0];
   return {
     ok: r.ok,
     feedback: r.feedback,
+    outputs: r.outputs,
     // 末端 Debug 有没有执行到 = 链路有没有走完
     reached: run.steps.some((s) => s.nodeId === "dbg"),
     // Debug 执行那一刻的参数
@@ -786,5 +790,110 @@ describe("Dialog Conditional 对话框", () => {
     const r = await run(1, "b1", {});
     expect(r.dlg?.outPort).toBe("b1");
     expect(r.dbg?.vars?.dialog_button).toBe("确定");
+  });
+});
+
+// ── 两套执行上下文：有人在看 / 没人在看 ──────────────────────────────────────
+//
+// 这套东西的价值全在「没人在看时它**不做**什么」，而「不做」是最容易实现错、
+// 也最不容易靠肉眼发现的：往前台应用里发一次按键、弹一个没人点的框，
+// 在开发机上看起来都像「跑过了」。所以这里逐条钉死。
+describe("无人在看时的策略拦截", () => {
+  it("粘贴到前台：拦下并说清原因 —— 前台是哪个应用完全不确定", async () => {
+    const r = await runChain([{ id: "p", type: "action.paste" }], "内容", true);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("需要有人在场");
+    expect(r.feedback).toContain("前台");
+  });
+
+  it("发送按键：同样拦下", async () => {
+    const r = await runChain([{ id: "k", type: "output.keycombo", config: { accelerator: "Command+V" } }], "x", true);
+    expect(r.reached).toBe(false);
+    expect(r.feedback).toContain("需要有人在场");
+  });
+
+  it("对话框：拦下，而且压根不去弹框 —— 弹了就会一直挂着等人点", async () => {
+    dialogCalls.n = 0;
+    const r = await runChain([{ id: "d", type: "utility.dialog", config: { buttons: ["好"] } }], "x", true);
+    expect(r.reached).toBe(false);
+    expect(dialogCalls.n).toBe(0);
+  });
+
+  it("拦截要记进轨迹，而且是「被拦」不是「跑到一半没了」", async () => {
+    const r = await runChain([{ id: "p", type: "action.paste" }], "x", true);
+    const step = r.step("p");
+    expect(step).toBeTruthy();                          // 这一步存在，不是凭空消失
+    expect(step?.error).toContain("无人在看时不执行");   // 且写明了是策略拦下的
+    expect(step?.stopped).toBe(true);
+  });
+
+  it("同样这几个节点，有人在看时不拦", async () => {
+    dialogCalls.n = 0;
+    dialogPicks.length = 0;
+    await runChain([{ id: "d", type: "utility.dialog", config: { buttons: ["好"] } }], "x");
+    expect(dialogCalls.n).toBe(1);
+  });
+});
+
+describe("无人在看时的界面替身", () => {
+  it("收起/唤起面板变成空操作 —— 没有面板可收", async () => {
+    const r = await runChain([{ id: "h", type: "utility.hide" }, { id: "s", type: "utility.show" }], "透传", true);
+    expect(r.reached).toBe(true);       // 链路照常走完
+    expect(r.finalArg).toBe("透传");
+    expect(calls.hide).toBe(0);         // 但一次都没去碰面板
+    expect(calls.show).toBe(0);
+  });
+
+  it("大字显示的内容收进 outputs，而不是弹一个没人看还挡事的浮层", async () => {
+    const r = await runChain([{ id: "lt", type: "output.largetype" }], "看这里", true);
+    expect(r.outputs).toEqual([{ kind: "largetype", text: "看这里" }]);
+  });
+
+  it("文本视图同理，标题一起带回来", async () => {
+    const r = await runChain([{ id: "tv", type: "output.textview", config: { title: "结果" } }], "正文", true);
+    expect(r.outputs.length).toBe(1);
+    expect(r.outputs[0].kind).toBe("textview");
+    expect(r.outputs[0].title).toBe("结果");
+    expect(r.outputs[0].text).toBe("正文");
+  });
+
+  it("多个展示节点按执行顺序收集", async () => {
+    const r = await runChain([
+      { id: "a", type: "output.largetype" },
+      { id: "b", type: "output.textview", config: { title: "第二个" } },
+    ], "同一份内容", true);
+    expect(r.outputs.map((o) => o.kind)).toEqual(["largetype", "textview"]);
+  });
+
+  it("有人在看时 outputs 恒为空 —— 内容直接进了浮层，没有可回传的东西", async () => {
+    const r = await runChain([{ id: "lt", type: "output.largetype" }], "看这里");
+    expect(r.outputs).toEqual([]);
+  });
+});
+
+describe("无人在看时**照常执行**的那些", () => {
+  it("打开网址照常 —— 「让我的电脑去做件事」正是远程调用的主要用途", async () => {
+    openedUrls.length = 0;
+    const r = await runChain([{ id: "ws", type: "action.websearch" }], "关键词", true);
+    expect(r.reached).toBe(true);
+    expect(openedUrls.length).toBe(1);
+  });
+
+  it("系统通知照常 —— 它恰恰就是「人不在看应用时告诉他一声」的机制", async () => {
+    const r = await runChain([{ id: "n", type: "output.notify", config: { text: "跑完了" } }], "x", true);
+    expect(r.reached).toBe(true);
+    expect(r.feedback).not.toContain("需要有人在场");
+  });
+
+  it("纯逻辑节点不受上下文影响", async () => {
+    const r = await runChain([{ id: "tf", type: "utility.transform", config: { mode: "upper" } }], "abc", true);
+    expect(r.finalArg).toBe("ABC");
+  });
+
+  it("脚本节点照常跑，输出照常往下传", async () => {
+    const r = await runChain([{
+      id: "s", type: "action.script", config: { script: "echo hi" },
+    }], "x", true);
+    expect(r.finalArg).toBe("hi");
   });
 });
