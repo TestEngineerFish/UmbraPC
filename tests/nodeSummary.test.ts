@@ -1,4 +1,4 @@
-// 节点卡片摘要：对象库里 62 种节点逐个跑一遍。
+// 节点卡片摘要：对象库里 55 种节点逐个跑一遍。
 // 这份测试的真正价值是**防漏**——新加一个对象却忘了补摘要时，它会落到兜底分支，
 // 卡片上只剩一个类型名，肉眼很难发现；这里直接判死。
 import { describe, expect, it, vi } from "vitest";
@@ -61,15 +61,21 @@ const DEMO: Record<string, Cfg> = {
   "output.sound": { system: "Submarine" },
 };
 
-const ALL = CATALOG.flatMap((g) => g.items.map((i) => ({ type: i.type, soon: !!i.soon })));
+const ALL = CATALOG.flatMap((g) => g.items.map((i) => i.type));
 
 describe("对象库覆盖", () => {
-  it("62 种节点，7 种置灰、55 种可添加", () => {
-    expect(ALL.length).toBe(62);
-    expect(ALL.filter((x) => x.soon).length).toBe(7);
+  // 曾经有七个置灰占位项（Snippet / File Action / Contact Action / External /
+  // Call External Trigger / Remote / Automation Task），2026-07 一并移除，
+  // 连 soon 置灰机制也撤了。现在对象库里每一项都能加到画布上。
+  it("55 种节点，全部可添加", () => {
+    expect(ALL.length).toBe(55);
   });
 
-  it.each(ALL.map((x) => [x.type, x.soon] as [string, boolean]))("%s 的摘要成形", (type, soon) => {
+  it("没有重复的类型 —— 重复会让对象库出现两行一样的东西，且 TYPE_META 只留后一条", () => {
+    expect(new Set(ALL).size).toBe(ALL.length);
+  });
+
+  it.each(ALL)("%s 的摘要成形", (type) => {
     for (const cfg of [{}, DEMO[type] || {}]) {
       const rs = rows(type, cfg);
       expect(rs.length).toBeGreaterThan(0);
@@ -80,10 +86,8 @@ describe("对象库覆盖", () => {
         expect(r.v).toBeTruthy();
         expect(String(r.v)).not.toMatch(/undefined|NaN|\[object/);
       }
-      // 可添加的类型不许落到兜底分支（兜底那一行的字段名是「未登记」）
-      if (!soon) expect(rs[0].k).not.toBe("未登记");
-      // 置灰的类型统一走「暂未实现」
-      else expect(rs[0].k).toBe("状态");
+      // 一个都不许落到兜底分支（兜底那一行的字段名是「未登记」）
+      expect(rs[0].k).not.toBe("未登记");
     }
   });
 });

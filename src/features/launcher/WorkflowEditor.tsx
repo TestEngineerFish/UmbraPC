@@ -10,8 +10,8 @@ import {
   IconExternal, IconEye,
   IconFit, IconMinus,
   IconEyeOff, IconFile, IconFilter, IconFlow, IconFolder, IconGear, IconGlobe, IconGrid, IconInfinity, IconKeyboard,
-  IconLink, IconList, IconMusic, IconPanel, IconPhone, IconPlay, IconPlus, IconRedo, IconRefresh, IconRocket,
-  IconRuler, IconScissors, IconSearch, IconTag, IconTarget, IconTerminal, IconText, IconTrash, IconUndo, IconUser,
+  IconLink, IconList, IconMusic, IconPanel, IconPlay, IconPlus, IconRedo, IconRefresh, IconRocket,
+  IconRuler, IconScissors, IconSearch, IconTag, IconTarget, IconTerminal, IconText, IconTrash, IconUndo,
   IconVolume, IconWindow, IconX,
 } from "../../components/icons";
 import {
@@ -91,9 +91,8 @@ const TB = "w-8 h-[30px] flex-none flex items-center justify-center bg-transpare
 // 工作流列表每行第二行的说明文字：几个节点 + 靠什么触发。
 // 触发方式取第一个 trigger.* 节点，一条工作流通常只有一个；一个都没有时说清楚「还没有触发器」。
 const TRIGGER_SHORT: Record<string, string> = {
-  "trigger.keyword": "关键词", "trigger.hotkey": "热键", "trigger.always": "兜底触发",
-  "trigger.universal": "选中即用", "trigger.snippet": "片段", "trigger.external": "外部调用",
-  "trigger.remote": "远程", "trigger.fileaction": "文件动作", "trigger.contact": "联系人",
+  "trigger.keyword": "关键词", "trigger.hotkey": "热键", "trigger.always": "每次输入",
+  "trigger.universal": "选中即用",
 };
 function wfMeta(w: WF): string {
   const t = w.nodes.find((n) => n.type.startsWith("trigger."));
@@ -101,11 +100,35 @@ function wfMeta(w: WF): string {
 }
 
 // 对象清单：分组和命名对齐 Alfred，方便从 Alfred 迁过来的人直接照着找。
-// soon=true 的项是「Alfred 有、我们还没实现」的对象 —— 照旧列在对象库里但置灰不可添加，
-// 这样面板本身就是一张能力地图（哪些能用、哪些在路上一目了然），
-// 补齐时只要写好 runNode 分支再把 soon 去掉即可，面板结构不用动。
-// hint 是置灰项的悬停说明，写清楚「为什么还没做 / 打算怎么做」。
-interface CatItem { type: string; label: string; icon: IconComp; soon?: boolean; hint?: string }
+// ── 明确不做、已从对象库移除的 Alfred 对象 ────────────────────────────────────
+// 这些曾经以置灰占位的形式列在下面，2026-07 决定移除。理由集中记在这里，
+// 免得将来只看到「Alfred 有而我们没有」就当成漏项又加回去。想翻案时先读这一段。
+//
+//   Snippet 片段触发     打字触发：在任意输入框敲一段缩写就跑工作流，不弹面板。
+//                        要全局按键监听（逐个读系统里每一次按键）才能判断缩写。
+//                        实现形状和键盘记录器一样，而我们还存着密码保险箱 ——
+//                        要做得先定清楚监听范围、密码框里停不停、这段代码怎么让人信得过。
+//   File Action 文件动作  它是**扩展点**：把工作流挂进「选中文件后弹出的动作清单」。
+//                        我们没有那张清单，所以不是这个触发器难做，而是它要挂的东西不存在。
+//                        最接近的是 trigger.universal 把抓取源设成「选中的文件路径」。
+//   Contact Action        同上，挂在「联系人查看器」上。那个功能我们整个没有，也不打算做。
+//   External 外部调用     给别的程序留一个可被调用的入口（Alfred 走 AppleScript）。
+//   Call External Trigger 从一条工作流跳去触发另一条，是 External 的配套。
+//                        这两个的意图会被「把工作流做成设备能力、与技能同级」覆盖掉，
+//                        而那条路（走设备技能派发）在入口形状、鉴权、参数传递上都更清楚。
+//                        引擎侧的 runFromEditor(wfId, nodeId, arg) 已经是那个形状了。
+//                        真要做时按设备能力来设计，别照抄 Alfred 的 External。
+//   Remote 远程触发       手机端点一下触发桌面。等可信设备网络那一期，届时和上面一条同源。
+//   Automation Task       调用预置的系统自动化任务包。我们用「设备技能」对应，不另做一个。
+//
+// 移除的是**占位符，不是能力** —— 这七个从来没有引擎分支，删掉不影响任何已有功能。
+// 现在对象库里**每一项都能用**。曾经的置灰占位机制（soon 标记 + 「待实现」徽章）
+// 随上面那七项一起撤掉了。撤而不留，是因为一旦没有任何项在用它，那几个分支就再也不会
+// 被执行，而不执行的代码会随周边改动悄悄烂掉 —— 这轮改版就动过对象库的样式。
+// 将来真要再摆占位项，把标记加回来大约十行：CatItem 加字段、对象库按它置灰、
+// nodeRows 给它一行「暂未实现」。别为了「以后可能用」把死代码留在这儿。
+// hint 是悬停说明，写清楚这个对象干什么、有什么代价。
+interface CatItem { type: string; label: string; icon: IconComp; hint?: string }
 // 导出给测试遍历用（见 nodeRows 上面那句）。
 export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
   { cat: "触发 Triggers", icon: IconKeyboard, items: [
@@ -116,11 +139,6 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     // 名字也别叫 Fallback，写过 Alfred 工作流的人会照着 Fallback 的时机去设计，然后发现对不上。
     { type: "trigger.always", label: "Always 每次输入都跑", icon: IconInfinity, hint: "任意输入都会跑一遍下游的输入节点（计算器、单位换算这类），结果并入普通搜索。不是「搜不到才兜底」，是每次都并入。" },
     { type: "trigger.universal", label: "Universal Action 选中即用", icon: IconTarget },
-    { type: "trigger.snippet", label: "Snippet 片段触发", icon: IconScissors, soon: true, hint: "打字触发：输入约定的缩写就跑工作流。需要键盘监听，安全模型还没定，暂未实现。" },
-    { type: "trigger.external", label: "External 外部调用", icon: IconExternal, soon: true, hint: "给别的程序留一个可被调用的入口（命令行/URL Scheme）。等对外接口定稿后实现。" },
-    { type: "trigger.remote", label: "Remote 远程触发", icon: IconPhone, soon: true, hint: "手机端点一下触发桌面工作流。等可信设备网络那一期一起做。" },
-    { type: "trigger.fileaction", label: "File Action 文件动作", icon: IconFolder, soon: true, hint: "在文件管理器里选中文件后触发。要装 Finder 扩展/服务菜单，我们没走这条路——最接近的替代是「Universal Action 选中即用」把抓取源设成「选中的文件路径」，但代价要说清楚：那条路要占一个全局热键、要授权辅助功能、靠模拟 ⌘C 抓选区；Finder 右键那种「不用记快捷键、不用授权」的体验我们给不了。" },
-    { type: "trigger.contact", label: "Contact Action 联系人动作", icon: IconUser, soon: true, hint: "从通讯录联系人触发。我们暂时没有通讯录能力。" },
   ] },
   { cat: "输入 Inputs", icon: IconFilter, items: [
     { type: "input.scriptfilter", label: "Script Filter 脚本过滤器", icon: IconSearch },
@@ -170,7 +188,6 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "action.applescript", label: "Run AppleScript", icon: IconTerminal, hint: "跑一段 AppleScript，可拿回它的返回值。仅 macOS。" },
   ] },
   { cat: "自动化 Automations", icon: IconClock, items: [
-    { type: "automation.task", label: "Automation Task 自动化任务", icon: IconGear, soon: true, hint: "调用预置的系统自动化任务包。我们打算用「设备技能」来对应，先占位。" },
     { type: "automation.shortcut", label: "Run Shortcut 运行快捷指令", icon: IconGear, hint: "调用「快捷指令」App 里的一条指令，可传入参数、取回结果。需 macOS 12+。" },
     { type: "automation.system", label: "System Command 系统命令", icon: IconCommand, hint: "锁屏、睡眠、屏保、清废纸篓这类系统操作。仅 macOS。" },
     { type: "automation.music", label: "Music Command 音乐控制", icon: IconMusic, hint: "控制「音乐」App：播放/暂停、切歌、音量、看当前播放。仅 macOS。" },
@@ -183,7 +200,6 @@ export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
     { type: "output.keycombo", label: "Dispatch Key Combo 发送按键", icon: IconKeyboard, hint: "向前台应用发一组按键。需要辅助功能权限。" },
     { type: "output.speak", label: "Speak 朗读", icon: IconVolume, hint: "用系统语音把文本念出来（macOS 的 say / Windows 的 SAPI），不用装任何东西。" },
     { type: "output.sound", label: "Play Sound 播放提示音", icon: IconMusic, hint: "播一段提示音，用来给长链路收个尾。不填路径就用系统自带的提示音。" },
-    { type: "output.exttrigger", label: "Call External Trigger 调用外部触发", icon: IconRefresh, soon: true, hint: "从这条工作流跳去触发另一条工作流。等 External 触发做完配套。" },
   ] },
 ];
 const TYPE_META: Record<string, { label: string; icon: IconComp; kind: string }> = {};
@@ -201,11 +217,6 @@ export const NODE_SUB: Record<string, string> = {
   "trigger.hotkey": "任何应用里按下都能启动这条工作流",
   "trigger.always": "每次输入都跑一遍，结果并入普通搜索",
   "trigger.universal": "按热键抓走当前选区，拿它当参数开跑",
-  "trigger.snippet": "输入约定的缩写就触发（暂未实现）",
-  "trigger.external": "给别的程序留一个调用入口（暂未实现）",
-  "trigger.remote": "手机端点一下触发桌面（暂未实现）",
-  "trigger.fileaction": "在文件管理器里选中文件后触发（暂未实现）",
-  "trigger.contact": "从通讯录联系人触发（暂未实现）",
 
   "input.scriptfilter": "跑一段脚本，把它吐的 JSON 变成结果列表",
   "input.listfilter": "维护一张固定列表，按输入过滤后给出结果",
@@ -251,7 +262,6 @@ export const NODE_SUB: Record<string, string> = {
   "action.filebuffer": "把文件先攒起来，攒够了一次交给下游",
   "action.applescript": "跑一段 AppleScript，可以拿回它的返回值",
 
-  "automation.task": "调用预置的系统自动化任务包（暂未实现）",
   "automation.shortcut": "调用「快捷指令」App 里的一条指令",
   "automation.system": "锁屏、睡眠、屏保这类系统操作",
   "automation.music": "控制「音乐」App：播放、切歌、音量",
@@ -263,7 +273,6 @@ export const NODE_SUB: Record<string, string> = {
   "output.keycombo": "向前台应用发一组按键",
   "output.speak": "用系统语音把文本念出来",
   "output.sound": "播一段提示音",
-  "output.exttrigger": "跳去触发另一条工作流（暂未实现）",
 };
 // 弹窗宽度：默认 440（纯表单单列）。这里只登记要加宽的那些。
 // md=560：有脚本编辑区或内嵌两列表格；lg=720：一行三列以上的表格编辑器。
@@ -332,12 +341,11 @@ const KIND_STYLE: Record<string, { label: string; bg: string; fg: string }> = {
 // 拍平的对象清单（E1 搜索面板用）：分类信息一并带上，搜索时把分类名也算进匹配范围。
 // 只收已实现的 —— 搜索面板和右键菜单是「直接添加」的入口，置灰项混进去只会白点一下。
 const ALL_ITEMS: { type: string; label: string; icon: IconComp; cat: string }[] =
-  CATALOG.flatMap((g) => g.items.filter((it) => !it.soon).map((it) => ({ type: it.type, label: it.label, icon: it.icon, cat: g.cat })));
+  CATALOG.flatMap((g) => g.items.map((it) => ({ type: it.type, label: it.label, icon: it.icon, cat: g.cat })));
 // 右键菜单用的「分类 → 已实现对象」清单（空分类直接不出现）。
 // total 一并带上：右键菜单的分类行按设计稿显示「已实现/总数」，让菜单本身也是一张能力地图。
 const ADD_GROUPS: { cat: string; icon: IconComp; items: CatItem[]; total: number }[] =
-  CATALOG.map((g) => ({ cat: g.cat, icon: g.icon, items: g.items.filter((it) => !it.soon), total: g.items.length }))
-    .filter((g) => g.items.length > 0);
+  CATALOG.map((g) => ({ cat: g.cat, icon: g.icon, items: g.items, total: g.items.length }));
 
 function defaultConfig(type: string): Record<string, unknown> {
   switch (type) {
@@ -471,7 +479,7 @@ function Palette({ canConnect, onPick, onClose }: { canConnect: boolean; onPick:
 // ── 右侧对象库（布局参考 Alfred 的 Objects 面板）──
 // 默认收起（顶栏「对象库」按钮切换），画布因此能占满整个宽度；需要挑对象时再拉出来。
 // 分组可逐个折叠，顶部一个搜索框 + 全部展开/全部折叠两个箭头。
-// 未实现的对象（CATALOG 里 soon=true）照样列出来但置灰，悬停能看到原因。
+// 每个分类右侧的数字是这一类有几个对象；悬停某一项能看到它的说明。
 function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose }: {
   prefabs: WFPrefab[]; canAdd: boolean;
   onAdd: (type: string, alt: boolean) => void;
@@ -545,18 +553,17 @@ function ObjectLibrary({ prefabs, canAdd, onAdd, onPrefab, onDelPrefab, onClose 
               <button className={head(open)} onClick={() => setFold((f) => ({ ...f, [g.cat]: !f[g.cat] }))}>
                 <span className="flex-none transition-transform" style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}><IconChevronRight size={11} /></span>
                 <span className="flex-1 min-w-0 text-left text-[12px] font-semibold truncate">{g.cat}</span>
-                <span className={countPill(open)}>{g.items.filter((it) => !it.soon).length}/{g.items.length}</span>
+                <span className={countPill(open)}>{g.items.length}</span>
               </button>
               {open ? (
                 <div className={nest}>
                   {g.items.map((it) => (
-                    <button key={it.type} disabled={!canAdd || !!it.soon}
-                      title={it.soon ? `暂未实现：${it.hint || ""}` : it.type}
+                    <button key={it.type} disabled={!canAdd}
+                      title={it.hint || it.type}
                       onClick={(e) => onAdd(it.type, e.altKey)}
-                      className={`${row} ${it.soon ? "bg-transparent text-faint cursor-default" : "bg-transparent hover:bg-hover disabled:opacity-40"}`}>
-                      <span className={`w-5 h-5 flex-none flex items-center justify-center rounded-[5px] ${it.soon ? "text-faint" : "text-muted"}`}><it.icon size={14} /></span>
+                      className={`${row} bg-transparent hover:bg-hover disabled:opacity-40`}>
+                      <span className="w-5 h-5 flex-none flex items-center justify-center rounded-[5px] text-muted"><it.icon size={14} /></span>
                       <span className="flex-1 min-w-0 truncate">{it.label}</span>
-                      {it.soon ? <span className="flex-none whitespace-nowrap px-1.5 py-px rounded-full border border-border text-faint text-[10px] font-normal">待实现</span> : null}
                     </button>
                   ))}
                 </div>
@@ -1596,18 +1603,12 @@ function delim(kind: string, custom: string): string {
   return DELIM_LABEL[kind || "comma"] || kind;
 }
 
-// 对象库里 soon=true 的节点是置灰不可添加的，正常情况下画布上不会出现它们。
-// 这一行是为「万一出现」准备的（比如将来从 .alfredworkflow 导入进来的工作流里带着）：
-// 与其显示成一个看不出所以然的类型名，不如直说它还没实现。
-const SOON_ROWS: SumRow[] = [{ k: "状态", v: "暂未实现（对象库里置灰的那批）" }];
-const SOON_TYPES = new Set(CATALOG.flatMap((g) => g.items.filter((i) => i.soon).map((i) => i.type)));
-
 // 节点卡片正文：按类型给出「字段名 : 值」的键值行（最多两行，卡片放不下更多）。
-// 覆盖对象库里的全部 62 种：32 种可添加的各写一套，30 种置灰未实现的共用 SOON_ROWS。
+// 对象库里 55 种全部登记在册；万一遇到没登记的类型（比如从别处导入的工作流带来的），
+// 走最后的兜底分支，字段名是「未登记」。
 // 每一条都只描述**这个节点自己配了什么**，不复述类型名——类型名已经在卡片标题上了。
-// 导出是给 tests/nodeSummary.test.ts 用的：62 种节点逐个跑一遍，防止新加对象忘了补摘要。
+// 导出是给 tests/nodeSummary.test.ts 用的：55 种节点逐个跑一遍，防止新加对象忘了补摘要。
 export function nodeRows(n: WFNode): SumRow[] {
-  if (SOON_TYPES.has(n.type)) return SOON_ROWS;
   const c = n.config as Record<string, string>;
   const cfg = n.config as Record<string, unknown>;
   switch (n.type) {
