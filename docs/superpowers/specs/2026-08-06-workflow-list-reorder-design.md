@@ -18,7 +18,7 @@
 
 ## 交互
 
-1. 每行左侧增加 `IconGrip` 手柄，`title` 为「拖动调序」。
+1. 每行左侧只放 `IconGrip` 手柄图标，不附带文案，也不加 `title` 提示。
 2. 只有手柄上 `mousedown` 后允许 `dragstart`；点击行仍切换选中，右键仍打开现有 `wfMenu`。
 3. `wfQ` 非空（trim 后）时：手柄视觉更淡、`cursor-default`，禁止发起拖拽。
 4. 拖拽中：被拖行半透明（对齐常用语 `opacity-45`）；其它行跟手让位，FLIP 补动画。
@@ -28,7 +28,7 @@
 
 - 顺序 = `wfs` 数组下标；不新增 `order` 字段。
 - 拖拽中：`setWfs(reorder(...))` + `orderDirty`；**不**调用 `commit()`，不碰 `undoRef` / `redoRef`。
-- 松手：若 `orderDirty`，调用 `api.setWorkflows(wfs)`（或 `wfsRef.current`，与松手瞬间状态一致）。
+- 松手：若 `orderDirty`，用 `wfsRef.current` 调用 `api.setWorkflows`（避免 `endDrag` 闭包读到过期的 `wfs`）。
 - 防闪烁：越过目标行中线才换位 + FLIP 动画期间锁定（`lockUntil`，时长 `FLIP_MS = 180`）。
 - 新建仍追加末尾；`dupWf` 仍插在原条目下方（现有行为不变）。
 

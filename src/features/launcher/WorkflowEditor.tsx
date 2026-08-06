@@ -1,7 +1,7 @@
 // 工作流可视化编辑器（类 Alfred Workflow）。独立窗口：左工作流列表 / 中可拖拽画布 / 右节点面板。
 // 画布：节点按下任意处拖动、单击选中(Delete 删)、双击配置、右键菜单；端口拉线连接；
 // 连线徽章：单击选中、双击切换修饰键、右键删除；Cmd+Z 撤销；滚轮/按钮缩放；空白拖拽平移（无限画布）。
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ComponentType } from "react";
 import {
   IconAlert, IconBell, IconBook, IconBranch, IconBug, IconBulb, IconCalc, IconCalendar, IconChat, IconCheck,
@@ -9,7 +9,7 @@ import {
   IconDots, IconDownload,
   IconExternal, IconEye,
   IconFit, IconMinus,
-  IconEyeOff, IconFile, IconFilter, IconFlow, IconFolder, IconGear, IconGlobe, IconGrid, IconInfinity, IconKeyboard,
+  IconEyeOff, IconFile, IconFilter, IconFlow, IconFolder, IconGear, IconGlobe, IconGrid, IconGrip, IconInfinity, IconKeyboard,
   IconLink, IconList, IconMusic, IconPanel, IconPencil, IconPlay, IconPlus, IconRedo, IconRefresh, IconRocket,
   IconRuler, IconScissors, IconSearch, IconTag, IconTarget, IconTerminal, IconText, IconTrash, IconUndo,
   IconVolume, IconWindow, IconX,
@@ -81,6 +81,8 @@ interface LauncherAPI {
 const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
 
 const NODE_W = 252;   // 节点卡片宽度（对齐设计稿）
+// 左侧工作流列表拖拽让位动画时长（对齐常用语 PhrasesTool）。
+const FLIP_MS = 180;
 // 节点最小高度（框选命中判定 + 适应画布的包围盒用；多出口节点会更高但不影响判定）。
 // 88 = 头部 42 + 正文两行键值行（上下 8px 内边距 + 两行 15px + 行距 3px）+ 分隔线。
 // 正文从一行文字改成两行键值行时跟着加了 14 —— 不改的话卡片底部那一截框选选不中。
@@ -753,6 +755,15 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   const [note, setNote] = useState("");
   // 左侧工作流列的搜索词（名称 + 描述里搜）。只影响列表显示，不动选中项。
   const [wfQ, setWfQ] = useState("");
+  // 有搜索词时禁用列表拖拽 —— 过滤视图里挪位置，和全量顺序对不上。
+  const canReorder = !wfQ.trim();
+  // 列表拖拽调序（对齐常用语）：手柄发起 + 跟手重排 + FLIP；松手才落盘，不进撤销栈。
+  const [dragId, setDragId] = useState<string | null>(null);
+  const fromHandle = useRef(false);
+  const rowRefs = useRef(new Map<string, HTMLElement>());
+  const prevRects = useRef(new Map<string, DOMRect>());
+  const orderDirty = useRef(false);
+  const lockUntil = useRef(0);
   // 「全部快捷键」弹窗（底部快捷键条右侧那个入口）。
   const [showKeys, setShowKeys] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -787,6 +798,64 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   // 搜索后的工作流列表。搜索词为空就是全量，不做任何排序改动（顺序是用户自己排的）。
   const wfKw = wfQ.trim().toLowerCase();
   const wfList = wfKw ? wfs.filter((w) => `${w.name} ${w.desc || ""}`.toLowerCase().includes(wfKw)) : wfs;
+
+  // First：每次换位前把各行位置记下来，供 FLIP 的 Invert 用。
+  const snapshotRows = () => {
+    const m = new Map<string, DOMRect>();
+    rowRefs.current.forEach((el, id) => m.set(id, el.getBoundingClientRect()));
+    prevRects.current = m;
+  };
+
+  // Last + Invert + Play：DOM 已是新顺序，先用 transform 拉回旧位置再放开。
+  useLayoutEffect(() => {
+    rowRefs.current.forEach((el, id) => {
+      const before = prevRects.current.get(id);
+      if (!before) return;
+      const after = el.getBoundingClientRect();
+      const dy = before.top - after.top;
+      if (!dy) return;
+      if (id === dragId) return;
+      el.style.transition = "none";
+      el.style.transform = `translateY(${dy}px)`;
+      requestAnimationFrame(() => {
+        el.style.transition = `transform ${FLIP_MS}ms cubic-bezier(.2,.7,.3,1)`;
+        el.style.transform = "";
+      });
+    });
+    prevRects.current.clear();
+  }, [wfs, dragId]);
+
+  // 拖过某一行 → 把被拖项挪到该位置。中线判定 + 动画锁，缺一会闪烁。
+  const moveWfTo = (targetId: string, clientY: number) => {
+    if (!canReorder || !dragId || dragId === targetId) return;
+    if (Date.now() < lockUntil.current) return;
+    const list = wfsRef.current;
+    const from = list.findIndex((w) => w.id === dragId);
+    const to = list.findIndex((w) => w.id === targetId);
+    if (from < 0 || to < 0) return;
+    const el = rowRefs.current.get(targetId);
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const mid = r.top + r.height / 2;
+    if (to > from ? clientY < mid : clientY > mid) return;
+    lockUntil.current = Date.now() + FLIP_MS;
+    snapshotRows();
+    const next = list.slice();
+    const [it] = next.splice(from, 1);
+    next.splice(to, 0, it);
+    orderDirty.current = true;
+    setWfs(next);
+  };
+
+  const endWfDrag = () => {
+    setDragId(null);
+    lockUntil.current = 0;
+    fromHandle.current = false;
+    if (orderDirty.current) {
+      orderDirty.current = false;
+      void api.setWorkflows(wfsRef.current);
+    }
+  };
 
   // 提示文案 2.5 秒后自动消失。
   useEffect(() => { if (!note) return; const t = setTimeout(() => setNote(""), 2500); return () => clearTimeout(t); }, [note]);
@@ -1425,7 +1494,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
 
       <div className="flex flex-1 min-h-0">
         {/* 左：工作流列 200px（对齐设计稿）。头部一行标题 + 新建，下面一个搜索框；
-            列表每行是「图标方块 + 名称/说明两行 + 启停圆点」，删除按钮悬停才露出来。 */}
+            列表每行是「拖拽手柄 + 图标方块 + 名称/说明两行 + 启停圆点」。 */}
         <div className="w-[200px] flex-none border-r border-border bg-card flex flex-col min-h-0">
           <div className="flex-none flex flex-col gap-[9px] px-3 pt-[13px] pb-[10px] border-b border-border-soft">
             <div className="flex items-center justify-between gap-2">
@@ -1440,11 +1509,29 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
                 className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
             </div>
           </div>
-          <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-px">
+          <div className="flex-1 overflow-y-auto p-2 flex flex-col gap-px" onDragEnd={endWfDrag}>
             {wfList.map((w) => {
               const sel = w.id === curId;
               return (
-                <button key={w.id} title={w.desc || "还没写描述"}
+                <div key={w.id}
+                  ref={(el) => { if (el) rowRefs.current.set(w.id, el); else rowRefs.current.delete(w.id); }}
+                  draggable={canReorder}
+                  onDragStart={(e) => {
+                    // 只有手柄上按下才真拖；否则点行选中会被浏览器当成拖拽。
+                    if (!canReorder || !fromHandle.current) { e.preventDefault(); return; }
+                    lockUntil.current = 0;
+                    setDragId(w.id);
+                    e.dataTransfer.effectAllowed = "move";
+                    e.dataTransfer.setData("text/plain", w.id);
+                  }}
+                  onDragEnd={endWfDrag}
+                  onDragOver={(e) => {
+                    if (!dragId) return;
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    moveWfTo(w.id, e.clientY);
+                  }}
+                  onDrop={(e) => { e.preventDefault(); endWfDrag(); }}
                   onClick={() => { setCurId(w.id); setSelNode(null); setSelConn(null); setSelSet([]); }}
                   onContextMenu={(e) => {
                     // 先把这一行设为选中项再开菜单：菜单里的操作都是针对「这一条」的，
@@ -1453,23 +1540,34 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
                     setCurId(w.id); setSelNode(null); setSelConn(null); setSelSet([]);
                     setWfMenu({ x: e.clientX, y: e.clientY, id: w.id });
                   }}
-                  className={`w-full flex items-center gap-[9px] px-[8px] py-[7px] rounded-[8px] border-none text-[12.5px] ${
-                    sel ? "bg-orange-soft text-orange-text font-semibold" : "bg-transparent text-text font-normal hover:bg-hover"}`}>
-                  <span className={`w-[24px] h-[24px] flex-none rounded-[6px] overflow-hidden flex items-center justify-center ${
-                    sel ? "bg-[rgba(232,89,12,.14)] text-orange-text" : "bg-chip text-muted"}`}>
-                    <WfIcon w={w} size={14} />
+                  className={`w-full flex items-stretch pr-[6px] rounded-[8px] text-[12.5px] cursor-pointer ${
+                    dragId === w.id ? "opacity-45 " : ""
+                  }${sel ? "bg-orange-soft text-orange-text font-semibold" : "bg-transparent text-text font-normal hover:bg-hover"}`}>
+                  {/* 手柄热区：撑满行高，宽度从行左缘到工作流图标左缘（含原左内边距与间距）。 */}
+                  <span
+                    onMouseDown={(e) => { if (!canReorder) return; e.stopPropagation(); fromHandle.current = true; }}
+                    onMouseUp={() => { fromHandle.current = false; }}
+                    className={`flex-none self-stretch flex items-center justify-center pl-[6px] pr-[7px] ${
+                      canReorder ? "text-faint cursor-grab active:cursor-grabbing hover:text-orange-text" : "text-faint opacity-35 cursor-default"}`}>
+                    <IconGrip size={12} />
                   </span>
-                  <span className="flex-1 min-w-0 text-left">
-                    <span className="block overflow-hidden text-ellipsis whitespace-nowrap">{w.name}</span>
-                    {/* 第二行是描述而不是「N 个节点 · 关键词」：节点数看一眼画布就知道，
-                        而「这条工作流是干什么的」只有描述答得上来。最多两行，超出省略，完整走 title。 */}
-                    <span className="block mt-[2px] text-[10.5px] leading-[1.5] font-normal text-faint [display:-webkit-box] [-webkit-line-clamp:2] [-webkit-box-orient:vertical] overflow-hidden [text-wrap:pretty]">
-                      {w.desc || "还没写描述"}
+                  <span className="flex-1 min-w-0 flex items-center gap-[7px] py-[7px]">
+                    <span className={`w-[22px] h-[22px] flex-none rounded-[6px] overflow-hidden flex items-center justify-center ${
+                      sel ? "bg-[rgba(232,89,12,.14)] text-orange-text" : "bg-chip text-muted"}`}>
+                      <WfIcon w={w} size={13} />
                     </span>
+                    <span className="flex-1 min-w-0 text-left">
+                      <span className="block overflow-hidden text-ellipsis whitespace-nowrap">{w.name}</span>
+                      {/* 第二行是描述而不是「N 个节点 · 关键词」：节点数看一眼画布就知道，
+                          而「这条工作流是干什么的」只有描述答得上来。最多两行，超出省略。 */}
+                      <span className="block mt-[2px] text-[10.5px] leading-[1.5] font-normal text-faint [display:-webkit-box] [-webkit-line-clamp:2] [-webkit-box-orient:vertical] overflow-hidden [text-wrap:pretty]">
+                        {w.desc || "还没写描述"}
+                      </span>
+                    </span>
+                    {/* 启停指示：启用是实心绿点，停用是空心圈 —— 和头部徽标同一套语义。 */}
+                    <span className={`w-[6px] h-[6px] flex-none rounded-full ${w.enabled === false ? "border-[1.5px] border-border" : "bg-success"}`} />
                   </span>
-                  {/* 启停指示：启用是实心绿点，停用是空心圈 —— 和头部徽标同一套语义。 */}
-                  <span className={`w-[6px] h-[6px] flex-none rounded-full ${w.enabled === false ? "border-[1.5px] border-border" : "bg-success"}`} />
-                </button>
+                </div>
               );
             })}
             {!wfs.length ? <div className="px-2 py-3 text-[11.5px] text-muted leading-[1.6]">还没有工作流，点右上角「新建」开一条。</div> : null}
