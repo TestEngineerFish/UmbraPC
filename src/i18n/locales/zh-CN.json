@@ -8,7 +8,8 @@
     "realtime": "实时操作",
     "tools": "工具",
     "logs": "日志",
-    "settings": "设置"
+    "settings": "设置",
+    "notify": "提醒"
   },
   "tools": {
     "clipboardDesc": "复制过的文本、图片、文件都会留在这里，按快捷键随时翻出来。",

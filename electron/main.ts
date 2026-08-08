@@ -15,6 +15,7 @@ import { ScreenshotManager } from "./core/screenshot";
 import { LauncherManager } from "./core/launcher";
 import { VaultManager } from "./core/vault";
 import { registerRuntimeIpc } from "./core/runtime";
+import { NotifyManager } from "./core/notify";
 import { getMainLocale, resolveLocale, setMainLocale } from "./i18n";
 import { cancelAgentTask, killAllAgentChildren } from "./core/providers/agent";
 
@@ -57,6 +58,7 @@ let clipboard: ClipboardManager;
 let screenshot: ScreenshotManager;
 let launcher: LauncherManager;
 let vault: VaultManager;
+let notify: NotifyManager;
 let mainWindow: BrowserWindow | null = null; // 显式跟踪主窗口：剪贴板/截图的隐藏窗口会让 getAllWindows() 恒 >0，不能靠它判断
 let tray: Tray | null = null;
 let quitting = false; // true 时才真正退出（关窗默认只隐藏）
@@ -457,9 +459,23 @@ app.whenReady().then(async () => {
     }
   });
   vault = new VaultManager(store, app.getPath("userData"), winOpts, { copyConceal: (t) => clipboard.writeConcealed(t) }, reregisterShortcuts);
+  // 提醒：到点触发全靠本机扫描（服务端只存不调度）。
+  // 点通知本体 → 唤起主窗口并跳到提醒页；id 为空表示只跳列表（错过摘要那条）。
+  notify = new NotifyManager(store, app.getPath("userData"), {
+    showMainWindow,
+    openReminder: (id: string) => {
+      const w = mainWindow;
+      if (!w || w.isDestroyed()) return;
+      const post = () => w.webContents.send("notify:open", id);
+      if (w.webContents.isLoading()) w.webContents.once("did-finish-load", post); else post();
+    },
+  }, () => {
+    const w = mainWindow;
+    if (w && !w.isDestroyed()) w.webContents.send("notify:changed");
+  });
   // 工作流配置项里的密钥存保险箱（W10）：launcher 先于 vault 建好，所以建完再回填。
   launcher.setVault(vault);
-  Promise.all([clipboard.init(), screenshot.init(), launcher.init(), vault.init()])
+  Promise.all([clipboard.init(), screenshot.init(), launcher.init(), vault.init(), notify.init()])
     .then(() => {
       reregisterShortcuts(); // 就绪后统一注册各自快捷键
       // 预热高频窗口：截图 / 剪贴板面板。它们的第一次唤起要现场建窗 + 加载页面 + 首帧，
@@ -469,7 +485,7 @@ app.whenReady().then(async () => {
         clipboard.warmup();
       }, 1500);
     })
-    .catch((e) => console.error("剪贴板/截图/快捷入口/保险箱初始化失败", e));
+    .catch((e) => console.error("剪贴板/截图/快捷入口/保险箱/提醒初始化失败", e));
 
   // 点 Dock 图标：唤起主窗口（不能靠 getAllWindows().length===0 判断，
   // 剪贴板/截图的隐藏窗口会让它恒 >0）。

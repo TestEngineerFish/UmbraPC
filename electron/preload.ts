@@ -281,3 +281,26 @@ contextBridge.exposeInMainWorld("umbraSticker", {
 contextBridge.exposeInMainWorld("umbraRuntime", {
   scan: (kind: string) => ipcRenderer.invoke("runtime:scan", kind),
 });
+
+// 提醒桥。到点触发在主进程（服务端只存不调度），这里只做增删改查与变更订阅。
+contextBridge.exposeInMainWorld("umbraNotify", {
+  list: () => ipcRenderer.invoke("notify:list"),
+  state: () => ipcRenderer.invoke("notify:state"),
+  save: (r: unknown) => ipcRenderer.invoke("notify:save", r),
+  remove: (id: string) => ipcRenderer.invoke("notify:delete", id),
+  setDone: (id: string, done: boolean) => ipcRenderer.invoke("notify:setDone", id, done),
+  snooze: (id: string, minutes: number) => ipcRenderer.invoke("notify:snooze", id, minutes),
+  syncNow: () => ipcRenderer.invoke("notify:syncNow"),
+  // 数据变了（本地改动 / 同步拉到别的端的修改 / 重复提醒被推进）→ 列表重拉一次。
+  onChanged: (cb: () => void) => {
+    const l = () => cb();
+    ipcRenderer.on("notify:changed", l);
+    return () => ipcRenderer.removeListener("notify:changed", l);
+  },
+  // 点通知本体进来的深链。id 为空串表示只跳列表（错过摘要那条通知）。
+  onOpen: (cb: (id: string) => void) => {
+    const l = (_e: unknown, id: string) => cb(id);
+    ipcRenderer.on("notify:open", l);
+    return () => ipcRenderer.removeListener("notify:open", l);
+  },
+});

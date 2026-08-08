@@ -60,6 +60,11 @@ export interface UmbraConfig {
   // ── 外观 / 常驻 ──
   // 菜单栏（macOS 状态栏）图标。关掉之后关窗就是真退出 —— 否则应用会变成既没窗口也没入口的幽灵。
   trayEnabled: boolean;
+  // ── 提醒 ──
+  // 总开关。关掉之后不扫描、不弹通知，但数据照常同步（手机上还看得见）。
+  notifyEnabled: boolean;
+  // 通知上「再等一会儿」按钮的分钟数。与 iOS 的通知动作保持一致，默认 10。
+  notifySnoozeMin: number;
 }
 
 // 剪贴板历史的分类保留时长（单位：小时）。
@@ -242,6 +247,8 @@ function defaults(configDir: string): UmbraConfig {
     launcherPrefabs: [],
     launcherMaxResults: Number(process.env.UMBRA_LAUNCHER_MAX_RESULTS || 12),
     trayEnabled: envBool("UMBRA_TRAY_ENABLED", true),
+    notifyEnabled: envBool("UMBRA_NOTIFY_ENABLED", true),
+    notifySnoozeMin: 10,
     launcherFallbackAssistant: envBool("UMBRA_LAUNCHER_FALLBACK_ASSISTANT", true),
     launcherScriptsMigrated: false,
   };

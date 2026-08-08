@@ -8,6 +8,7 @@ import { Realtime } from "../features/realtime/Realtime";
 import { Tasks } from "../features/tasks/Tasks";
 import { Workspaces } from "../features/workspaces/Workspaces";
 import { Inspirations } from "../features/inspiration/Inspirations";
+import { Reminders } from "../features/notify/Reminders";
 import { Abilities } from "../features/abilities/Abilities";
 import { Tools } from "../features/tools/Tools";
 import { subscribeLocale } from "../i18n";
@@ -60,6 +61,8 @@ export function App() {
             <Workspaces />
           ) : nav === "inspiration" ? (
             <Inspirations />
+          ) : nav === "notify" ? (
+            <Reminders />
           ) : nav === "abilities" ? (
             <Abilities />
           ) : nav === "tools" ? (

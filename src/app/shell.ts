@@ -10,7 +10,7 @@ import * as chat from "../features/chat/chat";
 import * as desktop from "../services/desktop";
 import { t } from "../i18n";
 
-export type Nav = "chat" | "tasks" | "workspaces" | "inspiration" | "abilities" | "realtime" | "tools" | "logs" | "settings";
+export type Nav = "chat" | "tasks" | "workspaces" | "inspiration" | "notify" | "abilities" | "realtime" | "tools" | "logs" | "settings";
 
 // 外观偏好的持久化 key。标题栏那颗按钮与设置页的「外观」是同一份状态，
 // 独立窗口（保险箱 vault.html / 工作流 workflow.html）与主窗口同源共享 localStorage，
@@ -142,6 +142,7 @@ const SVG = {
   realtime: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg>`,
   logs: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"></rect><path d="M6.5 9l3 2.5-3 2.5M12 15h5"></path></svg>`,
   settings: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><circle cx="16" cy="7" r="2.4"></circle><circle cx="8" cy="17" r="2.4"></circle></svg>`,
+  notify: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg>`,
   tools: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5a4 4 0 0 0 5 5L9 19a3 3 0 1 1-4-4z"></path></svg>`,
 };
 
@@ -209,6 +210,7 @@ function sidebar(): string {
     ${navItem("tasks", t("nav.tasks"), SVG.tasks)}
     ${navItem("workspaces", t("nav.workspaces"), SVG.workspaces)}
     ${navItem("inspiration", t("nav.inspiration"), SVG.inspiration)}
+    ${navItem("notify", t("nav.notify"), SVG.notify)}
     ${navItem("abilities", t("nav.abilities"), SVG.abilities)}
     ${navItem("realtime", t("nav.realtime"), SVG.realtime)}
     ${navItem("tools", t("nav.tools"), SVG.tools)}

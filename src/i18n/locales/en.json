@@ -8,7 +8,8 @@
     "realtime": "Realtime",
     "tools": "Tools",
     "logs": "Logs",
-    "settings": "Settings"
+    "settings": "Settings",
+    "notify": "Reminders"
   },
   "tools": {
     "clipboardDesc": "Everything you copy stays here — text, images and files, one shortcut away.",
