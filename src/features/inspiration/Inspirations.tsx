@@ -10,8 +10,12 @@ import {
   IconArrowRight, IconBulb, IconChat, IconCheck, IconCopy, IconKeyboard,
   IconPencil, IconPhone, IconPlus, IconSearch, IconTrash,
 } from "../../components/icons";
-import { createInspiration, deleteInspirations, fetchJobDetail, updateInspiration } from "../../services/server";
+import {
+  createInspiration, deleteInspirations, fetchJobDetail, organizeStateOf,
+  requestInspirationResearch, researchInFlight, researchStateOf, updateInspiration,
+} from "../../services/server";
 import type { Inspiration, Job } from "../../services/server";
+import { mdToHtml } from "../chat/markdown";
 
 type Filter = "" | "open" | "done" | "archived";
 type Sort = "recent" | "updated" | "tag";
@@ -286,8 +290,15 @@ function Card({ item, on, tag, onPick }: { item: Inspiration; on: boolean; tag: 
       </div>
       <div className="text-[13.5px] font-semibold mt-[8px] leading-[1.4] line-clamp-2">{title}</div>
       <div className="text-[12px] text-muted mt-[6px] leading-[1.65] whitespace-pre-wrap line-clamp-3">{item.raw}</div>
-      {item.tags.length ? (
+      {item.tags.length || organizeStateOf(item) === "pending" || researchInFlight(item) ? (
         <div className="flex flex-wrap gap-[4px] mt-[9px]">
+          {/* 进行时提示用 faint 字，别和用户自己打的标签抢注意力 */}
+          {organizeStateOf(item) === "pending" ? (
+            <span className="flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] bg-chip text-faint">{t("inspiration.organizing")}</span>
+          ) : null}
+          {researchInFlight(item) ? (
+            <span className="flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] bg-chip text-faint">{t("inspiration.researching")}</span>
+          ) : null}
           {item.tags.slice(0, 4).map((g, k) => <span key={k} className={tagChip(tag === g)}>{g}</span>)}
         </div>
       ) : null}
@@ -376,7 +387,15 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
             <div className="text-[12.5px] leading-[1.7] text-orange-text" style={{ textWrap: "pretty" } as React.CSSProperties}>{item.summary}</div>
           </div>
         </div>
+      ) : organizeStateOf(item) === "pending" ? (
+        // 手动记完立刻点进来，这一节空着会让人以为没在整理，转头就自己去填标题了。
+        <div>
+          <SecLabel>{t("inspiration.summaryLabel")}</SecLabel>
+          <div className="text-[12px] text-faint leading-[1.7]">{t("inspiration.organizingHint")}</div>
+        </div>
       ) : null}
+
+      <Research item={item} onChanged={onChanged} />
 
       <div>
         <SecLabel>{t("inspiration.railTags")}</SecLabel>
@@ -428,6 +447,79 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
   </>);
 }
 
+// 详情栏的「秘书调研」一节。
+//
+// 四个状态各画各的，**不合并成「有内容就显示」**：「还没查过」和「查了但失败了」
+// 对用户是完全不同的两件事 —— 前者该给按钮，后者该说清为什么再给重试。
+// 合成一个的话失败会静默退化成「没查过」，用户点了半天不知道一直在失败。
+function Research({ item, onChanged }: { item: Inspiration; onChanged: () => void }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const state = researchStateOf(item);
+
+  const go = async () => {
+    if (busy) return;
+    setBusy(true);
+    setFailed(false);
+    const ok = await requestInspirationResearch(item.id);
+    setBusy(false);
+    // 没排上就如实说（多半是服务端还没升级到带这个路由的版本），
+    // 不要静默失败 —— 那样用户只会以为按钮坏了，一直点。
+    if (!ok) { setFailed(true); return; }
+    onChanged();
+  };
+
+  const askBtn = (label: string) => (
+    <button disabled={busy} onClick={go}
+      className="flex-none whitespace-nowrap px-[11px] py-[6px] border border-border bg-transparent text-text rounded-[8px] text-[12px] cursor-pointer hover:border-orange hover:text-orange-text disabled:opacity-45">
+      {busy ? t("inspiration.researchQueuing") : label}
+    </button>
+  );
+
+  return (
+    <div>
+      <SecLabel>{t("inspiration.researchLabel")}</SecLabel>
+
+      {state === "queued" || state === "running" ? (
+        <div className="text-[12px] text-muted leading-[1.7] border border-border rounded-[10px] p-[10px_12px]">
+          {t(state === "queued" ? "inspiration.researchQueued" : "inspiration.researchRunning")}
+        </div>
+      ) : state === "done" && item.research ? (
+        <div className="border border-border rounded-[10px] p-[11px_12px]">
+          {/* 服务端产出的是 Markdown（要点 + 链接）。mdToHtml 是先整体转义再替换标记的，
+              注入不进来，可以放心 dangerouslySetInnerHTML。 */}
+          <div className="text-[12.5px] leading-[1.75]" dangerouslySetInnerHTML={{ __html: mdToHtml(item.research) }} />
+          <div className="flex items-center gap-[8px] mt-[9px] pt-[8px] border-t border-border-soft">
+            <span className="flex-1 text-[10.5px] text-faint whitespace-nowrap">
+              {item.research_at ? `${t("inspiration.researchAt")} ${legacy.fmtListTime(item.research_at)}` : ""}
+            </span>
+            {askBtn(t("inspiration.researchAgain"))}
+          </div>
+        </div>
+      ) : state === "failed" ? (
+        <div className="border border-border rounded-[10px] p-[10px_12px] flex flex-col gap-[9px]">
+          {/* 失败原因是服务端写进 research 的（没配搜索 key？模型限流？），原样显示，
+              不要翻译成「出错了」这种等于没说的话。 */}
+          <div className="text-[12px] text-muted leading-[1.7] whitespace-pre-wrap">
+            {item.research || t("inspiration.researchFailed")}
+          </div>
+          <div className="flex"><span className="flex-1" />{askBtn(t("inspiration.researchRetry"))}</div>
+        </div>
+      ) : (
+        <div className="flex items-start gap-[10px]">
+          <div className="flex-1 text-[12px] text-muted leading-[1.7]">{t("inspiration.researchHint")}</div>
+          {askBtn(t("inspiration.researchAsk"))}
+        </div>
+      )}
+
+      {failed ? (
+        <div className="text-[11px] text-danger mt-[6px] leading-[1.6]">{t("inspiration.researchQueueFailed")}</div>
+      ) : null}
+    </div>
+  );
+}
+
 // 记灵感 / 编辑弹窗（item 为 null 时是新增）。⌘↩ / Ctrl+↩ 直接保存。
 function Editor({ item, onClose, onSaved }: { item: Inspiration | null; onClose: () => void; onSaved: () => void }) {
   const { t } = useTranslation();
@@ -435,13 +527,15 @@ function Editor({ item, onClose, onSaved }: { item: Inspiration | null; onClose:
   const [title, setTitle] = useState(item?.title || "");
   const [tags, setTags] = useState((item?.tags || []).join(", "));
   const [busy, setBusy] = useState(false);
+  // **默认关**（2026-08-08 与用户确认）：想查再勾，不是不想查再取消。
+  const [research, setResearch] = useState(false);
 
   const parseTags = () => tags.split(/[,，]/).map((s) => s.trim()).filter(Boolean);
   const save = async () => {
     if (!raw.trim() || busy) return;
     setBusy(true);
     if (item) await updateInspiration(item.id, { raw, title, tags: parseTags() });
-    else await createInspiration({ raw, title, tags: parseTags() });
+    else await createInspiration({ raw, title, tags: parseTags(), research });
     setBusy(false);
     onSaved();
   };
@@ -479,6 +573,18 @@ function Editor({ item, onClose, onSaved }: { item: Inspiration | null; onClose:
           <span className="flex-none text-orange-text"><IconBulb size={13} /></span>
           <span className="flex-1 text-[11.5px] text-orange-text leading-[1.55]">{t("inspiration.autoFillHint")}</span>
         </div>
+        {/* 「顺便查一查」只在新建时出现 —— 改一条已有灵感时想查，详情栏有「帮我查查」，
+            在这儿再放一个只会让人搞不清点了会不会重查一遍。 */}
+        {item ? null : (
+          <label className="flex items-start gap-[9px] border border-border rounded-[9px] p-[9px_11px] cursor-pointer hover:border-orange">
+            <input type="checkbox" checked={research} onChange={(e) => setResearch(e.target.checked)}
+              className="flex-none mt-[2px] accent-[var(--orange)] cursor-pointer" />
+            <span className="flex-1">
+              <span className="block text-[12.5px]">{t("inspiration.researchOnCreate")}</span>
+              <span className="block text-[11px] text-faint leading-[1.6] mt-[2px]">{t("inspiration.researchOnCreateHint")}</span>
+            </span>
+          </label>
+        )}
       </div>
     </Modal>
   );

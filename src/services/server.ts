@@ -489,7 +489,24 @@ export interface Inspiration {
   job_id?: string; // 已落地成任务时指向 tasks.id；空串表示没关联
   created_at?: string;
   updated_at?: string;
+
+  // 下面四个都是**可选**：连到还没升级的服务端时字段是缺的。
+  // 界面一律走 organizeStateOf / researchStateOf 取值，别直接读裸字段。
+  /** pending 待补整理 | done 已整理 | failed 整理失败 */
+  organize_status?: string;
+  /** 轻调研纪要（Markdown）。没查过是空串 */
+  research?: string;
+  /** idle | queued | running | done | failed */
+  research_status?: string;
+  research_at?: string;
 }
+
+export const organizeStateOf = (i: Inspiration): string => i.organize_status || "done";
+export const researchStateOf = (i: Inspiration): string => i.research_status || "idle";
+export const researchInFlight = (i: Inspiration): boolean => {
+  const s = researchStateOf(i);
+  return s === "queued" || s === "running";
+};
 
 // 各状态的灵感条数。筛选栏要同时显示四个数字，列表接口按 status 查不出来。
 export interface InspirationCounts {
@@ -529,6 +546,9 @@ export async function createInspiration(body: {
   title?: string;
   summary?: string;
   tags?: string[];
+  /** 顺便让秘书查一查。**默认不查**——每条都自动查会烧 token，
+   *  灵感列表也会变成一堆没人读的半成品报告。 */
+  research?: boolean;
 }): Promise<Inspiration | null> {
   try {
     const r = await fetch(`${getServerUrl()}/inspirations`, {
@@ -553,6 +573,22 @@ export async function updateInspiration(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch {
+    return null;
+  }
+}
+
+/** 「帮我查查」：把这条排进调研队列。
+ *
+ * 只排队不等结果 —— 一轮调研（搜索 + 模型汇总）几十秒，HTTP 上干等必然超时。
+ * 返回的是刚置成 queued 的那条；进度靠 shell 那边 5 秒一轮的轮询拉回来。
+ * 返回 null = 没排上（服务端旧版没这个路由，或网络断了），调用方要如实提示。
+ */
+export async function requestInspirationResearch(id: number): Promise<Inspiration | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/inspirations/${id}/research`, { method: "POST" });
     if (!r.ok) return null;
     return await r.json();
   } catch {
