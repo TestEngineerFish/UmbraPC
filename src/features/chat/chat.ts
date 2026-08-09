@@ -21,6 +21,7 @@ import {
   type KnownDevice,
 } from "../../services/server";
 import { getDesktopConfig } from "../../services/desktop";
+import { hasNotify, notifyApi } from "../notify/bridge";
 import { mdToHtml } from "./markdown";
 import { t } from "../../i18n";
 
@@ -262,6 +263,29 @@ function autoApproveIfEnabled(taskId: string | undefined, scope?: string): void 
   resolveConfirm(taskId, true);
 }
 
+// 提醒变更 → 让主进程立刻拉一次。
+//
+// **为什么必须有这一下**：主进程的提醒同步是 5 分钟一轮（PULL_INTERVAL_MS）。
+// 用户在聊天里说「5 分钟后提醒我」，秘书答应了，这台电脑却要到下一轮才知道有这条 ——
+// 到点什么也不会响。服务端建/改/删完就广播，这里收到就同步。
+//
+// 攒 300ms 再发：秘书一次可能建好几条（每条一个广播），逐条同步纯属浪费。
+// 只有桌面端有提醒模块，Web 端 hasNotify=false，整段跳过。
+//
+// ⚠️ 已知边界：/ws/chat 是 ensureStarted() 里连的，而它只在**首次进聊天页**时跑。
+// 所以「开了 App 但一次都没点进聊天」的情况下收不到广播，提醒仍要等 5 分钟的定时拉。
+// 实际影响很小（秘书建提醒时用户必然就在聊天页），真要补就得让 App 启动即连 —— 那是
+// 另一个决定（会连带在启动时拉会话列表和历史），别顺手改。
+let reminderSyncTimer: number | undefined;
+function syncRemindersSoon(): void {
+  if (!hasNotify) return;
+  if (reminderSyncTimer !== undefined) clearTimeout(reminderSyncTimer);
+  reminderSyncTimer = window.setTimeout(() => {
+    reminderSyncTimer = undefined;
+    void notifyApi().syncNow();
+  }, 300);
+}
+
 function onMessage(msg: any): void {
   let target = convOf(msg);
   switch (msg.type) {
@@ -305,6 +329,13 @@ function onMessage(msg: any): void {
     case "device_presence": {
       // 设备上/下线：刷新联系人列表（顺带更新能力目录）。
       loadDevices();
+      return;
+    }
+    case "reminder_updated":
+    case "reminder_deleted": {
+      // 提醒被任一端（含秘书自己）建/改/撤 → 立刻同步，别等下一轮。
+      // return 不 break：这类事件不属于任何聊天会话，不该走后面的重绘。
+      syncRemindersSoon();
       return;
     }
     case "device_message": {

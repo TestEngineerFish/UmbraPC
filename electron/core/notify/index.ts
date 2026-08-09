@@ -45,6 +45,8 @@ export class NotifyManager {
   private scanTimer: NodeJS.Timeout | undefined;
   private pullTimer: NodeJS.Timeout | undefined;
   private pushTimer: NodeJS.Timeout | undefined;
+  /** 同步进行中又来了新请求 → 跑完补一轮，别把请求丢了（见 sync 的注释）。 */
+  private resyncRequested = false;
   private onChanged: () => void;
 
   // onChanged：数据变化后回调，让渲染层刷新提醒列表。
@@ -259,8 +261,27 @@ export class NotifyManager {
    * 顺序不能反：先拉的话，紧接着的服务端旧值会盖掉本地还没推上去的修改。
    * 任何一步失败都**不动本地数据** —— 断网时提醒必须照常能用。
    */
+  /**
+   * 同步一轮。同步进行中再调**不会丢**——记一笔，等这轮跑完自动补跑。
+   *
+   * 原来是直接 `return false`。秘书在聊天里建提醒时，广播常常紧跟在别的同步
+   * 后面到达，一丢就等于这条提醒要等下一轮定时拉（5 分钟）——而「5 分钟后
+   * 提醒我」根本等不到。下拉刷新连点、启动与首次进页面撞一起也是同一个问题。
+   */
   async sync(): Promise<boolean> {
-    if (this.state.syncing) return false;
+    if (this.state.syncing) {
+      this.resyncRequested = true;
+      return false;
+    }
+    let ok = false;
+    do {
+      this.resyncRequested = false;
+      ok = await this.syncOnce();
+    } while (this.resyncRequested);
+    return ok;
+  }
+
+  private async syncOnce(): Promise<boolean> {
     if (!this.api.isConfigured()) {
       this.state.lastError = "";
       return false;
