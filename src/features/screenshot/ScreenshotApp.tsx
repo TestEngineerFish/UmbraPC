@@ -1264,12 +1264,14 @@ function Toolbar(props: {
 // 主题感知样式：跟随系统浅/深色（prefers-color-scheme）。参考微信截图工具栏。
 const TOOLBAR_CSS = `
 :root{
+  color-scheme:light;
   --tb-bg:#ffffff; --tb-fg:#3b3f45; --tb-sep:#e6e3dc; --tb-hover:#f1efeb;
   --tb-active-bg:#FFF1E6; --tb-active-fg:#E8590C; --tb-shadow:0 6px 22px rgba(0,0,0,.16);
   --tb-dot:#9aa0a6; --tb-dot-on:#E8590C;
 }
 @media (prefers-color-scheme: dark){
   :root{
+    color-scheme:dark;
     --tb-bg:#2b2b2e; --tb-fg:#e6e6ea; --tb-sep:#4a4a4e; --tb-hover:#3a3a3e;
     --tb-active-bg:rgba(232,89,12,.24); --tb-active-fg:#F5A66A; --tb-shadow:0 6px 22px rgba(0,0,0,.4);
     --tb-dot:#8a8f96; --tb-dot-on:#F5A66A;

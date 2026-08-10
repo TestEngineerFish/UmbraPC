@@ -23,7 +23,9 @@ const api = (window as unknown as { umbraText: TextAPI }).umbraText;
 
 const style = document.createElement("style");
 style.textContent = `
-  html,body{margin:0;height:100%;background:transparent;overflow:hidden;
+  /* 这个浮层永远是深色卡片，所以固定声明 color-scheme:dark：
+     系统处在浅色时，原生滚动条/选中色会按浅色渲染，压在深底上是一道白杠。 */
+  html,body{color-scheme:dark;margin:0;height:100%;background:transparent;overflow:hidden;
     font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;}
   #text-root{position:fixed;inset:0;display:flex;flex-direction:column;padding:12px;box-sizing:border-box;}
   .card{flex:1;display:flex;flex-direction:column;min-height:0;border-radius:18px;overflow:hidden;

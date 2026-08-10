@@ -4,7 +4,8 @@ const api = (window as unknown as { umbraLarge: LargeAPI }).umbraLarge;
 
 const style = document.createElement("style");
 style.textContent = `
-  html,body{margin:0;height:100%;background:transparent;overflow:hidden;font-family:-apple-system,"SF Pro Display",system-ui,"Segoe UI",Roboto,sans-serif;}
+  /* 永远是黑底白字的浮层，固定按深色渲染原生件（滚动条、文本选中色）。 */
+  html,body{color-scheme:dark;margin:0;height:100%;background:transparent;overflow:hidden;font-family:-apple-system,"SF Pro Display",system-ui,"Segoe UI",Roboto,sans-serif;}
   #large-root{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;cursor:default;}
   .panel{max-width:88vw;max-height:84vh;overflow:auto;padding:40px 56px;border-radius:28px;
     background:rgba(0,0,0,.82);box-shadow:0 30px 90px rgba(0,0,0,.5);backdrop-filter:blur(6px);}

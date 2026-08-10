@@ -11,6 +11,40 @@
     border-style: solid;
     border-color: var(--border);
   }
+
+  /* ── 表单控件的文字色 ────────────────────────────────────────────────────
+     preflight 关掉的另一个后果（交接文档里只提了背景，没提颜色，于是踩了）：
+     浏览器给 <button> 的默认色是 buttontext、给 <input>/<select>/<textarea>
+     的是 fieldtext —— 两个都是**黑色**，且不随 --text 变。
+     深色主题下，凡是没显式写 text-* 的控件就是「黑字配深底」，几乎看不见。
+     全项目这样的控件有 370 多处，一个个补类名既不现实也补不干净，
+     所以在这里统一让它们继承上下文的文字色。
+     显式写了 text-* 的照旧生效 —— utilities 层在 base 层之后。 */
+  button,
+  input,
+  select,
+  textarea,
+  optgroup {
+    color: inherit;
+  }
+
+  /* 输入光标。不写的话 UA 用 fieldtext（黑），深色主题下在深底上基本是隐形的 ——
+     用户能打字，但看不见光标在哪。caret-color 不会被 text-* 类覆盖，
+     所以这里直接钉到 --text 上，跟着主题走。 */
+  input,
+  textarea,
+  [contenteditable] {
+    caret-color: var(--text);
+  }
+
+  /* 占位文字。UA 默认色是从 fieldtext（黑）推出来的浅灰，深色主题下同样偏黑。
+     全项目没有一处写 placeholder-* 工具类，所以这里统一钉到 --muted 上。
+     opacity:1 是因为 Firefox 默认给 placeholder 加了 0.54 的透明度，
+     叠上去会比设计稿更淡。 */
+  ::placeholder {
+    color: var(--muted);
+    opacity: 1;
+  }
 }
 
 /* 设计令牌：橙色系 + 浅/深双模式（取自 Claude Design 设计稿）
@@ -19,6 +53,11 @@
    --hover：中性悬停底色，列表项/菜单项鼠标经过时铺这一层（--chip 是常驻底色，两者用途不同）。
    --rail：次级侧栏（工具二级目录、对象面板等窄栏）的底色，比 --card 略偏一点，和主内容区拉开层次。 */
 :root {
+  /* 告诉浏览器当前是浅色还是深色。管的是**我们画不到的那些原生件**：
+     <select> 的弹出层、滚动条、输入框的自动填充底色、日期选择器。
+     不声明的话它们永远按浅色渲染 —— 深色主题下点开一个下拉，
+     弹出来一块白底，很突兀。 */
+  color-scheme: light;
   --bg: #F6F5F2; --card: #FFFFFF; --titlebar: #EFEDE8; --border: #E6E3DC; --border-soft: #EEEBE4; --text: #1F2320; --muted: #6B716B; --faint: #9A9992;
   --nav: #15110E; --orange: #E8590C; --orange-deep: #C2410C; --orange-soft: #FFF1E6; --orange-text: #9A3412;
   --success: #0F766E; --success-soft: #E2F1EF; --warning: #B45309; --warning-soft: #FBEEDD; --danger: #B42318; --danger-soft: #FBE9E7;
@@ -27,6 +66,7 @@
 }
 /* 深色下 --nav 比 --bg 更深：一级侧边栏始终是画面里最重的一块，主内容区反而抬高一档。 */
 [data-theme="dark"] {
+  color-scheme: dark;
   --bg: #1C1A17; --card: #232019; --titlebar: #1C1A17; --border: #332E26; --border-soft: #2B2721; --text: #EDEAE3; --muted: #9A938A; --faint: #6E675E;
   --nav: #15110E; --orange-soft: rgba(232,89,12,.16); --orange-text: #F0A878;
   --success: #34B5A6; --success-soft: rgba(15,118,110,.2); --warning: #D98A29; --warning-soft: rgba(180,83,9,.22); --danger: #E0675C; --danger-soft: rgba(180,35,24,.22);

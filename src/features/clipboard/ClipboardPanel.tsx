@@ -37,7 +37,10 @@ interface ClipAPI {
 const api = (window as unknown as { umbraClip: ClipAPI }).umbraClip;
 
 const CSS = `
-:root{--bg:#F6F5F2;--card:#FFFFFF;--border:#E6E3DC;--text:#1F2320;--muted:#6B716B;--orange:#E8590C;--orange-soft:#FFF1E6;--chip:#F0EEEA;--sel:#FFF1E6;}
+/* 这个面板是固定浅色的（毛玻璃小窗，不跟随主题）。显式声明 color-scheme:light
+   是为了让浏览器**别**按系统深色去渲染原生件 —— 系统深色时输入框的
+   自动填充底色、滚动条、文本选中色都会自动翻深，配上这里的浅色底就成了黑底黑字。 */
+:root{color-scheme:light;--bg:#F6F5F2;--card:#FFFFFF;--border:#E6E3DC;--text:#1F2320;--muted:#6B716B;--orange:#E8590C;--orange-soft:#FFF1E6;--chip:#F0EEEA;--sel:#FFF1E6;}
 *{box-sizing:border-box;}
 html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;color:var(--text);}
 #clip-root{height:100vh;}

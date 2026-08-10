@@ -26,14 +26,14 @@ interface LauncherAPI {
 const api = (window as unknown as { umbraLauncher: LauncherAPI }).umbraLauncher;
 
 const CSS = `
-:root{--bg:rgba(246,245,242,.98);--card:#FFF;--border:#E6E3DC;--text:#1F2320;--muted:#6B716B;--orange:#E8590C;--sel:#FFF1E6;}
+:root{color-scheme:light;--bg:rgba(246,245,242,.98);--card:#FFF;--border:#E6E3DC;--text:#1F2320;--muted:#6B716B;--orange:#E8590C;--sel:#FFF1E6;}
 *{box-sizing:border-box;}
 html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;color:var(--text);}
 .wrap{height:100vh;padding:10px;}
 .box{position:relative;background:var(--bg);border:1px solid var(--border);border-radius:16px;box-shadow:0 24px 70px rgba(0,0,0,.28);overflow:hidden;display:flex;flex-direction:column;}
 .search{display:flex;align-items:center;gap:12px;padding:16px 20px;border-bottom:1px solid var(--border);-webkit-app-region:drag;}
 .search .q,.search .hint{-webkit-app-region:no-drag;}
-.search .q{flex:1;border:none;outline:none;background:transparent;font-size:22px;color:var(--text);}
+.search .q{flex:1;border:none;outline:none;background:transparent;font-size:22px;color:var(--text);caret-color:var(--orange);}
 .toast{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);background:var(--orange);color:#fff;font-size:12.5px;padding:6px 14px;border-radius:999px;box-shadow:0 6px 20px rgba(0,0,0,.25);}
 .search .q::placeholder{color:var(--muted);}
 .hint{color:var(--muted);font-size:12px;white-space:nowrap;}
@@ -54,7 +54,7 @@ html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,
 .row.wrap .ico,.row.wrap .num{margin-top:2px;}
 .num{color:var(--muted);font-size:11px;border:1px solid var(--border);border-radius:5px;padding:1px 6px;}
 .empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:13px;}
-@media (prefers-color-scheme:dark){:root{--bg:rgba(30,27,24,.98);--card:#26221E;--border:#3A342E;--text:#F2EFEA;--muted:#A79E93;--sel:#3a2a1c;}.ico{background:#ffffff10;}}
+@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:rgba(30,27,24,.98);--card:#26221E;--border:#3A342E;--text:#F2EFEA;--muted:#A79E93;--sel:#3a2a1c;}.ico{background:#ffffff10;}}
 `;
 
 export function Launcher() {
