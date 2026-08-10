@@ -14,7 +14,7 @@ import { anyStrongMatch, bestMatch, frecency, frecencyBoost, lookupUsage, noteUs
 import { readBundleNames, searchableNames, type BundleNames } from "./appinfo";
 import { pinyinAliases } from "./pinyin";
 import { WorkflowEngine, migrateScriptsToWorkflows, migrateFolders, seedBuiltinTools, NO_BRANCH } from "./workflow";
-import { accelMessage, checkAccel } from "./hotkey";
+import { accelMessage, accelProblem, checkAccel, parseAccel } from "./hotkey";
 import type { TextViewPayload } from "./workflow";
 import { ensureWorkflowDir } from "./workspace";
 
@@ -39,6 +39,10 @@ export interface LauncherResult {
   noLearn?: boolean;       // 明确不参与频率学习（脚本声明了 skipknowledge / 纯提示项）
   autocomplete?: string;   // Tab 补全时写回输入框的完整查询词
   quicklook?: string;      // ⌘Y 预览的 URL 或文件路径
+  // 这一行允许换行、完整显示。**只给报错行用**：报错的价值全在细节里
+  // （哪个文件、哪一行），截成一句「no such file or director」等于什么都没说。
+  // 正常结果一律保持单行 —— 一个会换行的结果列表没法快速扫。
+  wrap?: boolean;
 }
 
 // 密码保险箱在 Launcher 这边需要的最小面（W10）。
@@ -85,7 +89,7 @@ export class LauncherManager {
     this.engine = new WorkflowEngine(cfg, {
       sendAssistant: (t) => this.chatSender?.(t),
       hide: (rf) => this.hide(rf),
-      showPanel: () => this.show(),
+      showPanel: (pre) => this.show(pre),
       showLargeType: (t) => { void this.showLargeType(t); },
       showTextView: (p) => { void this.showTextView(p); },
       getSecret: (ref) => this.secretDeps?.getSecret(ref) ?? null,
@@ -178,7 +182,9 @@ export class LauncherManager {
     else await this.show();
   }
 
-  private async show(): Promise<void> {
+  // prefill：唤起时预先填进搜索框的内容（Hotkey 节点的「打开快捷入口」用）。
+  // 不传就是普通唤起（搜索框清空）。
+  private async show(prefill?: { q: string; caret?: "left" | "right" }): Promise<void> {
     const { BrowserWindow, screen } = await import("electron");
     this.appWasActive = BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isFocused());
     const win = await this.ensurePanel();
@@ -195,7 +201,9 @@ export class LauncherManager {
     suppressAppActivate();
     win.show();
     win.focus();
-    win.webContents.send("launcher:shown");
+    // 预填内容跟着 shown 一起发：分两条消息的话，渲染层收到 shown 会先把输入框清空，
+    // 预填那条随后到达 —— 中间会闪一下空框，而且两条的先后顺序没有保证。
+    win.webContents.send("launcher:shown", prefill || null);
   }
 
   private async hide(returnFocus = false): Promise<void> {
@@ -217,6 +225,8 @@ export class LauncherManager {
     if (!this.cfg.get().launcherEnabled) return;
     const { globalShortcut } = await import("electron");
     const acc = this.cfg.get().launcherShortcut || "Alt+Space";
+    const bad = accelProblem(acc);
+    if (bad) { console.warn(`[launcher] 快捷键用不了（${bad}）：${acc} —— 去设置里重录一次`); return; }
     try {
       const ok = globalShortcut.register(acc, () => this.toggle());
       if (!ok) console.warn(`[launcher] 快捷键注册失败（可能被占用）：${acc}`);
@@ -584,6 +594,35 @@ export class LauncherManager {
     await this.cfg.save({ launcherFolders: Array.isArray(folders) ? folders : [] });
   }
 
+  // Umbra 自己的全局快捷键分别归谁。key = 归一化键位，value = 归属方显示名；
+  // **value 为空串表示「归提问的那个节点自己」**（调用方据此判为不冲突）。
+  //
+  // 这张表是「谁在用」的唯一可靠答案。globalShortcut.isRegistered 只能回答
+  // 「有没有被注册」，回答不了「被谁」—— 而用户要的恰恰是后者：
+  // 报一句「已经用在别处了（快捷入口、截屏、剪贴板或另一条工作流）」等于让他
+  // 自己去四个地方翻一遍。
+  private hotkeyOwners(askerWfId: string, askerNodeId: string): Map<string, string> {
+    const out = new Map<string, string>();
+    const put = (acc: string, name: string) => {
+      const a = parseAccel(acc || "");
+      if (!a) return;
+      if (!out.has(a.id)) out.set(a.id, name);   // 先登记的赢，和注册顺序一致
+    };
+    const c = this.cfg.get();
+    put(c.clipboardShortcut || "", "剪贴板面板");
+    put(c.phrasesShortcut || "", "常用语");
+    put(c.screenshotShortcut || "", "截屏");
+    if (c.launcherEnabled !== false) put(c.launcherShortcut || "Alt+Space", "快捷入口");
+    put(c.vaultShortcut || "", "密码保险箱");
+    // 工作流里的 Hotkey / Universal 触发器。归提问者自己的那条登记成空串。
+    const names = new Map((this.cfg.get().launcherWorkflows || []).map((w) => [w.id, w.name]));
+    for (const h of [...this.engine.hotkeys(), ...this.engine.universals()]) {
+      const mine = h.wfId === askerWfId && h.nodeId === askerNodeId;
+      put(h.accelerator, mine ? "" : `工作流「${names.get(h.wfId) || h.wfId}」`);
+    }
+    return out;
+  }
+
   private async registerIpc(): Promise<void> {
     const { ipcMain, globalShortcut } = await import("electron");
     ipcMain.handle("launcher:query", (_e, q: string) => this.query(q));
@@ -669,17 +708,24 @@ export class LauncherManager {
     // 探测**必须用完就注销** —— 用户还在配置界面上试键位，留着就等于已经把键抢过来了；
     // 而且我们自己已经注册过的键（比如快捷入口那个）会让 register 返回 false，
     // 所以先用 isRegistered 把「自己占的」摘出去，否则会把自家的键报成「被别的应用占用」。
-    ipcMain.handle("launcher:checkAccel", async (_e, accel: string) => {
+    // askerWfId / askerNodeId：**正在编辑的那个节点**。它自己占着这个键不算冲突 ——
+    // 保存之后我们就把这个键注册上了，不排除自己的话，再打开这个节点必然报一条
+    // 「已经用在别处了」，而那个「别处」就是它本人（用户点名的假阳性）。
+    ipcMain.handle("launcher:checkAccel", async (_e, accel: string, askerWfId?: string, askerNodeId?: string) => {
       const { globalShortcut } = await import("electron");
       const acc = String(accel || "");
+      const owners = this.hotkeyOwners(String(askerWfId || ""), String(askerNodeId || ""));
       const r = checkAccel(acc, (id) => {
+        // 走到 probe 说明 owners 里没人认领 —— 此时 isRegistered 为真只可能是残留
+        // （比如另一次探测正在进行）。仍然报 self，但措辞上说清「没查出是哪一处」，
+        // 不再冒充确定结论。
         if (globalShortcut.isRegistered(id)) return "self";
         let ok = false;
         try { ok = globalShortcut.register(id, () => { /* 探测用，不做事 */ }); }
         catch { return "taken"; }
         if (ok) globalShortcut.unregister(id);
         return ok ? "free" : "taken";
-      });
+      }, process.platform, owners);
       // 提示语在主进程拼好一并返回：措辞和判定是一回事，分到渲染层去写迟早会对不上。
       return { ...r, message: accelMessage(r, acc) };
     });
@@ -846,6 +892,10 @@ export class LauncherManager {
     ];
     for (const h of list) {
       try {
+        // 非 ASCII 的键位（旧版录制器留下的 "Alt+Shift+◊"）交给 Electron 会在原生层
+        // 打 ERROR 再抛异常。挡在这里，日志才看得懂，也不会影响别的工作流注册。
+        const bad = accelProblem(h.accelerator);
+        if (bad) { console.warn(`[launcher] 工作流快捷键用不了（${bad}）：${h.accelerator} —— 去节点里重录一次`); continue; }
         if (globalShortcut.isRegistered(h.accelerator)) continue;  // 让位给已占用的快捷键
         globalShortcut.register(h.accelerator, () => (h.universal
           ? this.engine.fireUniversal(h.wfId, h.nodeId)

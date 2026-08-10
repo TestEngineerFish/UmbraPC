@@ -19,6 +19,7 @@ import {
   HotkeyField, Note, PickField, Pill, Row, RowTable, Sec, sameConfig,
 } from "./nodeform";
 import type { DlgWidth } from "./nodeform";
+import { displayAccel } from "../../components/hotkey";
 import { ContextMenu } from "./menu";
 import type { MenuItem } from "./menu";
 
@@ -52,6 +53,7 @@ export interface TraceStep {
   seq: number; nodeId: string; type: string; arg: string; vars: Record<string, string>;
   outArg: string; outPort: string; ms: number;
   feedback?: string; error?: string; stdout?: string; stderr?: string; exitCode?: number;
+  cmd?: string; cwd?: string;
   skipped?: boolean; stopped?: boolean;
 }
 export interface TraceRun {
@@ -74,7 +76,7 @@ interface LauncherAPI {
   // W10：把配置项里的密钥交给密码保险箱，拿回一条 vault://... 引用存进工作流。
   setWfSecret(ref: string, title: string, value: string): Promise<{ ok: boolean; ref?: string; error?: string }>;
   vaultUnlocked(): Promise<boolean>;
-  checkAccel(accel: string): Promise<{ state: string; by?: string; message?: string }>;
+  checkAccel(accel: string, wfId?: string, nodeId?: string): Promise<{ state: string; by?: string; message?: string }>;
   // 打开这条工作流自己的目录：脚本节点的默认 cwd 就是它，随行的可执行文件/资源都放在里面。
   openWorkflowDir(wfId: string): Promise<{ ok: boolean; dir: string; error: string }>;
 }
@@ -150,6 +152,26 @@ function WfIcon({ w, size }: { w: { icon?: string; ic?: string }; size: number }
 // nodeRows 给它一行「暂未实现」。别为了「以后可能用」把死代码留在这儿。
 // hint 是悬停说明，写清楚这个对象干什么、有什么代价。
 interface CatItem { type: string; label: string; icon: IconComp; hint?: string }
+// Script Filter 的语言 / 匹配模式展示名。
+//
+// **真值在主进程 electron/core/launcher/sfscript.ts 的 LANGS / MATCH_MODES**，
+// 这里只是把 id 翻成中文给界面用。故意不 import 那边：那个模块 import 了 node:path，
+// 拖进前端 bundle 会炸（bridges.ts 里论证过同一件事）。加语言要两处一起改，
+// tests/sfscript.test.ts 有一条盯着别漏。
+export const LANG_LABEL: Record<string, string> = {
+  zsh: "/bin/zsh", bash: "/bin/bash", python3: "/usr/bin/python3",
+  ruby: "/usr/bin/ruby", perl: "/usr/bin/perl", php: "/usr/bin/php", node: "node",
+  osascript: "osascript（AppleScript）", "osascript-js": "osascript（JavaScript）",
+  external: "外部脚本",
+};
+// Hotkey 的「参数取自」展示名。
+export const ARG_SRC_LABEL: Record<string, string> = {
+  clipboard: "剪贴板", selection: "当前选区", text: "固定文本", none: "（无）",
+};
+export const MATCH_LABEL: Record<string, string> = {
+  boundary: "从词首或空白处", start: "从开头", "words-any": "按词 · 不计顺序", "words-seq": "按词 · 保持顺序",
+};
+
 // 导出给测试遍历用（见 nodeRows 上面那句）。
 export const CATALOG: { cat: string; icon: IconComp; items: CatItem[] }[] = [
   { cat: "触发 Triggers", icon: IconKeyboard, items: [
@@ -371,9 +393,19 @@ const ADD_GROUPS: { cat: string; icon: IconComp; items: CatItem[]; total: number
 function defaultConfig(type: string): Record<string, unknown> {
   switch (type) {
     case "trigger.keyword": return { keyword: "kw", arg: "optional", title: "", withSpace: true };
-    case "trigger.hotkey": return { accelerator: "" };
+    // action/argSource 的缺省**必须是 pass/clipboard** —— 这个节点原来写死
+    // 「读剪贴板 + 跑动作链」，老节点没有这两个字段，换缺省会把它们全弄坏。
+    case "trigger.hotkey": return { accelerator: "", action: "pass", argSource: "clipboard", prefix: "", argText: "", caret: "right" };
     case "trigger.universal": return { accelerator: "", source: "auto" };
-    case "input.scriptfilter": return { script: "", cwd: "", alfredFilters: false, debounceMs: 0 };
+    // 新建的 Script Filter 照 Alfred 的推荐值：zsh + argv（不用操心转义）。
+    // **老节点没有 lang/inputMode 字段**，引擎那边分别退回 bash / query ——
+    // 它们的脚本就是照那两个写的，换默认值等于把已有工作流全弄坏一遍。
+    case "input.scriptfilter": return {
+      keyword: "", withSpace: true, arg: "required", title: "", subtitle: "", pleaseWait: "",
+      lang: "zsh", inputMode: "argv", script: "", cwd: "",
+      queueMode: "terminate", queueDelay: "auto", queueDelayMs: 0, trimArg: true,
+      alfredFilters: false, matchMode: "boundary",
+    };
     case "input.listfilter": return { items: [{ title: "示例项", subtitle: "", arg: "" }], match: "word", learn: true };
     case "input.codec": return { mode: "unicode" };
     case "action.script": return { script: "", cwd: "", language: "bash", output: "none", onError: "stop" };
@@ -687,6 +719,10 @@ function DebugDrawer({ runs, nodeLabel, onPickNode, onClear, onClose }: {
                   <Field label="出参" v={s.outArg} />
                   <Field label="变量" v={Object.entries(s.vars).map(([k, v]) => `${k}=${v}`).join("  ") } />
                   {s.feedback ? <Field label="提示" v={s.feedback} /> : null}
+                  {/* 命令行和工作目录排在输出前面：脚本报「找不到文件」时，
+                      第一件要确认的就是 cwd 对不对、真正跑的是哪条命令。 */}
+                  {s.cmd ? <Field label="命令" v={s.cmd} /> : null}
+                  {s.cwd ? <Field label="工作目录" v={s.cwd} /> : null}
                   {s.stdout ? <Field label={`输出${s.exitCode !== undefined ? `（退出码 ${s.exitCode}）` : ""}`} v={s.stdout} /> : null}
                   {s.stderr ? <Field label="stderr" v={s.stderr} danger /> : null}
                   {s.error ? <Field label="异常" v={s.error} danger /> : null}
@@ -1808,7 +1844,8 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
       {/* 找不到那个节点就不渲染：拖拽落地是「加节点 + 开弹窗」两个 setState，
           万一将来被拆到不同的批次里，这里的非空断言会直接把编辑器打崩。 */}
       {editNode && cur?.nodes.some((n) => n.id === editNode) ? (
-        <NodeConfig node={cur.nodes.find((n) => n.id === editNode)!} onClose={() => setEditNode(null)}
+        <NodeConfig node={cur.nodes.find((n) => n.id === editNode)!} wfId={cur.id} wfOn={cur.enabled !== false}
+          onClose={() => setEditNode(null)}
           onSave={(cfg) => { setNodeConfig(editNode, cfg); setEditNode(null); }}
           onDelete={() => { delNode(editNode); setEditNode(null); }} />
       ) : null}
@@ -1958,8 +1995,13 @@ export function nodeRows(n: WFNode): SumRow[] {
       { k: "参数", v: c.arg === "none" ? "不带参数" : `${c.arg === "required" ? "必填" : "可选"}${cfg.withSpace === false ? " · 紧贴关键词" : ""}` },
     ];
     case "trigger.hotkey": return [
-      { k: "快捷键", v: val(c.accelerator, "未录制"), mono: true },
-      { k: "参数", v: "当前剪贴板文本" },
+      // 快捷键显示成 ⌥Space 这种键帽写法，和录制框里一致（存的仍是 Alt+Space）。
+      { k: "快捷键", v: c.accelerator ? displayAccel(String(c.accelerator)) : "未录制", mono: true },
+      // 第二行给「按下之后干什么」而不是参数来源：接 Script Filter 却选了「直接跑」
+      // 是最常犯的错，表现是按了没反应，而卡片上必须一眼看得出来。
+      c.action === "show"
+        ? { k: "按下", v: `打开快捷入口${c.prefix ? ` · 预填 ${c.prefix}` : ""}` }
+        : { k: "按下", v: `直接跑 · 参数取自${ARG_SRC_LABEL[String(c.argSource || "clipboard")] || "剪贴板"}` },
     ];
     case "trigger.always": return [
       { k: "触发", v: "任意输入都尝试" },
@@ -1971,13 +2013,22 @@ export function nodeRows(n: WFNode): SumRow[] {
     ];
 
     // ── 输入 ────────────────────────────────────────────────────────────────
-    case "input.scriptfilter": return [
-      { k: "脚本", v: cut(val(c.script, "未设脚本")), mono: true },
-      Number(c.debounceMs) > 0
-        ? { k: "防抖", v: `停手 ${Number(c.debounceMs)}ms 后才跑` }
-        : c.cwd ? { k: "目录", v: cut(String(c.cwd)), mono: true }
-                : { k: "过滤", v: c.alfredFilters ? "由 Umbra 按输入过滤" : "脚本自己过滤" },
-    ];
+    // 卡片只放得下两行。**自带关键词时第一行必须是关键词** —— 那是这个节点
+    // 最重要的一条信息（它就是触发器）；否则第一行给脚本。
+    // 第二行按「最容易出岔子的那件事」挑：非默认语言 > 由谁过滤 > 运行目录。
+    case "input.scriptfilter": {
+      const kw = String(c.keyword || "").trim();
+      const lang = String(c.lang || "bash");
+      const second = lang !== "bash"
+        ? { k: "语言", v: LANG_LABEL[lang] || lang }
+        : cfg.alfredFilters
+          ? { k: "过滤", v: `由 Umbra · ${MATCH_LABEL[String(c.matchMode || "boundary")] || "从词首或空白处"}` }
+          : c.cwd ? { k: "目录", v: cut(String(c.cwd)), mono: true }
+                  : { k: "脚本", v: cut(val(c.script, "未设脚本")), mono: true };
+      return kw
+        ? [{ k: "关键词", v: kw, mono: true }, second.k === "脚本" ? { k: "参数", v: c.arg === "none" ? "不带参数" : `${c.arg === "optional" ? "可选" : "必填"}${cfg.withSpace === false ? " · 紧贴关键词" : ""}` } : second]
+        : [{ k: "脚本", v: cut(val(c.script, "未设脚本")), mono: true }, second];
+    }
     case "input.listfilter": return [
       { k: "列表", v: `${((cfg.items as unknown[]) || []).length} 项` },
       { k: "匹配", v: c.match === "none" ? "不过滤" : c.match === "contains" ? "任意位置包含" : "词首匹配" },
@@ -2622,13 +2673,24 @@ function WfDelConfirm({ name, onOk, onClose }: { name: string; onOk: () => void;
 //
 // 版式照 ClaudeDesign 上那份稿子：标签左置定宽 110px、说明跟在控件下方、长说明收进折叠区、
 // 底栏固定「删除节点 · 取消 · 保存」。改动只在按保存后才落到工作流，关掉前会问一句。
-function NodeConfig({ node, onSave, onClose, onDelete }: {
+function NodeConfig({ node, wfId, wfOn, onSave, onClose, onDelete }: {
   node: WFNode;
+  /** 这个节点属于哪条工作流。检测快捷键时要用它排除「自己占的那个键」。 */
+  wfId: string;
+  /** 这条工作流启用了没有。没启用的话所有触发器都不会注册 —— 得说出来。 */
+  wfOn: boolean;
   onSave: (c: Record<string, unknown>) => void;
   onClose: () => void;
   onDelete: () => void;
 }) {
   const [c, setC] = useState<Record<string, unknown>>({ ...node.config });
+  // 带上「我是谁」再去问主进程。**必须 useCallback**：HotkeyRecorder 的检测
+  // effect 依赖这个函数的引用，每次渲染换一个新的会让它反复重查 —— 而两次探测
+  // 撞在一起时，后一次会看见前一次临时注册的那个键，误报成「已被占用」。
+  const checkMine = useCallback(
+    (accel: string) => api.checkAccel(accel, wfId, node.id),
+    [wfId, node.id],
+  );
   const meta = TYPE_META[node.type] || { label: node.type, icon: IconFile, kind: "" };
   const set = (k: string, v: unknown) => setC((p) => ({ ...p, [k]: v }));
   const s = (k: string, d = "") => String(c[k] ?? d);
@@ -2639,6 +2701,13 @@ function NodeConfig({ node, onSave, onClose, onDelete }: {
       dirty={!sameConfig(c, node.config)} onClose={onClose} onSave={() => onSave(c)} onDelete={onDelete}>
 
       {/* ── 触发器 ────────────────────────────────────────────────────────── */}
+      {/* 工作流没启用时，**所有触发器都不注册**（引擎只跑 enabled !== false 的）。
+          新建的工作流默认就是未启用 —— 不说的话，用户录完快捷键按下去毫无反应，
+          而这个节点本身看起来一切正常，根本无从查起。 */}
+      {!wfOn && meta.kind === "trigger" ? (
+        <Note>这条工作流还没启用，触发器不会生效 —— 在左侧列表里把它打开。</Note>
+      ) : null}
+
       {node.type === "trigger.keyword" ? (<>
         <Row label="关键词"><input className={FLD_MONO} value={s("keyword")} onChange={(e) => set("keyword", e.target.value)} placeholder="yd" /></Row>
         <Row label="参数">
@@ -2657,16 +2726,56 @@ function NodeConfig({ node, onSave, onClose, onDelete }: {
         ) : null}
       </>) : null}
 
-      {node.type === "trigger.hotkey" ? (
-        <Row label="全局快捷键" top last>
-          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)} check={api.checkAccel}
-            hint="触发时把当前剪贴板文本作为参数，跑「回车」分支。" />
+      {node.type === "trigger.hotkey" ? (<>
+        <Row label="全局快捷键" top>
+          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)} check={checkMine} />
         </Row>
-      ) : null}
+        <Row label="按下之后">
+          <select className={FLD} value={s("action", "pass")} onChange={(e) => set("action", e.target.value)}>
+            <option value="pass">直接跑「回车」分支（不弹界面）</option>
+            <option value="show">打开快捷入口，等我输入</option>
+          </select>
+          <Hint>
+            下游接的是 <b>Script Filter / 列表过滤</b> 这类要边打边查的节点，就得选「打开快捷入口」——
+            「直接跑」是一次性把参数灌下去就跑完，对着一个等你打字的节点，表现就是按了没反应。
+          </Hint>
+        </Row>
+        <Row label="参数取自">
+          <select className={FLD} value={s("argSource", "clipboard")} onChange={(e) => set("argSource", e.target.value)}>
+            <option value="clipboard">剪贴板文本</option>
+            <option value="selection">当前选中的文本/文件</option>
+            <option value="text">固定文本</option>
+            <option value="none">不带参数</option>
+          </select>
+          {s("argSource", "clipboard") === "selection" ? (
+            <Hint>靠模拟一次 ⌘C 抓选区，需要「系统设置 → 隐私与安全性 → 辅助功能」里给 Umbra 授权。</Hint>
+          ) : null}
+        </Row>
+        {s("argSource", "clipboard") === "text" ? (
+          <Row label="固定文本"><input className={FLD} value={s("argText")} onChange={(e) => set("argText", e.target.value)} /></Row>
+        ) : null}
+        {s("action", "pass") === "show" ? (<>
+          <Row label="预填前缀">
+            <input className={FLD_MONO} value={s("prefix")} onChange={(e) => set("prefix", e.target.value)}
+              placeholder="留空 = 自动用下游节点的关键词" />
+            <Hint>
+              打开快捷入口时先填这段，再接上面取到的参数。<b>留空的话我们会去下游节点要它的关键词</b>（Alfred 要求你自己填）。
+            </Hint>
+          </Row>
+          <Row label="光标位置" last>
+            <select className={FLD} value={s("caret", "right")} onChange={(e) => set("caret", e.target.value)}>
+              <option value="right">停在末尾（接着打就行）</option>
+              <option value="left">停在最前面</option>
+            </select>
+          </Row>
+        </>) : (
+          <Blank>触发时把上面取到的参数交给「回车」分支，不弹任何界面。</Blank>
+        )}
+      </>) : null}
 
       {node.type === "trigger.universal" ? (<>
         <Row label="全局快捷键" top>
-          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)} check={api.checkAccel} />
+          <HotkeyField value={s("accelerator")} onChange={(v) => set("accelerator", v)} check={checkMine} />
         </Row>
         <Row label="抓什么" last>
           <select className={FLD} value={s("source", "auto")} onChange={(e) => set("source", e.target.value)}>
@@ -2687,16 +2796,115 @@ function NodeConfig({ node, onSave, onClose, onDelete }: {
 
       {/* ── 输入 ──────────────────────────────────────────────────────────── */}
       {node.type === "input.scriptfilter" ? (<>
-        <Row label="脚本" top>
-          <textarea className={`${FLD_MONO} h-[90px] resize-y`} value={s("script")} onChange={(e) => set("script", e.target.value)} placeholder={`./runtime/txiki ./index.js "$1"`} />
-          <Hint>stdout 返回 Alfred 风格 JSON（<Code>{"{items:[…]}"}</Code>），<Code>$1</Code> 是当前输入。</Hint>
+        {/* 字段顺序照 Alfred 的 Script Filter 摆：关键词 → 占位文案 → 语言/输入 → 脚本 → 运行行为 → 过滤。 */}
+        <Row label="关键词">
+          <input className={FLD_MONO} value={s("keyword")} onChange={(e) => set("keyword", e.target.value)} placeholder="留空=由上游触发器带进来" />
+          <Hint>填了就由这个节点自己触发（Alfred 的形状）；留空则沿用上游 Keyword / Hotkey 触发器。</Hint>
+        </Row>
+        <Row label="参数">
+          <select className={FLD} value={s("arg", "required")} onChange={(e) => set("arg", e.target.value)}>
+            <option value="required">必填参数（打了字才跑脚本）</option>
+            <option value="optional">可选参数（一敲关键词就跑）</option>
+            <option value="none">无参数（只认关键词本身）</option>
+          </select>
+        </Row>
+        {s("arg", "required") !== "none" && String(c.keyword || "").trim() ? (
+          <CheckRow checked={c.withSpace !== false} onChange={(v) => set("withSpace", v)}>
+            关键词和参数之间要有空格
+            <Hint>关掉后参数紧贴关键词也认 —— <Code>yd你好</Code> 这类几乎都要关掉它。</Hint>
+          </CheckRow>
+        ) : null}
+        <Row label="占位标题"><input className={FLD} value={s("title")} onChange={(e) => set("title", e.target.value)} placeholder="还没输入时显示的标题，留空用工作流名" /></Row>
+        <Row label="占位副标题">
+          <input className={FLD} value={s("subtitle")} onChange={(e) => set("subtitle", e.target.value)} placeholder="留空显示「输入内容后回车…」" />
+          <Hint>「必填参数」时，用户敲了关键词还没打字，看到的就是这两行。</Hint>
+        </Row>
+
+        <Sec title="脚本" />
+        <Row label="语言">
+          <select className={FLD} value={s("lang", "bash")} onChange={(e) => set("lang", e.target.value)}>
+            <option value="zsh">/bin/zsh</option>
+            <option value="bash">/bin/bash</option>
+            <option value="python3">/usr/bin/python3</option>
+            <option value="ruby">/usr/bin/ruby</option>
+            <option value="perl">/usr/bin/perl</option>
+            <option value="php">/usr/bin/php</option>
+            <option value="node">node</option>
+            <option value="osascript">/usr/bin/osascript（AppleScript）</option>
+            <option value="osascript-js">/usr/bin/osascript（JavaScript）</option>
+            <option value="external">外部脚本（下面填路径）</option>
+          </select>
+          <Hint>shell 走登录 shell（<Code>-lc</Code>），能看到 homebrew / pyenv 的 PATH；其余语言把脚本落成临时文件再跑。</Hint>
+        </Row>
+        <Row label="输入方式">
+          <select className={FLD} value={s("inputMode", "query")} onChange={(e) => set("inputMode", e.target.value)}>
+            <option value="argv">作为参数传入（argv）</option>
+            <option value="query">替换脚本里的 {"{query}"}</option>
+          </select>
+          <Hint>
+            argv：脚本正文一个字都不动，用 <Code>$1</Code> / <Code>sys.argv[1]</Code> 取输入 —— 不用操心转义，推荐。<br />
+            {"{query}"}：把输入直接替换进脚本正文，写起来省事但输入带引号时容易出岔子。
+          </Hint>
+        </Row>
+        <Row label={s("lang", "bash") === "external" ? "脚本路径" : "脚本"} top>
+          <textarea className={`${FLD_MONO} h-[90px] resize-y`} value={s("script")} onChange={(e) => set("script", e.target.value)}
+            placeholder={s("lang", "bash") === "external" ? "./translate.py（相对工作流目录）" : `./runtime/txiki ./index.js "$1"`} />
+          <Hint>stdout 返回 Alfred 风格 JSON（<Code>{"{items:[…]}"}</Code>）。</Hint>
         </Row>
         <Row label="运行目录"><input className={FLD_MONO} value={s("cwd")} onChange={(e) => set("cwd", e.target.value)} placeholder="可选，支持 ~；留空=工作流自己的目录" /></Row>
-        <Row label="防抖" top>
-          <input type="number" className={`${FLD_MONO} w-[150px]`} value={s("debounceMs", "0")} onChange={(e) => set("debounceMs", e.target.value)} />
-          <Hint>毫秒，0=每敲一下就跑。不设的话打一个七字的词就是七个进程 —— 脚本一慢就把机器拖住，而前六次的结果压根没人看。脚本要联网或要跑一会儿的建议填 150–300，上限 1000。</Hint>
+
+        <Sec title="运行行为" note="对应 Alfred 的 Run Behaviour" />
+        <Row label="队列模式">
+          <select className={FLD} value={s("queueMode", "terminate")} onChange={(e) => set("queueMode", e.target.value)}>
+            <option value="terminate">杀掉上一次，用最新输入重跑</option>
+            <option value="wait">等上一次跑完再跑</option>
+          </select>
+          <Hint>脚本有副作用（写文件、发请求、扣配额）就选「等上一次跑完」，否则半路被杀会留下烂摊子。</Hint>
         </Row>
-        <CheckRow last checked={!!c.alfredFilters} onChange={(v) => set("alfredFilters", v)}>由 Umbra 按输入过滤结果（否则脚本自己过滤）</CheckRow>
+        <Row label="队列延迟">
+          <select className={FLD} value={s("queueDelay", "auto")} onChange={(e) => set("queueDelay", e.target.value)}>
+            <option value="auto">自动（首字符立即跑，之后攒一攒）</option>
+            <option value="immediate">每敲一下立即跑</option>
+            <option value="custom">固定等待</option>
+          </select>
+          <Hint>脚本要联网或跑得慢时，「自动」能少起一大半进程 —— 打一个七字的词本来是七个进程，而前六次的结果压根没人看。</Hint>
+        </Row>
+        {s("queueDelay", "auto") === "custom" ? (
+          <Row label="等待毫秒">
+            <input type="number" className={`${FLD_MONO} w-[150px]`} value={s("queueDelayMs", "0")} onChange={(e) => set("queueDelayMs", e.target.value)} />
+            <Hint>上限 1000。等待期间又敲了字就把这一次丢掉。</Hint>
+          </Row>
+        ) : null}
+        <CheckRow checked={c.trimArg !== false} onChange={(v) => set("trimArg", v)}>
+          修剪参数里多余的空白
+          <Hint>默认开。多打一个空格不该让脚本白跑一次。写代码片段、要缩进的场景可以关掉。</Hint>
+        </CheckRow>
+
+        <Sec title="结果过滤" />
+        <CheckRow checked={!!c.alfredFilters} onChange={(v) => set("alfredFilters", v)}>
+          由 Umbra 按输入过滤结果（否则脚本自己过滤）
+          <Hint>勾上之后<b>脚本只跑一次</b>、吐出全量结果，后续按键由 Umbra 本地筛 —— 这正是它省事的地方。脚本要按输入去联网查（翻译、搜索建议）就别勾。</Hint>
+        </CheckRow>
+        {c.alfredFilters ? (
+          <Row label="匹配方式" last>
+            <select className={FLD} value={s("matchMode", "boundary")} onChange={(e) => set("matchMode", e.target.value)}>
+              <option value="boundary">从词首或空白处精确匹配</option>
+              <option value="start">从开头精确匹配</option>
+              <option value="words-any">按词匹配 · 不计顺序</option>
+              <option value="words-seq">按词匹配 · 保持顺序</option>
+            </select>
+            <Hint>以「My Family Photos」为例：从词首=Family Photos 命中；从开头=只有 My… 命中；不计顺序=Ph Fa 命中；保持顺序=Fa Ph 命中而 Photos My 不命中。</Hint>
+          </Row>
+        ) : null}
+
+        <Fold title="脚本能拿到哪些环境变量">
+          从 Alfred 搬过来的脚本常读这几个，都已经给上了：<br />
+          <Code>alfred_workflow_data</Code>（放配置）、<Code>alfred_workflow_cache</Code>（放中间文件）、
+          <Code>alfred_workflow_bundleid</Code>、<Code>alfred_workflow_uid</Code>、<Code>alfred_workflow_name</Code>、
+          <Code>alfred_workflow_keyword</Code>（这次命中的关键词）。<br />
+          工作流自己的配置项也会作为同名环境变量注入。<br />
+          <b>注意</b><Code>alfred_version</Code> 给的是 <Code>0</Code> —— 我们不是 Alfred，谎报版本号只会让脚本走进一条必然失败的分支。
+        </Fold>
       </>) : null}
 
       {node.type === "input.listfilter" ? (<>

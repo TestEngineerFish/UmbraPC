@@ -19,6 +19,11 @@ export interface TraceStep {
   stderr?: string;                // 脚本类节点单独抓到的 stderr（便于一眼看出报错）
   exitCode?: number;              // 脚本退出码
   skipped?: boolean;              // 节点被禁用 → 旁路，未真正执行
+  // 脚本类节点实际用的**命令行和工作目录**。
+  // 加这两个是因为排查「脚本找不到文件」时，第一个要排除的就是「是不是 cwd 不对」——
+  // 而在此之前调试抽屉里根本看不到它，只能靠用户去终端手动复现（搬有道翻译时踩过）。
+  cmd?: string;                   // 真正 spawn 的命令 + 参数
+  cwd?: string;                   // 脚本的工作目录（相对路径都是相对它算的）
   stopped?: boolean;              // 该节点主动终止了链路（脚本失败等）
 }
 
@@ -74,6 +79,8 @@ export interface StepEnd {
   exitCode?: number;
   skipped?: boolean;
   stopped?: boolean;
+  cmd?: string;
+  cwd?: string;
 }
 
 // 轨迹记录器：引擎在每次执行前 begin()，每个节点前后 stepStart()/stepEnd()，链路跑完 end()。
@@ -110,6 +117,8 @@ export class TraceRecorder {
     step.outPort = e.outPort ?? "";
     if (e.feedback) step.feedback = cut(e.feedback);
     if (e.error) step.error = cut(e.error);
+    if (e.cmd) step.cmd = cut(e.cmd);
+    if (e.cwd) step.cwd = cut(e.cwd);
     if (e.stdout) step.stdout = cut(e.stdout);
     if (e.stderr) step.stderr = cut(e.stderr);
     if (e.exitCode !== undefined) step.exitCode = e.exitCode;

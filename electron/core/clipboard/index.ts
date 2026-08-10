@@ -6,6 +6,7 @@ import { writeToClipboard, simulatePaste } from "./paste";
 import { getAppIcon } from "./source-app";
 import { ConfigStore, ClipKeep } from "../config";
 import { suppressAppActivate } from "../activation";
+import { accelProblem } from "../launcher/hotkey";
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|bmp|webp)$/i;
 // 过期清理的巡检间隔：保留时长最细一档是 24 小时，半小时扫一次足够，也不会白烧 CPU。
@@ -169,6 +170,10 @@ export class ClipboardManager {
     const { globalShortcut } = await import("electron");
     const bind = (acc: string, category: ClipCategory) => {
       if (!acc) return;
+      // 先验一道：非 ASCII 的键位交给 Electron 会在原生层打一条 ERROR 再抛异常，
+      // 日志一片红而用户只知道「按了没反应」。旧版录制器留下的 "Alt+Shift+◊" 就是这样。
+      const bad = accelProblem(acc);
+      if (bad) { console.warn(`[clipboard] 快捷键用不了（${bad}）：${acc} —— 去设置里重录一次`); return; }
       try {
         const ok = globalShortcut.register(acc, () => this.togglePanel(category));
         if (!ok) console.warn(`[clipboard] 快捷键注册失败（可能被占用）：${acc}`);

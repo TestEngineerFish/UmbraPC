@@ -3,6 +3,7 @@
 // 与内置 provider 结果并存：本引擎只产出/执行「工作流」结果，LauncherManager 负责合并与分发。
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { randomUUID } from "node:crypto";
 import { ConfigStore, expandHome, httpBase, Workflow, WorkflowNode } from "../config";
 import { httpFetch } from "../http";
@@ -11,7 +12,12 @@ import { describe as describeFile, parseExts, searchFiles, type FileHit, type Fi
 import { simulatePaste, simulateCopy, simulateKeyCombo } from "../clipboard/paste";
 import { readClipboardFiles } from "../clipboard/watcher";
 import { calc, convertUnits, unicodeTransform, urlTransform, base64Transform } from "./tools";
-import { ensureWorkflowDir, workflowEnv, resolveCwd } from "./workspace";
+import { ensureWorkflowDir, workflowDir, workflowEnv, resolveCwd } from "./workspace";
+import {
+  buildSpawn, langOf, looksLikeMissingFile, matchItem, queueWaitMs, relativePathsIn,
+  resolveExternal, tempScriptName, trimArg,
+  type MatchMode, type QueueDelay,
+} from "./sfscript";
 import { TraceRecorder, maskSecret } from "./trace";
 import type { TraceRun } from "./trace";
 
@@ -72,7 +78,9 @@ export interface WorkflowDeps {
   hide: (returnFocus: boolean) => Promise<void>; // 关闭启动器
   // 重新唤起启动器面板（「显示主面板」节点用）。和 hide 配套：链路中间先收起面板去干活，
   // 干完再把面板叫回来接着挑下一项。
-  showPanel: () => Promise<void>;
+  // prefill：唤起时预先填进搜索框的内容（Hotkey 的「打开快捷入口」用）。
+  // caret="left" 时光标停在最前面 —— Alfred 的做法，方便「关键词在后、内容在前」的写法。
+  showPanel: (prefill?: { q: string; caret?: "left" | "right" }) => Promise<void>;
   showLargeType: (text: string) => void;         // 大字显示浮层
   showTextView: (p: TextViewPayload) => void;    // 文本视图浮层（可 Markdown、可流式追加）
   // 取密码保险箱里的明文（W10 的 password 配置项）。保险箱锁着/引用失效返回 null。
@@ -129,6 +137,9 @@ const HEADLESS_BLOCK: Record<string, string> = {
 };
 
 const SCRIPT_TIMEOUT = 20000;
+// 「由 Umbra 过滤结果」时脚本输出的存活时长。不做成永久：脚本的数据也会变
+// （汇率、待办列表），一直吃缓存比多跑一次更糟。10 秒足够覆盖「敲完一个词」这段。
+const FILTER_SESSION_TTL = 10_000;
 // 问秘书 / 设备派发走 HTTP，比本地脚本慢得多，单独给一个更长的超时。
 const REMOTE_TIMEOUT = 120000;
 
@@ -406,6 +417,54 @@ function matchFileRule(rule: Record<string, unknown>, info: FileHit, exists: boo
   }
 }
 
+// 这个节点是不是「关键词的拥有者」。
+//
+// Alfred 把关键词做在 Script Filter 自己身上；我们原来拆成了
+// trigger.keyword → input.scriptfilter 两个节点。现在两种都认：
+// Script Filter 只要自己填了关键词，就直接由它触发，不必再连一个触发器。
+// **故意不做数据迁移** —— 已有工作流照旧走触发器那条路，一个字都不用改。
+// 取第一条**有内容**的行，最多 160 字。
+//
+// 为什么不是 slice(0, 60)：脚本报错时最要紧的信息（哪个文件、哪一行）几乎都在
+// 后半句。砍到 60 字会得到「no such file or director」这种半截话 —— 用户看不出
+// 缺的是哪个文件，只能一遍遍瞎试。
+// 为什么只取第一行：解释器的报错常带一长串调用栈，铺在结果行里既放不下也没用；
+// 完整输出在调试抽屉里（stepEnd 已经把 stdout/stderr 原样记进去了）。
+function firstLine(out: string): string {
+  const line = String(out || "").split(/\r?\n/).map((x) => x.trim()).find(Boolean) || "";
+  return line.length > 160 ? line.slice(0, 160) + "…" : line;
+}
+
+// 报错行的副标题。**「找不到文件」这一类单独给一句提示**：
+// 从 Alfred 搬工作流时这是头号绊脚石 —— 脚本里的 ./runtime/xxx 是相对
+// 「运行目录」（缺省就是工作流自己的目录）算的，而那个目录里通常还什么都没有，
+// 用户得先把 Alfred 那边的文件拷进来。不说的话完全没有线索指向这件事。
+function scriptErrHint(name: string, out: string, cwd: string): string {
+  if (/no such file or directory/i.test(out) || /command not found/i.test(out)) {
+    return `相对路径是相对 ${cwd} 算的 —— 脚本要用的文件拷进去了吗？`;
+  }
+  return `${name} · 工作流 · 完整输出见编辑器的调试抽屉`;
+}
+
+// 一次正在跑的 Script Filter。child 由 run() 的 onSpawn 回填。
+interface SfRun {
+  child?: import("node:child_process").ChildProcess;
+  done: Promise<string | LauncherResult[]>;
+  /** 被「杀掉上一次」的队列模式干掉了。这一轮的任何输出都不该再露面。 */
+  killed?: boolean;
+}
+
+// 「参数」下拉没配时算哪一档。**和编辑器里的缺省显示一一对应**，
+// 两边不一致的话，界面写着「必填」而引擎按「可选」跑，用户完全看不出为什么。
+function defaultArgMode(type: string): string {
+  return type === "input.scriptfilter" ? "required" : "optional";
+}
+
+function keywordOwner(n: WorkflowNode): boolean {
+  if (n.type === "trigger.keyword") return true;
+  return n.type === "input.scriptfilter" && !!String(n.config.keyword || "").trim();
+}
+
 export class WorkflowEngine {
   private ctx = new Map<string, ItemCtx>();  // token → 上下文（每次 query 重置）
   private seq = 0;
@@ -417,6 +476,12 @@ export class WorkflowEngine {
   // Script Filter 的防抖序号：每个节点一个自增号，等待期间号变了就说明用户又敲了新字符，
   // 这一次的结果已经没人要了，直接作废，不去起那个进程。
   private sfSeq = new Map<string, number>();
+  // 正在跑的 Script Filter 进程（每节点一个）。队列模式要用：
+  // terminate 靠 child 杀掉上一次，wait 靠 done 等它跑完。
+  private sfRunning = new Map<string, SfRun>();
+  // 本次查询命中的关键词。脚本要靠 alfred_workflow_keyword 拿到它 ——
+  // 一个 Script Filter 挂多个关键词时，脚本得知道用户敲的是哪个（Alfred 有这个变量）。
+  private curKeyword = "";
   // rerun（W3）：脚本要求过 N 秒自动再查一次。每次查询前清零，查完由上层 takeRerun() 取走并安排定时。
   private rerunAfter = 0;
   // 文件暂存区（File Buffer）：`工作流id:节点id` → 已攒的绝对路径。
@@ -536,14 +601,25 @@ export class WorkflowEngine {
   async query(raw: string): Promise<LauncherResult[]> {
     this.ctx.clear();
     this.rerunAfter = 0;
+    this.curKeyword = "";   // 上一次命中的关键词不能漏到这一次（脚本会读 alfred_workflow_keyword）
     const q = (raw || "").trim();
     if (!q) return [];
     for (const wf of this.workflows()) {
       // 被停用的触发器直接跳过：整条链路唤不起来（E6 节点禁用）。
-      for (const trig of wf.nodes.filter((n) => n.type === "trigger.keyword" && !n.disabled)) {
+      //
+      // 关键词的拥有者有两种（**Script Filter 自带关键词是 Alfred 的形状**）：
+      //   · trigger.keyword —— 老形状，关键词在上游触发器上，下游挂什么输入节点都行；
+      //   · input.scriptfilter 自己填了关键词 —— 它就是自己的触发器，不用再连一个。
+      // 两种并存、不做数据迁移：已有工作流一个字都不用改，新建的可以直接照 Alfred 摆。
+      for (const trig of wf.nodes.filter((n) => keywordOwner(n) && !n.disabled)) {
         const kw = String(trig.config.keyword || "").trim();
         if (!kw) continue;
-        const argMode = String(trig.config.arg || "optional"); // required | optional | none
+        // 缺省值**按节点类型分开**，必须和编辑器里那个下拉的缺省显示一致。
+        // 老节点的 config.arg 是 undefined（用户没动过那个下拉就不会写进去），
+        // 这时候引擎按 optional 走、界面却写着「必填参数」——
+        // 于是敲个 `yd ` 空参数，界面说不会跑，脚本却跑了，还吐一条「查询为空」的报错。
+        // Script Filter 跟 Alfred 一样默认 Argument Required；Keyword 触发器仍是可选。
+        const argMode = String(trig.config.arg || defaultArgMode(trig.type)); // required | optional | none
         let arg = "";
         if (argMode === "none") {
           if (q.toLowerCase() !== kw.toLowerCase()) continue;
@@ -556,10 +632,16 @@ export class WorkflowEngine {
             : new RegExp(`^${esc}(?:\\s+([\\s\\S]+))?$`, "i");
           const m = q.match(re);
           if (!m) continue;
-          arg = (m[1] || "").trim();
+          // 空白修剪按节点的设置来（Alfred 的 Argument Whitespaces Trimming）。
+          // 默认修剪：多打一个空格不该让脚本白跑一次（缓存键里带着 arg）。
+          arg = trimArg(m[1] || "", trig.config.trimArg !== false);
           if (argMode === "required" && !arg) return [this.hintResult(wf, trig)]; // 提示待输入
         }
-        const target = this.outConns(wf, trig.id, "").map((c) => this.node(wf, c.to)).find(Boolean);
+        this.curKeyword = kw;
+        // 自带关键词的 Script Filter 就是自己的输入节点，不用顺着连线往下找。
+        const target = trig.type === "input.scriptfilter"
+          ? trig
+          : this.outConns(wf, trig.id, "").map((c) => this.node(wf, c.to)).find(Boolean);
         const inputRes = target ? await this.runInput(wf, target, arg) : null;
         if (inputRes) {
           // Alfred 的 autocomplete 给的是「参数」部分，按 Tab 补全时要连关键词一起写回输入框。
@@ -575,6 +657,7 @@ export class WorkflowEngine {
   // 「始终触发」工作流（无关键词，任意输入都尝试，如计算器/单位换算）：贡献到普通结果，不独占。
   async queryAlways(raw: string): Promise<LauncherResult[]> {
     this.rerunAfter = 0;
+    this.curKeyword = "";   // 「始终触发」没有关键词，别让上一次的漏进来
     const q = (raw || "").trim();
     if (!q) return [];
     const out: LauncherResult[] = [];
@@ -635,7 +718,9 @@ export class WorkflowEngine {
         arg: val, uid: learn ? String(row.uid || row.title || i) : undefined,
       }, mods, { rank: i, noLearn: !learn });
       // 图标：带「/」的当文件路径去加载，否则当 emoji 直接用（列表里手写 emoji 是常态）。
-      if (row.icon) r.icon = String(row.icon).includes("/") ? this.loadIcon(String(row.icon), wf.icon || "🧩") : String(row.icon);
+      if (row.icon) r.icon = String(row.icon).includes("/")
+        ? this.loadIcon(String(row.icon), wf.icon || "🧩", workflowDir(this.cfg.dir, wf.id))
+        : String(row.icon);
       return r;
     });
   }
@@ -751,34 +836,81 @@ export class WorkflowEngine {
   //   · skipknowledge：本次结果不参与使用频率学习，完全按脚本给的顺序排。
   private async runScriptFilter(wf: Workflow, node: WorkflowNode, arg: string): Promise<LauncherResult[]> {
     const vars = this.baseVars(wf);
-    const script = this.subst(String(node.config.script || ""), arg, vars);
+    const lang = langOf(node.config.lang);
+    // 输入怎么进脚本（Alfred 的第二个下拉）：
+    //   argv  —— 只作为位置参数传（$1 / sys.argv[1]）。**脚本正文一个字都不动**，
+    //            里面写了 {query} 也当普通文本 —— Alfred 推荐这种，不用操心转义。
+    //   query —— 把 {query} / {var:x} 直接替换进脚本正文。
+    // 老节点没有这个字段：**默认 query**，保住它们原来的行为（以前是无条件替换）。
+    // 新建节点时编辑器给 argv。
+    const inputMode = String(node.config.inputMode || "query");
+    const script = inputMode === "argv"
+      ? String(node.config.script || "")
+      : this.subst(String(node.config.script || ""), arg, vars);
+
     // cwd 缺省就是本工作流自己的目录 —— 脚本才能写 ./runtime/txiki ./index.js 这种相对路径。
     const dir = await ensureWorkflowDir(this.cfg.dir, wf.id);
     const cwd = resolveCwd(dir, String(node.config.cwd || ""), expandHome);
     const env: Record<string, string> = { ...workflowEnv(dir, wf.id, wf.name) };
     for (const [k, v] of Object.entries(vars)) env[k] = String(v ?? "");
     env.query = arg;
-    // 缓存键要带上脚本正文：改了脚本就该重跑，不能还吃旧缓存。
-    const key = `${wf.id}\n${node.id}\n${cwd || ""}\n${arg}\n${script}`;
+    // Alfred 的 Script Filter 专属变量：一个节点挂多个关键词时，脚本靠它知道用户敲的是哪个。
+    if (this.curKeyword) env.alfred_workflow_keyword = this.curKeyword;
+
+    // 「由 Umbra 过滤结果」勾上时，**脚本只跑一次**（Alfred 的原话就是这个意思：
+    // 让 Alfred 来筛，而不是每多敲一个字符就重跑一遍脚本）。所以缓存键里不带 arg，
+    // 脚本也拿不到 arg —— 它本来就该一次吐出全量结果。
+    const filtersHere = !!node.config.alfredFilters;
+    const scriptArg = filtersHere ? "" : arg;
+    const key = `${wf.id}\n${node.id}\n${cwd || ""}\n${scriptArg}\n${lang.id}\n${script}`;
 
     const hit = this.sfCache.get(key);
     if (hit && Date.now() - hit.at < hit.ttl * 1000) {
       // 缓存还新鲜：本次不起进程。loosereload 时顺手在后台重跑刷新缓存（不影响本次返回的内容）。
-      if (hit.loose) void this.execScriptFilter(wf, node, arg, script, cwd, env, vars, key).catch(() => {});
+      if (hit.loose) void this.execScriptFilter(wf, node, scriptArg, script, lang, cwd, dir, env, vars, key).catch(() => {});
       return this.buildScriptFilter(wf, node, arg, hit.out);
     }
-    // 防抖：没配就是 0（保持原来「按一下跑一次」的手感）。配了就先等一小会儿，
-    // 等待期间又来了新输入就把这一次丢掉 —— 否则打一个七字的词就是七个进程，
-    // 脚本一慢就把机器拖住，而前六次的结果压根没人看。
-    const wait = Math.max(0, Math.min(Number(node.config.debounceMs ?? 0) || 0, 1000));
+    // 队列延迟（Alfred 的 Queue Delay）：等待期间用户又敲了字就把这一次丢掉。
+    // 由 Umbra 过滤时不需要延迟 —— 反正只跑一次，后续按键全走缓存。
+    //
+    // 老节点只有 debounceMs 这一个数字（这个节点早先的做法）。没写 queueDelay 时
+    // 就按它来，别把用户特意调过的值悄悄换成「自动」。
+    const legacyMs = Number(node.config.debounceMs ?? 0) || 0;
+    const delay = String(node.config.queueDelay || (legacyMs > 0 ? "custom" : "auto")) as QueueDelay;
+    const customMs = Number(node.config.queueDelayMs ?? 0) || legacyMs;
+    const wait = filtersHere ? 0 : queueWaitMs(delay, customMs, arg.length);
+    const seqKey = `${wf.id}\n${node.id}`;
     if (wait > 0) {
-      const seqKey = `${wf.id}\n${node.id}`;
       const mine = (this.sfSeq.get(seqKey) || 0) + 1;
       this.sfSeq.set(seqKey, mine);
       await new Promise((r) => setTimeout(r, wait));
       if (this.sfSeq.get(seqKey) !== mine) return [];
     }
-    const r = await this.execScriptFilter(wf, node, arg, script, cwd, env, vars, key);
+    // 队列模式（Alfred 的 Queue Mode）：
+    //   terminate —— 把上一次还在跑的脚本杀掉再起新的（默认，输入中的结果本来就作废了）；
+    //   wait      —— 等上一次跑完。脚本有副作用（写文件、发请求）时必须选这个。
+    const queueMode = String(node.config.queueMode || "terminate");
+    const prev = this.sfRunning.get(seqKey);
+    if (prev) {
+      if (queueMode === "wait") await prev.done.catch(() => {});
+      else {
+        // 标记之后再杀。**顺序不能反**：kill 之后 run() 会立刻带着残缺输出和
+        // 非零退出码 resolve，那一路会去造一条「脚本出错」的报错卡 ——
+        // 而这次运行是我们自己主动掐掉的，用户只是多打了一个字符。
+        // 搬有道翻译时看到的「Exception ignored on flushing sys.stdout」就是这么来的：
+        // 登录 shell 启动时跑的 python（conda 之类）被我们杀掉，临死前叫了一声，
+        // 那声音被当成了脚本的输出。
+        prev.killed = true;
+        try { prev.child?.kill(); } catch { /* 已经退了 */ }
+      }
+    }
+    // **先占位再起进程**：run() 里 spawn 是同步的，onSpawn 会在 execScriptFilter
+    // 返回之前就回调。等拿到 promise 再 set 的话，那一下回调找不到自己的格子，
+    // child 就永远是 undefined —— terminate 模式于是变成了静默的 no-op。
+    const entry: SfRun = { done: Promise.resolve("") };
+    this.sfRunning.set(seqKey, entry);
+    entry.done = this.execScriptFilter(wf, node, scriptArg, script, lang, cwd, dir, env, vars, key, seqKey, entry);
+    const r = await entry.done;
     return typeof r === "string" ? this.buildScriptFilter(wf, node, arg, r) : r;
   }
 
@@ -786,39 +918,112 @@ export class WorkflowEngine {
   // 顺带记调试轨迹，并按脚本声明的 cache 写入缓存。
   private async execScriptFilter(
     wf: Workflow, node: WorkflowNode, arg: string, script: string,
-    cwd: string, env: Record<string, string>, vars: Record<string, string>, key: string,
+    lang: ReturnType<typeof langOf>, cwd: string, dir: string,
+    env: Record<string, string>, vars: Record<string, string>, key: string,
+    seqKey?: string, entry?: SfRun,
   ): Promise<string | LauncherResult[]> {
     // 调试轨迹：Script Filter 在「查询」阶段就跑脚本，单独记成一次运行（W8 调试抽屉）。
     const tr = this.trace.begin(wf.id, wf.name, "Script Filter 查询", arg);
     const st = this.trace.stepStart(tr, node.id, node.type, arg, vars);
     const startedAt = Date.now();
     let stderr = "";
+    let spawned = "";
     let res;
     try {
-      res = await run("bash", ["-lc", script, "umbra", arg], {
+      // 非 shell 语言把脚本落成一个临时文件再跑。**不能拼进命令行参数**：
+      // 脚本正文里必然有引号、换行、中文，拼进去迟早被截断，而且每种 shell
+      // 的转义规则还不一样（AppleScript 上踩过这个）。
+      let file: string | undefined;
+      if (lang.via === "file") {
+        file = path.join(os.tmpdir(), tempScriptName(lang, node.id));
+        await fs.writeFile(file, script, "utf-8");
+      } else if (lang.via === "path") {
+        file = resolveExternal(dir, String(node.config.script || ""));
+        if (!file) throw new Error("外部脚本没填路径");
+      }
+      const sp = buildSpawn(lang, script, arg, file);
+      // 命令行和工作目录记进轨迹：排查「脚本找不到文件」时，第一个要排除的就是
+      // 「是不是 cwd 不对」，而在此之前调试抽屉里根本看不到它。
+      spawned = `${sp.cmd} ${sp.args.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}`;
+      res = await run(sp.cmd, sp.args, {
         timeoutMs: SCRIPT_TIMEOUT, cwd, env, onStderr: (c) => { stderr += c; },
+        // 拿到子进程句柄，好让「终止上一次」的队列模式能真的杀掉它。
+        onSpawn: (child) => { if (entry) entry.child = child; },
       });
     } catch (e) {
-      this.trace.stepEnd(st, startedAt, { error: `脚本启动失败：${String(e)}`, stderr });
+      this.trace.stepEnd(st, startedAt, { error: `脚本启动失败：${String(e)}`, stderr, cmd: spawned, cwd });
       this.trace.end(tr);
+      this.clearRunning(seqKey, entry);
       return [this.errResult(wf.name, `脚本启动失败：${String(e).slice(0, 50)}`)];
+    }
+    this.clearRunning(seqKey, entry);
+    // 这一轮已经被新的输入掐掉了 —— 残缺的输出和非零退出码都不作数，安静退场。
+    // 不这么做的话，用户每多打一个字符就会闪一条「脚本出错」的红卡：
+    // 那不是脚本的错，是我们自己按队列模式把它掐了。
+    if (entry?.killed) {
+      this.trace.stepEnd(st, startedAt, { outArg: "", stdout: "", stderr, feedback: "被新的输入取消" });
+      this.trace.end(tr);
+      return [];
     }
     const out = (res.output || "").trim();
     let data: SFOutput;
     try {
       data = JSON.parse(out) as SFOutput;
     } catch {
-      const msg = res.code !== 0 ? `脚本出错：${out.slice(0, 60)}` : `输出非 JSON：${out.slice(0, 60)}`;
-      this.trace.stepEnd(st, startedAt, { outArg: out, stdout: out, stderr, exitCode: res.code ?? undefined, error: msg });
+      // **报错要说清是哪个文件/哪一行**。原来一律砍到 60 字符，
+      // 而路径恰恰在后半句 —— 「no such file or director」这种半截话
+      // 等于什么都没说，用户只能一遍遍瞎试。
+      const head = firstLine(out);
+      const msg = res.code !== 0 ? `脚本出错：${head}` : `输出非 JSON：${head}`;
+      // 「找不到文件」时**去运行目录里真查一遍**，指名道姓说缺哪个。
+      // 解释器给的报错常常连路径都不带（txiki 就一句 no such file or directory），
+      // 不查的话用户只能一个个试。只在出错这条路上做，正常查询不多花一次 I/O。
+      const hint = looksLikeMissingFile(out)
+        ? await this.missingFileHint(String(node.config.script || ""), cwd)
+        : "";
+      this.trace.stepEnd(st, startedAt, { outArg: out, stdout: out, stderr, exitCode: res.code ?? undefined, error: msg, cmd: spawned, cwd });
       this.trace.end(tr);
-      return [this.errResult(wf.name, msg)];
+      return [this.errResult(wf.name, msg, hint || scriptErrHint(wf.name, out, cwd))];
     }
-    this.trace.stepEnd(st, startedAt, { outArg: out, stdout: out, stderr, exitCode: res.code ?? undefined });
+    this.trace.stepEnd(st, startedAt, { outArg: out, stdout: out, stderr, exitCode: res.code ?? undefined, cmd: spawned, cwd });
     this.trace.end(tr);
     // 缓存只在真跑过之后写：命中缓存的那条路径不刷新时间戳，免得缓存被无限续命。
     const sec = Number(data.cache?.seconds || 0);
     if (sec >= 1) this.putSfCache(key, out, Math.min(sec, 86400), data.cache?.loosereload === true);
+    // 「由 Umbra 过滤结果」的**关键一步**：把这次输出存下来，后续按键才走得到缓存。
+    // 不存的话每敲一个字符照样起一个进程 —— 那这个开关就只是换了个过滤器，
+    // 而它真正的意义（Alfred 的原话）恰恰是「跑一次，剩下的交给我筛」。
+    // 用短 TTL 不用永久：脚本的数据也会变（汇率、待办列表），一直不刷新反而更糟。
+    else if (node.config.alfredFilters) this.putSfCache(key, out, FILTER_SESSION_TTL / 1000, false);
     return out;
+  }
+
+  // 脚本里写的相对路径，哪些在运行目录里根本不存在。返回一句能直接显示的话。
+  // 全都在（或一条相对路径都没写）就返回空串，交给通用提示。
+  private async missingFileHint(script: string, cwd: string): Promise<string> {
+    const rels = relativePathsIn(script);
+    const missing: string[] = [];
+    for (const r of rels) {
+      try { await fs.access(path.resolve(cwd, r)); } catch { missing.push(r); }
+    }
+    if (missing.length) return `运行目录里没有 ${missing.slice(0, 3).join("、")} —— 把 Alfred 那边的文件整包拷进去`;
+    // 相对路径全都在，那这个 ENOENT 多半根本不是文件的事。
+    //
+    // **「no such file or directory」是 errno ENOENT 的标准字符串，不止用于文件。**
+    // 最典型的一种：txiki / libuv 的 uv_os_getenv 读不到环境变量时返回 UV_ENOENT，
+    // 运行时照 errno 翻成同一句话 —— 于是「变量没配」看着像「文件没拷」。
+    // 2026-08-10 搬有道翻译时就是被这句话带偏了好几轮：脚本读的是 key/secret/platform，
+    // 而变量表里配的是 youdaoAppKey/youdaoSecret，名字对不上。
+    // 所以这里**不许说「文件拷进去了吗」** —— 已经查过了，文件都在。
+    return "脚本里的相对路径都在。这句话是 errno ENOENT，不一定指文件 —— "
+      + "也可能是脚本读了一个没配的环境变量（先对一下「变量表」里的名字）";
+  }
+
+  // 收尾时**只清掉自己那一格**：新的一轮可能已经把格子换掉了（terminate 模式下
+  // 老的那次被杀掉、收尾晚于新的那次开跑），无条件 delete 会把新的一次误删。
+  private clearRunning(seqKey?: string, entry?: SfRun): void {
+    if (!seqKey || !entry) return;
+    if (this.sfRunning.get(seqKey) === entry) this.sfRunning.delete(seqKey);
   }
 
   // 写 Script Filter 缓存，顺手把最旧的挤出去（上限 100 条）。
@@ -838,16 +1043,18 @@ export class WorkflowEngine {
     try {
       data = JSON.parse(out) as SFOutput;
     } catch {
-      return [this.errResult(wf.name, `输出非 JSON：${out.slice(0, 60)}`)];
+      return [this.errResult(wf.name, `输出非 JSON：${firstLine(out)}`)];
     }
     // rerun：Alfred 限定 0.1~5 秒，超出范围就夹到边界，避免脚本写个 0.001 把 CPU 打满。
     const rr = Number(data.rerun || 0);
     if (rr > 0) this.rerunAfter = Math.min(5, Math.max(0.1, rr));
     let items = Array.isArray(data.items) ? data.items : [];
-    // 「Alfred 过滤结果」开关：本地按 match/title 过滤。
+    // 「由 Umbra 过滤结果」：本地按 match（没有就退回 title）筛，规则照 Alfred 的四种匹配模式。
+    // 默认「从词首或空白处精确匹配」—— 和 Alfred 的默认一致。
+    // 原来写死的是「任意位置包含」，那个连 amily 都能命中 My Family Photos，太松。
     if (node.config.alfredFilters && arg) {
-      const a = arg.toLowerCase();
-      items = items.filter((it) => (it.match || it.title || "").toLowerCase().includes(a));
+      const mode = String(node.config.matchMode || "boundary") as MatchMode;
+      items = items.filter((it) => matchItem(mode, String(it.match || it.title || ""), arg));
     }
     const mods = this.branchMods(wf, node.id);
     // 取用上限跟随设置（launcherMaxResults），不再硬编码 12 条。
@@ -875,7 +1082,7 @@ export class WorkflowEngine {
     });
     const r: LauncherResult = {
       id: token, title: String(it.title ?? arg), subtitle: it.subtitle ? String(it.subtitle) : `${wf.name} · 回车执行`,
-      icon: this.loadIcon(it.icon?.path, wf.icon || "🧩"), source: "workflow",
+      icon: this.loadIcon(it.icon?.path, wf.icon || "🧩", workflowDir(this.cfg.dir, wf.id)), source: "workflow",
       score: opts.rank === undefined ? 150 : 160 - opts.rank * 0.1,
       action: { kind: "workflow", payload: { token } }, mods,
     };
@@ -902,19 +1109,25 @@ export class WorkflowEngine {
     };
   }
 
+  // 「必填参数」但用户还没打字时占位的那一条。
+  // 标题/副标题走节点自己的 Placeholder 配置（Alfred 的 Placeholder Title / Subtext），
+  // 没配才退回工作流名 —— 一个只会显示工作流名的占位行等于什么都没说。
   private hintResult(wf: Workflow, trig: WorkflowNode): LauncherResult {
     const token = this.store({ wfId: wf.id, srcNodeId: trig.id, arg: "", variables: {}, valid: false, mods: {}, hintOnly: true });
     return {
-      id: token, title: String(trig.config.title || wf.name), subtitle: "输入内容后回车…",
+      id: token,
+      title: String(trig.config.title || wf.name),
+      subtitle: String(trig.config.subtitle || "输入内容后回车…"),
       icon: wf.icon || "🧩", source: "workflow", score: 150, action: { kind: "workflow", payload: { token } },
       noLearn: true,   // 「请输入内容」只是占位提示，不该被记成一次使用
     };
   }
-  private errResult(name: string, msg: string): LauncherResult {
+  private errResult(name: string, msg: string, detail?: string): LauncherResult {
     const token = this.store({ wfId: "", srcNodeId: "", arg: "", variables: {}, valid: false, mods: {}, hintOnly: true });
     return {
-      id: token, title: msg, subtitle: `${name} · 工作流`, icon: "⚠️", source: "workflow", score: 150,
+      id: token, title: msg, subtitle: detail || `${name} · 工作流`, icon: "⚠️", source: "workflow", score: 150,
       action: { kind: "workflow", payload: { token } }, noLearn: true,
+      wrap: true,   // 报错要看全，别省那两行高度
     };
   }
 
@@ -925,12 +1138,18 @@ export class WorkflowEngine {
   }
 
   // 图标：文件路径 → dataURL；否则用 emoji 兜底。
-  private loadIcon(p: string | undefined, fallback: string): string {
+  // baseDir：**相对路径按它解析**。Alfred 的 item.icon.path 写的就是
+  // "assets/translate.png" 这种相对工作流目录的路径 —— 不给基准目录的话，
+  // nativeImage 会拿它去相对进程的当前目录找，必然找不到，于是所有结果都退回
+  // 工作流的默认图标（那个绿色拼图）。搬有道翻译时就是这样，一整列全是拼图。
+  private loadIcon(p: string | undefined, fallback: string, baseDir?: string): string {
     if (!p) return fallback;
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { nativeImage } = require("electron") as typeof import("electron");
-      const img = nativeImage.createFromPath(expandHome(p));
+      const abs = expandHome(p);
+      const full = path.isAbsolute(abs) || !baseDir ? abs : path.join(baseDir, abs);
+      const img = nativeImage.createFromPath(full);
       if (!img.isEmpty()) return img.resize({ width: 32, height: 32 }).toDataURL();
     } catch { /* 加载失败用兜底 */ }
     return fallback;
@@ -2120,8 +2339,26 @@ export class WorkflowEngine {
   async fireHotkey(wfId: string, nodeId: string): Promise<void> {
     const wf = this.workflows().find((w) => w.id === wfId);
     if (!wf) return;
-    const { clipboard } = await import("electron");
-    const arg = clipboard.readText() || "";
+    const node = this.node(wf, nodeId);
+    const arg = await this.hotkeyArg(node);
+
+    // 「打开快捷入口」（Alfred 的 Show Alfred）：不跑动作链，而是把面板叫出来、
+    // 把内容预填进搜索框，剩下的交给正常的关键词匹配。
+    //
+    // **这是接 Script Filter 时唯一能用的模式**：Script Filter 要的是「用户边打边查」，
+    // 而「传给工作流」那条路是一次性把 arg 灌下去就跑完 —— 对着一个要打字的节点，
+    // 表现就是按了快捷键什么也没有（用户点名的那个现象）。
+    if (String(node?.config.action || "pass") === "show") {
+      const prefix = String(node?.config.prefix || "");
+      // 前缀没填就去下游要一个关键词。**这一步 Alfred 没有**：它要求作者自己
+      // 在前缀里把关键词打出来，填错了就是静默不匹配。我们知道自己连着谁，
+      // 顺手补上更省事；作者填了前缀就以前缀为准，不去覆盖他的意图。
+      const head = prefix || this.downstreamKeyword(wf, nodeId);
+      const caret = String(node?.config.caret || "right") === "left" ? "left" : "right";
+      await this.deps.showPanel({ q: `${head}${arg}`, caret });
+      return;
+    }
+
     const vars = this.baseVars(wf);
     const visited = new Set<string>();
     const tr = this.trace.begin(wf.id, wf.name, "快捷键", arg);
@@ -2130,6 +2367,31 @@ export class WorkflowEngine {
     } finally {
       this.trace.end(tr);
     }
+  }
+
+  // Hotkey 的「参数」取自哪里（Alfred 的 Argument 下拉）。
+  // **缺省是剪贴板**：这个节点原来写死读剪贴板，老节点没有这个字段，换缺省会把它们弄坏。
+  private async hotkeyArg(node: WorkflowNode | undefined): Promise<string> {
+    const src = String(node?.config.argSource || "clipboard");
+    if (src === "none") return "";
+    if (src === "text") return String(node?.config.argText || "");
+    if (src === "selection") {
+      const { text, files } = await this.grabSelection("auto");
+      return text.trim() ? text : files.join("\n");
+    }
+    const { clipboard } = await import("electron");
+    return clipboard.readText() || "";
+  }
+
+  // 下游那个输入节点的关键词（带上尾随空格，好让用户接着打参数）。
+  // 找不到就返回空串 —— 那时面板只会预填参数本身，仍然比什么都不做强。
+  private downstreamKeyword(wf: Workflow, nodeId: string): string {
+    for (const conn of this.outConns(wf, nodeId, "")) {
+      const n = this.node(wf, conn.to);
+      const kw = String(n?.config.keyword || "").trim();
+      if (kw) return n?.config.withSpace === false ? kw : `${kw} `;
+    }
+    return "";
   }
 
   // ── Universal Action 触发（W4）：把「当前选中的东西」喂给工作流 ──

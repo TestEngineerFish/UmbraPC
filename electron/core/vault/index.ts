@@ -11,6 +11,7 @@ import {
 import { VaultMeta, VaultInfo, VaultType, VaultData, Item, Attachment } from "./types";
 import { ConfigStore, httpBase } from "../config";
 import { httpFetch } from "../http";
+import { accelProblem } from "../launcher/hotkey";
 
 // 导入用的明文 bundle 结构（每个 vault 会作为新身份库追加）。
 interface ImportBundle { vaults: { name: string; owner?: string; icon?: string; types?: VaultType[]; items?: Item[]; attachments?: Record<string, string> }[] }
@@ -75,6 +76,8 @@ export class VaultManager {
   async registerShortcut(): Promise<void> {
     const acc = this.cfg.get().vaultShortcut;
     if (!acc) return;
+    const bad = accelProblem(acc);
+    if (bad) { console.warn(`[vault] 快捷键用不了（${bad}）：${acc} —— 去设置里重录一次`); return; }
     const { globalShortcut } = await import("electron");
     try { if (!globalShortcut.isRegistered(acc)) globalShortcut.register(acc, () => this.openWindow()); }
     catch (e) { console.warn(`[vault] 快捷键注册失败：${acc}`, e); }

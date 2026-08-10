@@ -8,7 +8,7 @@
 import { describe, expect, it } from "vitest";
 
 import { displayAccel, mainKeyFromCode, toAccelerator } from "../src/components/hotkey";
-import { parseAccel } from "../electron/core/launcher/hotkey";
+import { checkAccel, parseAccel } from "../electron/core/launcher/hotkey";
 
 // 造一个键盘事件。key 传的是「macOS 上按下这些修饰键之后真正产生的字符」，
 // 正是老实现会拿去当主键的那个值 —— 所有断言都要证明我们不再看它。
@@ -149,5 +149,51 @@ describe("displayAccel", () => {
   it("认不出来的部分原样保留，不吞掉", () => {
     // 吞掉的话，用户看到的键位和实际存的对不上，比难看糟得多。
     expect(displayAccel("Alt+MediaPlayPause", false)).toBe("Alt+MediaPlayPause");
+  });
+});
+
+// ── 「已经用在别处了」的假阳性 ───────────────────────────────────────────────
+//
+// 2026-08-10 用户点名：给 Hotkey 节点录一个键、保存、再打开这个节点 ——
+// 必然报一条「⇧⌘J 在 Umbra 里已经用在别处了」。而那个「别处」就是它自己：
+// 保存时我们把这个键注册上了，检测靠 globalShortcut.isRegistered 判「是不是自己占的」，
+// 而它只能回答「有没有被注册」，**回答不了「被谁」**。
+// 修法是先查一张「谁在用」的表（owners），命中提问者自己就当没冲突。
+describe("快捷键归属检测", () => {
+  // 探测桩：模拟「这个键此刻确实被注册着」——这正是保存之后的真实状态。
+  const probeRegistered = () => "self" as const;
+  const probeFree = () => "free" as const;
+
+  it("键归提问的那个节点自己 → 不冲突", () => {
+    const owners = new Map([["Command+Shift+J", ""]]);   // "" = 归提问者
+    const r = checkAccel("Command+Shift+J", probeRegistered, "darwin", owners);
+    expect(r.state).toBe("free");
+  });
+
+  it("**即使探测说「已注册」也不冲突** —— 那正是它自己注册的", () => {
+    // 这条是整个 bug 的核心：不能因为键被注册了就判冲突，得先问清是谁注册的。
+    const owners = new Map([["Command+Shift+J", ""]]);
+    expect(checkAccel("Command+Shift+J", probeRegistered, "darwin", owners).state).toBe("free");
+    // 没有 owners 的老行为：探测说 self 就报冲突 —— 假阳性就是这么来的。
+    expect(checkAccel("Command+Shift+J", probeRegistered, "darwin").state).toBe("self");
+  });
+
+  it("键归别处 → 报冲突，并说出**是哪一处**", () => {
+    const owners = new Map([["Command+Shift+J", "剪贴板面板"]]);
+    const r = checkAccel("Command+Shift+J", probeFree, "darwin", owners);
+    expect(r.state).toBe("self");
+    // 原来只会给一句「快捷入口、截屏、剪贴板或另一条工作流」的猜测清单，
+    // 等于让用户自己去四个地方翻。
+    expect(r.by).toBe("剪贴板面板");
+  });
+
+  it("owners 里没有就照常探测", () => {
+    expect(checkAccel("Command+Shift+J", probeFree, "darwin", new Map()).state).toBe("free");
+    expect(checkAccel("Command+Shift+J", () => "taken", "darwin", new Map()).state).toBe("taken");
+  });
+
+  it("系统占用优先于归属 —— 那是「按下去根本收不到」，比冲突更严重", () => {
+    const owners = new Map([["Command+Space", ""]]);
+    expect(checkAccel("Command+Space", probeFree, "darwin", owners).state).toBe("system");
   });
 });

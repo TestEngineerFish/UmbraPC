@@ -2,6 +2,7 @@
 // 这份测试的真正价值是**防漏**——新加一个对象却忘了补摘要时，它会落到兜底分支，
 // 卡片上只剩一个类型名，肉眼很难发现；这里直接判死。
 import { describe, expect, it, vi } from "vitest";
+import { displayAccel } from "../src/components/hotkey";
 
 // WorkflowEditor 顶层要读 window.umbraLauncher（拿 IPC 桥）和 localStorage（记面板开合），
 // node 环境里都没有。摘要函数是纯的，用不到它们，给个壳让 import 链能过。
@@ -232,9 +233,22 @@ describe("对照 Alfred 文档补的配置项，卡片上要看得见", () => {
     expect(text("action.script", { script: "ls" })).toContain("bash");   // 不配时默认 bash
   });
 
-  it("Script Filter：配了防抖就优先显示防抖（性能相关，比 cwd 重要）", () => {
-    expect(text("input.scriptfilter", { script: "x", cwd: "~/a", debounceMs: 200 })).toContain("200ms");
+  it("Script Filter：自带关键词时第一行就是关键词 —— 它自己就是触发器", () => {
+    expect(text("input.scriptfilter", { keyword: "yd", script: "x" })).toContain("yd");
+    // 没自带关键词的（靠上游触发器带进来）就先亮脚本
+    expect(text("input.scriptfilter", { script: "translate.py" })).toContain("translate.py");
+  });
+
+  it("Script Filter：非默认语言要亮在卡片上 —— 拿 bash 去跑 python 是最难查的一类错", () => {
+    expect(text("input.scriptfilter", { script: "x", lang: "python3", cwd: "~/a" })).toContain("python3");
+    // 默认 bash 时不占那一行，让位给更有信息量的东西
     expect(text("input.scriptfilter", { script: "x", cwd: "~/a" })).toContain("~/a");
+  });
+
+  it("Script Filter：由谁过滤、用哪种匹配方式，卡片上看得见", () => {
+    const t = text("input.scriptfilter", { script: "x", alfredFilters: true, matchMode: "words-any" });
+    expect(t).toContain("Umbra");
+    expect(t).toContain("不计顺序");
   });
 
   it("系统命令：有没有确认框要写在卡片上 —— 这是不可逆操作的唯一护栏", () => {
@@ -362,5 +376,40 @@ describe("对话框的卡片摘要", () => {
 
   it("没填问句时说清楚", () => {
     expect(text("utility.dialog", { buttons: ["好"] })).toContain("未填问句");
+  });
+});
+
+// ── Hotkey 的两种动作 ───────────────────────────────────────────────────────
+//
+// 2026-08-10：Hotkey 接 Script Filter，按下去毫无反应。
+// 原因是这个节点只实现了 Alfred 的「Pass through to workflow」——
+// 一次性把参数灌给下游就跑完。而 Script Filter 要的是「用户边打边查」，
+// 对着一个等你打字的节点灌参数，表现就是什么都不发生。
+// Alfred 的另一档叫 Show Alfred：把搜索框叫出来、预填好，剩下交给关键词匹配。
+describe("Hotkey：按下之后干什么，卡片上要一眼看得出", () => {
+  it("默认是「直接跑」，并标出参数取自哪里", () => {
+    const t = text("trigger.hotkey", { accelerator: "Alt+Space" });
+    expect(t).toContain("直接跑");
+    expect(t).toContain("剪贴板");   // 老节点没有 argSource 字段，缺省就是剪贴板
+  });
+
+  it("选了「打开快捷入口」就显示它 —— 这是接 Script Filter 时唯一能用的模式", () => {
+    expect(text("trigger.hotkey", { accelerator: "Alt+Space", action: "show" })).toContain("打开快捷入口");
+  });
+
+  it("填了预填前缀就一并显示", () => {
+    expect(text("trigger.hotkey", { accelerator: "Alt+Space", action: "show", prefix: "yd " })).toContain("yd");
+  });
+
+  it("参数来源逐个都有中文名，不许漏出英文 id", () => {
+    for (const [src, want] of [["selection", "选区"], ["text", "固定文本"], ["none", "无"]] as const) {
+      expect(text("trigger.hotkey", { accelerator: "Alt+Space", argSource: src }), src).toContain(want);
+    }
+  });
+
+  it("快捷键走 displayAccel 显示 —— Mac 上要出 ⌥Space，不能是 Alt+Space", () => {
+    // 断言「和 displayAccel 的输出一致」而不是写死某个平台的样子：
+    // 这个测试在 node 里跑（认不出 Mac），写死 ⌥ 会在 CI 上假红。
+    expect(text("trigger.hotkey", { accelerator: "Alt+Space" })).toContain(displayAccel("Alt+Space"));
   });
 });

@@ -7,6 +7,7 @@ import { mt } from "../../i18n";
 import { ocrImage, translateImage } from "./ocr";
 import { StickerManager } from "./stickers";
 import { suppressAppActivate } from "../activation";
+import { accelProblem } from "../launcher/hotkey";
 
 interface CaptureResult {
   dataUrl: string;
@@ -44,6 +45,8 @@ export class ScreenshotManager {
     const { globalShortcut } = await import("electron");
     if (!this.cfg.get().screenshotEnabled) return;
     const acc = this.cfg.get().screenshotShortcut || "CommandOrControl+Alt+A";
+    const bad = accelProblem(acc);
+    if (bad) { console.warn(`[screenshot] 快捷键用不了（${bad}）：${acc} —— 去设置里重录一次`); return; }
     try {
       const ok = globalShortcut.register(acc, () => this.trigger());
       if (!ok) console.warn(`[screenshot] 快捷键注册失败（可能被占用）：${acc}`);

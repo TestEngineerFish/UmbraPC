@@ -132,7 +132,10 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   // 工作流配置项里的密钥（W10）：明文交给密码保险箱，换回一条 vault://... 引用存进工作流。
   setWfSecret: (ref: string, title: string, value: string) => ipcRenderer.invoke("launcher:setWfSecret", ref, title, value),
   vaultUnlocked: () => ipcRenderer.invoke("launcher:vaultUnlocked"),
-  checkAccel: (accel: string) => ipcRenderer.invoke("launcher:checkAccel", accel),
+  // wfId/nodeId = 正在编辑的那个节点。主进程据此把「它自己占的键」排除掉，
+  // 否则保存后再打开必然误报一句「已经用在别处了」。
+  checkAccel: (accel: string, wfId?: string, nodeId?: string) =>
+    ipcRenderer.invoke("launcher:checkAccel", accel, wfId, nodeId),
   // 工作流调试轨迹（编辑器底部调试抽屉）：拉最近若干次执行记录 / 清空 / 订阅新记录。
   // 编辑器顶栏「运行」：nodeId 留空则自动挑第一个可用触发器。
   runWorkflow: (wfId: string, nodeId: string, arg: string) => ipcRenderer.invoke("launcher:runWorkflow", wfId, nodeId, arg),
@@ -165,8 +168,10 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   resize: (h: number) => ipcRenderer.invoke("launcher:resize", h),
   pickPath: () => ipcRenderer.invoke("launcher:pickPath"),
   pickApp: () => ipcRenderer.invoke("launcher:pickApp"),
-  onShown: (cb: () => void) => {
-    const l = () => cb();
+  // prefill：Hotkey 节点的「打开快捷入口」会带一段预填内容过来（关键词 + 参数）。
+  // 普通唤起是 null。
+  onShown: (cb: (prefill: { q: string; caret?: "left" | "right" } | null) => void) => {
+    const l = (_e: unknown, prefill: { q: string; caret?: "left" | "right" } | null) => cb(prefill || null);
     ipcRenderer.on("launcher:shown", l);
     return () => ipcRenderer.removeListener("launcher:shown", l);
   },
@@ -280,27 +285,4 @@ contextBridge.exposeInMainWorld("umbraSticker", {
 // 运行时环境（Java / Python 多版本）桥。只读能力，所以只有一个方法。
 contextBridge.exposeInMainWorld("umbraRuntime", {
   scan: (kind: string) => ipcRenderer.invoke("runtime:scan", kind),
-});
-
-// 提醒桥。到点触发在主进程（服务端只存不调度），这里只做增删改查与变更订阅。
-contextBridge.exposeInMainWorld("umbraNotify", {
-  list: () => ipcRenderer.invoke("notify:list"),
-  state: () => ipcRenderer.invoke("notify:state"),
-  save: (r: unknown) => ipcRenderer.invoke("notify:save", r),
-  remove: (id: string) => ipcRenderer.invoke("notify:delete", id),
-  setDone: (id: string, done: boolean) => ipcRenderer.invoke("notify:setDone", id, done),
-  snooze: (id: string, minutes: number) => ipcRenderer.invoke("notify:snooze", id, minutes),
-  syncNow: () => ipcRenderer.invoke("notify:syncNow"),
-  // 数据变了（本地改动 / 同步拉到别的端的修改 / 重复提醒被推进）→ 列表重拉一次。
-  onChanged: (cb: () => void) => {
-    const l = () => cb();
-    ipcRenderer.on("notify:changed", l);
-    return () => ipcRenderer.removeListener("notify:changed", l);
-  },
-  // 点通知本体进来的深链。id 为空串表示只跳列表（错过摘要那条通知）。
-  onOpen: (cb: (id: string) => void) => {
-    const l = (_e: unknown, id: string) => cb(id);
-    ipcRenderer.on("notify:open", l);
-    return () => ipcRenderer.removeListener("notify:open", l);
-  },
 });

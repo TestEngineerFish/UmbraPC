@@ -11,6 +11,7 @@ interface LauncherResult {
   mods?: string[];    // 工作流结果的修饰键分支（如 ["cmd"]）
   autocomplete?: string;  // Tab 补全时写回输入框的完整查询词
   quicklook?: string;     // ⌘Y 预览的 URL 或文件路径
+  wrap?: boolean;         // 这一行完整显示、允许换行（报错行）
 }
 interface LauncherAPI {
   query(q: string): Promise<LauncherResult[]>;
@@ -18,7 +19,7 @@ interface LauncherAPI {
   sendAssistant(text: string): Promise<string>;
   hide(): Promise<void>;
   resize(h: number): Promise<void>;
-  onShown(cb: () => void): () => void;
+  onShown(cb: (prefill: { q: string; caret?: "left" | "right" } | null) => void): () => void;
   quicklook(target: string): Promise<void>;
   onResults(cb: (payload: { q: string; results: LauncherResult[] }) => void): () => void;
 }
@@ -45,6 +46,12 @@ html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,
 .meta{flex:1;min-width:0;}
 .title{font-size:14.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .sub{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}
+/* 报错行完整显示。报错的价值全在细节里（哪个文件、哪一行），
+   省略号一截等于什么都没说；而正常结果保持单行，列表才扫得快。
+   word-break:break-all 是给长路径用的 —— 不加的话一整条绝对路径会顶破宽度。 */
+.row.wrap{align-items:flex-start;}
+.row.wrap .title,.row.wrap .sub{white-space:pre-wrap;overflow:visible;text-overflow:clip;word-break:break-all;line-height:1.5;}
+.row.wrap .ico,.row.wrap .num{margin-top:2px;}
 .num{color:var(--muted);font-size:11px;border:1px solid var(--border);border-radius:5px;padding:1px 6px;}
 .empty{color:var(--muted);text-align:center;padding:26px 10px;font-size:13px;}
 @media (prefers-color-scheme:dark){:root{--bg:rgba(30,27,24,.98);--card:#26221E;--border:#3A342E;--text:#F2EFEA;--muted:#A79E93;--sel:#3a2a1c;}.ico{background:#ffffff10;}}
@@ -80,20 +87,40 @@ export function Launcher() {
 
   // 唤起时：清空、聚焦。
   useEffect(() => {
-    const off = api.onShown(() => {
+    const off = api.onShown((prefill) => {
       ptr.current = null;
-      setQ(""); setResults([]); setSel(0);
-      setTimeout(() => inputRef.current?.focus(), 30);
+      setResults([]); setSel(0);
+      // Hotkey 的「打开快捷入口」会带一段预填内容（下游节点的关键词 + 参数）。
+      // 普通唤起 prefill 是 null，照旧清空。
+      const q0 = prefill?.q || "";
+      setQ(q0);
+      setTimeout(() => {
+        const el = inputRef.current;
+        if (!el) return;
+        el.focus();
+        // 光标位置：caret="left" 停在最前面（关键词在后、内容在前的写法要用它），
+        // 否则停在末尾，直接接着打就行 —— 这才是「按下快捷键就能开始输入」的手感。
+        const at = prefill?.caret === "left" ? 0 : q0.length;
+        try { el.setSelectionRange(at, at); } catch { /* 老环境不支持就算了 */ }
+      }, 30);
     });
     setTimeout(() => inputRef.current?.focus(), 30);
     return off;
   }, []);
 
   // 防抖查询。
+  //
+  // **带序号防乱序**：Script Filter 会起真进程，一次查询几百毫秒到几秒不等，
+  // 快慢完全取决于脚本。慢的那一次要是后回来，就会把新词的结果盖掉 ——
+  // 表现是「打完字之后列表跳回上一个词的结果」，甚至闪一条早就过期的报错。
+  // 只认最后一次发出的那个请求。
+  const qSeq = useRef(0);
   useEffect(() => {
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(async () => {
+      const mine = ++qSeq.current;
       const r = await api.query(q);
+      if (qSeq.current !== mine) return;   // 已经有更新的查询发出去了，这一份作废
       ptr.current = null;
       setResults(r);
       setSel(0);
@@ -196,7 +223,7 @@ export function Launcher() {
         {results.length ? (
           <div className="list" ref={listRef}>
             {results.map((r, i) => (
-              <div key={r.id} className={`row ${i === sel ? "sel" : ""}`} onMouseMove={(e) => hover(i, e)} onClick={() => runAt(i)}>
+              <div key={r.id} className={`row ${i === sel ? "sel" : ""} ${r.wrap ? "wrap" : ""}`} onMouseMove={(e) => hover(i, e)} onClick={() => runAt(i)}>
                 <span className="ico">
                   {r.icon && r.icon.startsWith("data:") ? <img src={r.icon} alt="" /> : <span>{r.icon || "•"}</span>}
                 </span>

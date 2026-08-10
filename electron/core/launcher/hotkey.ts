@@ -78,6 +78,26 @@ export function parseAccel(raw: string): Accel | null {
   return { mods, key, id: [...mods, key].join("+") };
 }
 
+/**
+ * 这个键位能不能拿去 globalShortcut.register。能就返回 null，不能就返回一句人话。
+ *
+ * **必须在 register 之前挡一道**：Electron 对非 ASCII 的 accelerator 会在原生层
+ * 打一条 ERROR 再抛 TypeError，日志里全是
+ *   `The accelerator string can only contain ASCII characters, invalid string: "Alt+Shift+◊"`
+ * 而用户那边只是「快捷键按了没反应」，两件事看着毫无关系。
+ * （那个 ◊ 是旧版录制器在 macOS 上把 Option+Shift+V 的 e.key 存进去留下的，
+ * 见 src/components/hotkey.ts 顶部。配置里已经躺着的值只能靠这里挡。）
+ */
+export function accelProblem(acc: string): string | null {
+  const raw = String(acc || "").trim();
+  if (!raw) return null;                       // 没配 = 不注册，不算问题
+  if (!parseAccel(raw)) return "键位写法不对";
+  // parseAccel 已经拦掉非 ASCII 的单字符主键，这里再兜一道整串检查：
+  // 修饰键别名将来要是放宽了，也不会漏出去。
+  if (!/^[\x20-\x7E]+$/.test(raw)) return "键位里有非 ASCII 字符，系统注册不了";
+  return null;
+}
+
 // 系统已经占着的组合。value 是「谁占着」，直接显示给用户看。
 // 只收录**按下去会被系统截走、我们完全收不到**的那些 —— 这类的表现是「静默失效」，
 // 没有这张表用户就只能自己瞎试。
@@ -153,16 +173,48 @@ export function checkAccelTable(raw: string, platform: string = process.platform
 // 用户照着提示去别处找占用方，永远找不到。
 export type ProbeResult = "free" | "self" | "taken";
 
-// 完整检测：先查表，表里没有再做一次注册探测。
+// Umbra 自己这些键位分别归谁。key = 归一化后的键位，value = 归属方的显示名。
+// **"" 是一个有意义的值**：表示「归提问的那个节点自己」—— 见 checkAccel 的注释。
+export type OwnerMap = Map<string, string>;
+
+// 完整检测：先查表 → 再问「Umbra 自己谁在用」→ 都没有才做注册探测。
+//
+// ── 为什么必须有 owners 这一步 ────────────────────────────────────────────────
+// 原来只有「查表 + 注册探测」，而探测判「是不是自己占的」靠的是
+// globalShortcut.isRegistered —— 它只能回答「有没有被注册」，**回答不了「被谁」**。
+// 于是出现这个必然的假阳性：给 Hotkey 节点录一个键、保存（此时我们把它注册上了）、
+// 再打开这个节点 —— 检测发现键已被注册，报「已经用在别处了」。
+// 而「别处」就是它自己。用户看到的是一条永远消不掉、又完全不成立的红字。
+//
+// owners 把「谁在用」查清楚：命中的是提问者自己就当没冲突（""），
+// 是别人就把**名字**报出来（比原来那句「快捷入口、截屏、剪贴板或另一条工作流」
+// 的猜测清单有用得多 —— 那句话等于让用户自己去四个地方翻）。
+//
 // probe 由调用方注入（主进程传 globalShortcut 的包装），这样本模块不必 import electron。
 // **探测注册完必须立刻注销** —— 留着的话用户还在配置界面上试键位，就已经把键抢过来了。
-export function checkAccel(raw: string, probe: (id: string) => ProbeResult, platform: string = process.platform): AccelCheck {
+export function checkAccel(
+  raw: string,
+  probe: (id: string) => ProbeResult,
+  platform: string = process.platform,
+  owners?: OwnerMap,
+): AccelCheck {
   const table = checkAccelTable(raw, platform);
   if (table.state !== "free") return table;
   const a = parseAccel(raw)!;
+
+  if (owners?.has(a.id)) {
+    const by = owners.get(a.id) || "";
+    // 归自己 → 没冲突。**不能往下走去探测**：这个键此刻正被我们自己注册着，
+    // 探测只会看到「已注册」，又绕回那条假阳性。
+    if (!by) return { state: "free" };
+    return { state: "self", by };
+  }
+
   const p = probe(a.id);
   if (p === "free") return { state: "free" };
-  if (p === "self") return { state: "self", by: "Umbra 自己" };
+  // owners 里没有、探测却说被占 —— 只可能是别的应用（或系统里没进表的那些）。
+  // 原来这里会报「Umbra 自己」，那是 isRegistered 分不清归属留下的误判。
+  if (p === "self") return { state: "self", by: "Umbra（具体是哪一处没查出来）" };
   return { state: "taken", by: "另一个应用" };
 }
 
@@ -173,7 +225,7 @@ export function accelMessage(r: AccelCheck, accel: string): string {
     case "invalid": return `${r.by || "键位不合法"}。`;
     case "system": return `${accel} 被系统占用（${r.by}），这条工作流不会被触发。换一个组合，或去系统设置里让出这个键。`;
     case "taken": return `${accel} 已经被${r.by || "别的程序"}占用，这条工作流不会被触发。`;
-    case "self": return `${accel} 在 Umbra 里已经用在别处了（快捷入口、截屏、剪贴板或另一条工作流）。两处不能用同一个键。`;
+    case "self": return `${accel} 已经被${r.by || "Umbra 的别处"}占用。两处不能用同一个键。`;
     case "common": return `${accel} 是「${r.by}」的常用键。抢得到，但之后在任何应用里按它都会跑这条工作流。`;
     default: return "";
   }
