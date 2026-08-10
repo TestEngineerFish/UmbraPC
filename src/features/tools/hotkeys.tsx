@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
 import { clipApi, launcherApi, vaultApi, hasClip, hasShot, hasLauncher, hasVault } from "./bridges";
 import { IconAlert } from "../../components/icons";
+import { displayAccel } from "../../components/hotkey";
 
 // 快捷键的归属方。新增一处全局快捷键时，只需在这里、OWNER_LABEL 与 readHotkeys 各加一行。
 export type HotkeyOwner = "clip" | "phrases" | "shot" | "launcher" | "vault";
@@ -102,7 +103,9 @@ export function HotkeyButton({ recording, value, onClick }: { recording: boolean
       onClick={onClick}
       className={`flex-1 min-w-0 text-left border rounded-[8px] px-[11px] py-[7px] text-[12.5px] font-mono cursor-pointer bg-bg ${recording ? "border-orange text-orange-text" : "border-border text-text"}`}
     >
-      {recording ? t("settings.pressShortcut") : value || t("common.none")}
+      {/* 存的是 Electron Accelerator（"Alt+Shift+V"），显示要按平台转 ——
+          Mac 上没有叫 Alt 的键，用户会去找一个不存在的键帽。 */}
+      {recording ? t("settings.pressShortcut") : displayAccel(value) || t("common.none")}
     </button>
   );
 }

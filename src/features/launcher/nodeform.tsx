@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ComponentType, ReactNode } from "react";
 import { IconChevronRight, IconTrash, IconX } from "../../components/icons";
+import { isRecordingHotkey } from "../../components/HotkeyRecorder";
 import { ContextMenu } from "./menu";
 import type { MenuItem } from "./menu";
 
@@ -35,14 +36,6 @@ const W: Record<string, string> = {
 };
 export type DlgWidth = keyof typeof W;
 
-// 「当前有没有快捷键录制在进行」。
-//
-// 这不是可有可无的状态：Dlg 和 HotkeyField 都在 window 上捕获阶段监听 Esc，
-// 而捕获阶段的多个监听按**注册先后**触发 —— Dlg 先挂上，所以录制时按 Esc
-// 会先被 Dlg 吃掉、直接把弹窗关了，而用户的本意只是取消这次录制。
-// 用一个模块级计数器让 Dlg 在录制期间让路；用计数而不是布尔，是因为一个弹窗里
-// 可能摆两个录制框（比如以后要给同一个节点配主副两个热键）。
-let recording = 0;
 
 // 弹窗外壳：头部（图标 + 标题 + 副标题 + 关闭）/ 正文 / 底栏（删除节点 · 取消 · 保存）。
 //
@@ -70,7 +63,10 @@ export function Dlg({ width = "sm", icon: Icon, title, sub, dirty, onClose, onSa
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
-      if (recording) return;   // 录快捷键时这一下 Esc 是给录制用的，见 recording 的注释
+      // 录快捷键时这一下 Esc 是给录制用的：Dlg 和录制框都在捕获阶段监听 Esc，
+      // 而捕获阶段按**注册先后**触发 —— Dlg 先挂上，不让路的话一按 Esc 会直接
+      // 把弹窗关了，而用户的本意只是取消这次录制。
+      if (isRecordingHotkey()) return;
       e.preventDefault(); e.stopPropagation();
       if (asking) { setAsking(false); return; }
       tryClose();
@@ -472,75 +468,7 @@ export function sameConfig(a: Record<string, unknown>, b: Record<string, unknown
   return true;
 }
 
-// 快捷键可用性检测的结果（主进程 electron/core/launcher/hotkey.ts 的返回形状）。
-export interface AccelCheck { state: string; by?: string; message?: string }
-
-// 快捷键录制的三态按钮（设计稿 05 的「录制按钮三态」）。
-// 空=虚线框，录制中=橙底 + 圆点，已录=chip 底等宽字。三态各配一句提示。
-//
-// check：录到键位后拿去问主进程「这个键能用吗」。做成注入而不是在这里直接调 IPC，
-// 是为了让这一层保持纯展示 —— 它现在没有任何 window.umbraLauncher 的依赖。
-export function HotkeyField({ value, onChange, hint, check }: {
-  value: string; onChange: (v: string) => void; hint?: ReactNode;
-  check?: (accel: string) => Promise<AccelCheck>;
-}) {
-  const [rec, setRec] = useState(false);
-  const [chk, setChk] = useState<AccelCheck | null>(null);
-  const ref = useRef(onChange);
-  ref.current = onChange;
-
-  // 键位一变就重新检测。带 seq 防竞态：连续改两次时，先发的请求可能后回来，
-  // 不管的话界面上会留着上一个键位的结论 —— 而且看起来完全像是当前键位的结论。
-  const seq = useRef(0);
-  useEffect(() => {
-    if (!check || !value) { setChk(null); return; }
-    const mine = ++seq.current;
-    void check(value).then((r) => { if (seq.current === mine) setChk(r); }).catch(() => { /* 检测不了就不提示，别拦着用 */ });
-  }, [value, check]);
-
-  useEffect(() => {
-    if (!rec) return;
-    recording++;   // 录制期间让 Dlg 的 Esc 让路
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") { setRec(false); return; }
-      if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) return;   // 只按修饰键不算录完
-      const mods: string[] = [];
-      if (e.metaKey) mods.push("Command"); if (e.ctrlKey) mods.push("Control");
-      if (e.altKey) mods.push("Alt"); if (e.shiftKey) mods.push("Shift");
-      const key = e.key === " " ? "Space" : e.key.length === 1 ? e.key.toUpperCase() : e.key;
-      ref.current([...mods, key].join("+"));
-      setRec(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => { recording--; window.removeEventListener("keydown", onKey, true); };
-  }, [rec]);
-
-  const base = "flex-none whitespace-nowrap flex items-center gap-[7px] px-[13px] py-[6px] rounded-[8px] text-[12.5px]";
-  return (
-    <>
-      <div className="flex items-center gap-[8px]">
-        {rec ? (
-          <button onClick={() => setRec(false)} className={`${base} border border-orange bg-orange-soft text-orange-text`}>
-            <span className="w-[7px] h-[7px] rounded-full bg-orange flex-none" />按下快捷键…
-          </button>
-        ) : value ? (
-          <button onClick={() => setRec(true)} className={`${base} border border-border bg-chip text-text font-mono`}>{value}</button>
-        ) : (
-          <button onClick={() => setRec(true)} className={`${base} border border-dashed border-border bg-transparent text-muted`}>
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>设置快捷键
-          </button>
-        )}
-        {value && !rec ? (
-          <button onClick={() => onChange("")}
-            className="flex-none whitespace-nowrap px-[11px] py-[6px] border border-border rounded-[8px] text-[12px] bg-transparent hover:border-danger hover:text-danger">清除</button>
-        ) : null}
-      </div>
-      <Hint>{rec ? "松手即录入，Esc 取消。" : value ? <>点按钮可以重录。{hint}</> : <>至少要带一个修饰键。{hint}</>}</Hint>
-      {/* system / taken / self / invalid 都是「按了不会触发」，红；common 是「能触发但会误伤」，黄 */}
-      {!rec && chk && chk.state !== "free" && chk.message ? (
-        <Note kind={chk.state === "common" ? "warn" : "danger"}>{chk.message}</Note>
-      ) : null}
-    </>
-  );
-}
+// 快捷键录制统一走 components/HotkeyRecorder（e.code 取键、按平台显示、录制期间
+// 关掉全局快捷键）。这里只做转发，保留 HotkeyField 这个名字免得改一堆调用点。
+export type { AccelCheck } from "../../components/HotkeyRecorder";
+export { HotkeyRecorder as HotkeyField } from "../../components/HotkeyRecorder";

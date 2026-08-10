@@ -15,6 +15,7 @@ import { changeLocale } from "../../i18n";
 import { Toggle, RowsCard, SettingRow, RowHint, Pill, Segmented, btnGhost, btnPrimary, btnDanger, btnIcon, inputFlex, selectBox } from "../../components/ui";
 import type { PillTone } from "../../components/ui";
 import { OWNER_LABEL, normAcc, readHotkeys, type HotkeyOwner } from "../tools/hotkeys";
+import { displayAccel } from "../../components/hotkey";
 import { gotoTool } from "../tools/Tools";
 import {
   IconSliders, IconPlug, IconCpu, IconShield, IconKeyboard, IconMouse, IconChat, IconGrid, IconInfo,
@@ -307,7 +308,7 @@ export function Settings() {
                   return (
                     <div key={o} className="flex items-center gap-[12px] px-[15px] py-[10px] border-b border-border-soft last:border-b-0 hover:bg-hover">
                       <span className="w-[150px] flex-none truncate text-[12.5px]">{t(OWNER_LABEL[o])}</span>
-                      <span className={`w-[130px] flex-none font-mono text-[12px] whitespace-nowrap ${acc ? "text-text" : "text-faint"}`}>{acc || "—"}</span>
+                      <span className={`w-[130px] flex-none font-mono text-[12px] whitespace-nowrap ${acc ? "text-text" : "text-faint"}`}>{displayAccel(acc) || "—"}</span>
                       <span className={`flex-1 min-w-0 truncate text-[11.5px] ${dup.length ? "text-warning" : acc ? "text-success" : "text-faint"}`}>
                         {dup.length ? t("settings.keyStateDup", { owner: t(OWNER_LABEL[dup[0]]) }) : acc ? t("settings.keyStateOk") : t("settings.keyStateUnset")}
                       </span>

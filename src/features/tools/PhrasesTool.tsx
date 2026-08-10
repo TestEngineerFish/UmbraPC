@@ -3,9 +3,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  ContextMenu, Pill, RefreshButton, btnGhost, btnPrimary, inputHotkey, inputSmall, toAccelerator,
+  ContextMenu, Pill, RefreshButton, btnGhost, btnPrimary, inputHotkey, inputSmall,
 } from "../../components/ui";
 import { HotkeyButton, HotkeyConflictBanner, useHotkeyConflict } from "./hotkeys";
+import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
 import { IconGrip } from "../../components/icons";
 import { launcherApi, clipApi, hasClip, type Phrase, type PhraseSyncState } from "./bridges";
 
@@ -64,7 +65,9 @@ export function PhrasesTool() {
   // 手柄按下标记：整行 draggable，但只认手柄发起的拖拽（见 row 里的 onDragStart）。
   const fromHandle = useRef(false);
   const [shortcut, setShortcut] = useState(DEFAULT_PHRASES_SHORTCUT);
-  const [recording, setRecording] = useState(false);
+  // 录制统一走 useHotkeyRecorder：e.code 取主键（Mac 上 Option 会改 e.key，
+  // Option+Shift+V 会录成「◊」）、录制期间关掉全局快捷键。
+  const { recording, start } = useHotkeyRecorder((acc) => { setShortcut(acc); void clipApi().setPhrasesShortcut(acc); });
   const conflict = useHotkeyConflict("phrases", shortcut);
 
   useEffect(() => { void api.getPhrases().then((p) => setPhrases(p || [])); }, []);
@@ -79,19 +82,6 @@ export function PhrasesTool() {
     void clipApi().getSettings().then((s) => { if (s.phrasesShortcut) setShortcut(s.phrasesShortcut); });
   }, []);
 
-  // 录制快捷键：按下组合键即保存；Esc 取消。
-  useEffect(() => {
-    if (!recording) return;
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") { setRecording(false); return; }
-      const acc = toAccelerator(e);
-      if (!acc) return;
-      setShortcut(acc); void clipApi().setPhrasesShortcut(acc); setRecording(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording]);
 
   // 落盘。主进程会盖改动时间戳、收集删除墓碑并排一次云端推送，这里不用自己管同步。
   const save = (list: Phrase[]) => {
@@ -254,7 +244,7 @@ export function PhrasesTool() {
           <div className="flex items-center gap-[14px]">
             <div className="w-[120px] flex-none whitespace-nowrap text-[13px]">{t("settings.phrasesShortcut")}</div>
             <div className="flex-1 min-w-0 flex items-center gap-[8px]">
-              <HotkeyButton recording={recording} value={shortcut} onClick={() => setRecording(true)} />
+              <HotkeyButton recording={recording} value={shortcut} onClick={start} />
               <button className={btnGhost} onClick={() => { setShortcut(DEFAULT_PHRASES_SHORTCUT); void clipApi().setPhrasesShortcut(DEFAULT_PHRASES_SHORTCUT); }}>
                 {t("common.reset")}
               </button>

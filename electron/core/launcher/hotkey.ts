@@ -37,6 +37,12 @@ const KEY_ALIAS: Record<string, string> = {
   up: "Up", down: "Down", left: "Left", right: "Right",
   arrowup: "Up", arrowdown: "Down", arrowleft: "Left", arrowright: "Right",
   tab: "Tab", plus: "Plus",
+  // 下面这些是录制器（src/components/hotkey.ts 的 CODE_KEY）会吐出来的，
+  // 这张表不认的话，用户明明按了 Home，界面上却报「键位写法不对」。
+  // 两张表要一起改。
+  home: "Home", end: "End", pageup: "PageUp", pagedown: "PageDown", insert: "Insert",
+  numadd: "numadd", numsub: "numsub", nummult: "nummult",
+  numdiv: "numdiv", numdec: "numdec",
 };
 
 export interface Accel {
@@ -59,7 +65,12 @@ export function parseAccel(raw: string): Accel | null {
     const k = KEY_ALIAS[p.toLowerCase()];
     if (k) { key = k; continue; }
     if (/^f([1-9]|1[0-9]|2[0-4])$/i.test(p)) { key = p.toUpperCase(); continue; }
-    if (p.length === 1) { key = p.toUpperCase(); continue; }
+    if (/^num[0-9]$/i.test(p)) { key = p.toLowerCase(); continue; }   // 小键盘数字，Electron 写成 num0~num9
+    // 单字符主键**必须是可打印 ASCII**。Electron 的 Accelerator 只认 ASCII 键名，
+    // 非 ASCII 注册不上 —— 而 register() 未必报错，于是用户得到一个「看着设好了、
+    // 按下去没反应」的快捷键。旧版录制器在 Mac 上录 Option+Shift+V 存的正是 "◊"
+    // （Option 会改 e.key），这里拦下来，界面才会提示他重录一次。
+    if (/^[\x21-\x7E]$/.test(p)) { key = p.toUpperCase(); continue; }
     return null;
   }
   if (!key) return null;

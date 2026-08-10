@@ -5,7 +5,8 @@
 // 快捷键的录制框、冲突检测都复用 hotkeys.tsx，和设置页总览共用同一份数据源。
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { btnGhost, toAccelerator } from "../../components/ui";
+import { btnGhost } from "../../components/ui";
+import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
 import { IconWindow } from "../../components/icons";
 import { HotkeyButton, HotkeyConflictBanner, useHotkeyConflict } from "./hotkeys";
 import { VaultApp } from "../vault/VaultApp";
@@ -18,22 +19,10 @@ export function VaultTool() {
   const { t } = useTranslation();
   const api = vaultApi();
   const [shortcut, setShortcut] = useState(DEFAULT_SHORTCUT);
-  const [recording, setRecording] = useState(false);
   const conflict = useHotkeyConflict("vault", shortcut);
+  const { recording, start } = useHotkeyRecorder((acc) => { setShortcut(acc); void api.setShortcut(acc); });
 
   useEffect(() => { void api.status().then((s) => setShortcut(s.shortcut || "")); }, []);
-  useEffect(() => {
-    if (!recording) return;
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") { setRecording(false); return; }
-      const acc = toAccelerator(e); if (!acc) return;
-      setShortcut(acc); void api.setShortcut(acc); setRecording(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording]);
-
   return (
     <div className="h-full flex flex-col min-h-0">
       {/* 顶栏：唤起快捷键 + 独立窗口入口。高度和保险箱自己的顶栏（50px）对齐 */}
@@ -41,7 +30,7 @@ export function VaultTool() {
         <span className="flex-none whitespace-nowrap text-[12.5px] text-muted">{t("settings.vaultShortcut")}</span>
         {/* HotkeyButton 自带 flex-1，外面套一层定宽壳，免得它在顶栏里一路撑开 */}
         <div className="w-[152px] flex-none flex">
-          <HotkeyButton recording={recording} value={shortcut} onClick={() => setRecording(true)} />
+          <HotkeyButton recording={recording} value={shortcut} onClick={start} />
         </div>
         <button className={btnGhost} onClick={() => { setShortcut(DEFAULT_SHORTCUT); void api.setShortcut(DEFAULT_SHORTCUT); }}>{t("common.reset")}</button>
         {conflict ? <HotkeyConflictBanner owner={conflict} /> : null}

@@ -128,21 +128,10 @@ export function Segmented<T extends string>({ value, options, onChange }: {
   );
 }
 
-// 浏览器 KeyboardEvent → Electron Accelerator（如 ⌥Space → "Alt+Space"）。未按到主键返回 null。
-export function toAccelerator(e: KeyboardEvent): string | null {
-  if (["Meta", "Control", "Alt", "Shift"].includes(e.key)) return null;
-  const mods: string[] = [];
-  if (e.metaKey) mods.push("Command");
-  if (e.ctrlKey) mods.push("Control");
-  if (e.altKey) mods.push("Alt");
-  if (e.shiftKey) mods.push("Shift");
-  let key: string;
-  if (e.key === " ") key = "Space";
-  else if (e.key.startsWith("Arrow")) key = e.key.slice(5);
-  else if (e.key.length === 1) key = e.key.toUpperCase();
-  else key = e.key;
-  return [...mods, key].join("+");
-}
+// toAccelerator 搬到了 components/hotkey.ts（连同显示与录制 hook）。
+// 原来这份用 e.key 取主键：Mac 上 Option 会改字符，Option+Shift+V 录出来是「◊」、
+// Option+Shift+Space 录出来是个看不见的空格，存进去主进程一律判「键位写法不对」。
+// 别在这里再加一份，录制一律用 components/HotkeyRecorder 的 useHotkeyRecorder。
 
 // ── 刷新按钮 ────────────────────────────────────────────────────────────────
 // 纯图标的刷新按钮，任务 / 工作区 / 灵感三处共用。

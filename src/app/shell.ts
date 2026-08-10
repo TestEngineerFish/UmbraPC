@@ -6,6 +6,7 @@
 import { chatConn, getServerUrl, setServerUrl, hasToken, getDeviceName, setDeviceName } from "../services/server";
 import { fetchJobs, fetchJobDetail, type Job, type JobDetail } from "../services/server";
 import { fetchInspirations, fetchInspirationCounts, type Inspiration, type InspirationCounts } from "../services/server";
+import { readLayout, toAccelerator, type LayoutMap } from "../components/hotkey";
 import * as chat from "../features/chat/chat";
 import * as desktop from "../services/desktop";
 import { t } from "../i18n";
@@ -326,27 +327,19 @@ function beginShortcutRecording(target: ShortcutTarget): void {
   slot.recording = true;
   desktop.pauseShortcuts(); // 录制期间暂停全局快捷键，避免按下旧键触发功能
   render();
+  // 键盘布局异步读一次（Mac 上 Option 会改 e.key，主键一律从 e.code 取；
+  // 非 QWERTY 布局再靠布局表翻成键帽上印的字）。详见 components/hotkey.ts。
+  let layout: LayoutMap = null;
+  void readLayout().then((m) => { layout = m; });
   const onKey = (e: KeyboardEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (e.key === "Escape") {
+    if (e.code === "Escape" && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
       finish();
       return;
     }
-    const mods: string[] = [];
-    if (e.metaKey) mods.push("Command");
-    if (e.ctrlKey) mods.push("Control");
-    if (e.altKey) mods.push("Alt");
-    if (e.shiftKey) mods.push("Shift");
-    const code = e.code;
-    let main = "";
-    if (/^Key([A-Z])$/.test(code)) main = code.slice(3);
-    else if (/^Digit([0-9])$/.test(code)) main = code.slice(5);
-    else if (/^F([0-9]{1,2})$/.test(code)) main = code;
-    else if (code === "Space") main = "Space";
-    else if (code === "Backquote") main = "`";
-    if (mods.length === 0 || !main) return; // 必须含修饰键 + 有效主键
-    const acc = [...mods, main].join("+");
+    const acc = toAccelerator(e, layout);
+    if (!acc || acc.split("+").length < 2) return; // 必须含修饰键 + 有效主键
     bridge.setShortcut(acc).then((r) => {
       if (!r.ok) console.warn("快捷键注册失败（可能被占用）：" + acc);
     });

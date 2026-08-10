@@ -2,7 +2,8 @@
 // 工作流编排已拆成同级的独立二级页（WorkflowTool），这里不再挂它的入口。
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { Toggle, RowsCard, SettingRow, RowHint, Panel, btnGhost, toAccelerator } from "../../components/ui";
+import { Toggle, RowsCard, SettingRow, RowHint, Panel, btnGhost } from "../../components/ui";
+import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
 import { HotkeyButton, HotkeyConflictBanner, useHotkeyConflict } from "./hotkeys";
 import { IconSearch } from "../../components/icons";
 import { launcherApi } from "./bridges";
@@ -20,26 +21,14 @@ export function LauncherTool() {
   const api = launcherApi();
   const [enabled, setEnabled] = useState(true);
   const [shortcut, setShortcut] = useState("Alt+Space");
-  const [recording, setRecording] = useState(false);
   const conflict = useHotkeyConflict("launcher", shortcut);
+  // 录制统一走 useHotkeyRecorder：e.code 取主键、录制期间关掉全局快捷键
+  // （不关的话按 Alt+Space 会先被快捷入口自己截走，根本录不进来）。
+  const { recording, start } = useHotkeyRecorder((acc) => { setShortcut(acc); void api.setShortcut(acc); });
 
   useEffect(() => {
     void api.getSettings().then((s) => { setEnabled(s.enabled); setShortcut(s.shortcut); });
   }, []);
-
-  // 录制快捷键：按下组合键即保存；Esc 取消。
-  useEffect(() => {
-    if (!recording) return;
-    const onKey = (e: KeyboardEvent) => {
-      e.preventDefault(); e.stopPropagation();
-      if (e.key === "Escape") { setRecording(false); return; }
-      const acc = toAccelerator(e);
-      if (!acc) return;
-      setShortcut(acc); void api.setShortcut(acc); setRecording(false);
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [recording]);
 
   return (
     <>
@@ -50,7 +39,7 @@ export function LauncherTool() {
         </SettingRow>
         <SettingRow label={t("settings.launcherShortcut")}>
           <div className="flex-1 min-w-0 flex items-center gap-[8px]">
-            <HotkeyButton recording={recording} value={shortcut} onClick={() => setRecording(true)} />
+            <HotkeyButton recording={recording} value={shortcut} onClick={start} />
             <button className={btnGhost} onClick={() => { setShortcut("Alt+Space"); void api.setShortcut("Alt+Space"); }}>
               {t("common.reset")}
             </button>
