@@ -93,6 +93,9 @@ const PORT_Y = 21;    // 端口的垂直位置：卡片头部的竖直中线（1
 const PORT_GAP = 20;   // 多出口节点：相邻两个输出端口的垂直间距
 const MODS = ["", "cmd", "alt", "ctrl", "shift"];
 const MOD_LABEL: Record<string, string> = { "": "↵", cmd: "⌘↵", alt: "⌥↵", ctrl: "⌃↵", shift: "⇧↵" };
+// 世界层的**名义**尺寸。不是边界 —— 节点坐标可正可负，画布是无限的。
+// 它只有两个用途：给世界层一个初始盒子，以及决定连线 SVG 往外扩多大
+// （左上各扩一个世界、总尺寸三倍，见渲染处）。
 const WORLD_W = 4000, WORLD_H = 3000;
 // 右侧对象库的开合状态（记在本地，跟着人走而不是跟着工作流走）。
 const LS_LIB = "umbra.wf.lib";
@@ -1084,7 +1087,8 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   const placePrefab = (p: WFPrefab, px: number, py: number) => {
     if (!curIdRef.current || !p.nodes.length) return;
     const map = new Map<string, string>();
-    const nodes = clone(p.nodes).map((n) => { const id = uid(); map.set(n.id, id); return { ...n, id, x: Math.max(0, px + n.x), y: Math.max(0, py + n.y) }; });
+    // 粘贴点在负坐标区也照粘 —— 和拖拽一样，世界原点不是边界。
+    const nodes = clone(p.nodes).map((n) => { const id = uid(); map.set(n.id, id); return { ...n, id, x: px + n.x, y: py + n.y }; });
     const conns = p.connections.filter((c) => map.has(c.from) && map.has(c.to)).map((c) => ({ ...c, from: map.get(c.from)!, to: map.get(c.to)! }));
     updateCur((w) => ({ ...w, nodes: [...w.nodes, ...nodes], connections: [...w.connections, ...conns] }));
     setSelSet(nodes.map((n) => n.id)); setSelNode(nodes[0]?.id || null); setSelConn(null);
@@ -1236,7 +1240,11 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
       if (drag.current) {
         const d = drag.current; d.moved = true;
         const w = toWorld(e.clientX, e.clientY);
-        const x = Math.max(0, w.x - d.ox), y = Math.max(0, w.y - d.oy);
+        // **不夹到第一象限**。原来这里是 Math.max(0, …)，于是画布能一直往左平移、
+        // 节点却拖不过 x=0 —— 看着像「画布无限、节点有围栏」，很莫名其妙。
+        // 坐标允许为负，世界原点只是个参考点，不是边界。
+        // （真把节点拖出视野也不会丢：⇧1「适应画布」按外接矩形收回来，负坐标一样算得对。）
+        const x = w.x - d.ox, y = w.y - d.oy;
         setWfs((prev) => prev.map((wf) => {
           if (wf.id !== curIdRef.current) return wf;
           // 整组位移（E4）：位移量取主节点这一帧真正移动的距离，其余选区节点照搬同一个 dx/dy。
@@ -1244,7 +1252,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           const dx = x - (base?.x ?? x), dy = y - (base?.y ?? y);
           const grp = new Set(d.group);
           return { ...wf, nodes: wf.nodes.map((n) => (n.id === d.id ? { ...n, x, y }
-            : grp.has(n.id) ? { ...n, x: Math.max(0, n.x + dx), y: Math.max(0, n.y + dy) } : n)) };
+            : grp.has(n.id) ? { ...n, x: n.x + dx, y: n.y + dy } : n)) };
         }));
       } else if (link.current) {
         setLinkPos(toWorld(e.clientX, e.clientY));
@@ -1622,9 +1630,17 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
               style={{ boxShadow: `inset 0 0 0 2px ${CV.orange}`, background: "rgba(232,89,12,.06)" }} />
           ) : null}
           {!cur ? <div className="absolute inset-0 flex items-center justify-center text-[13px] text-white/40">新建或选择一个工作流</div> : null}
+          {/* 世界层。宽高只是个名义尺寸，**不是边界** —— 它没有 overflow:hidden，
+              节点用绝对定位，坐标为负照样画得出来。真正裁剪的是外面那层画布视口。 */}
           {cur ? (
             <div className="absolute top-0 left-0" style={{ width: WORLD_W, height: WORLD_H, transform: `translate(${pan.x}px,${pan.y}px) scale(${scale})`, transformOrigin: "0 0" }}>
-              <svg className="absolute top-0 left-0 pointer-events-none" width={WORLD_W} height={WORLD_H}>
+              {/* 连线的 SVG **必须单独处理负坐标**：SVG 默认裁到自己的 viewport，
+                  节点拖到 x<0 时连线会被齐刷刷切掉（节点还在、线没了）。
+                  做法是把元素往左上各挪一个世界的距离，viewBox 的原点跟着挪同样的量 ——
+                  两边抵消之后，世界坐标 (0,0) 仍然落在父容器的 (0,0)，其余代码不用改。 */}
+              <svg className="absolute pointer-events-none" style={{ left: -WORLD_W, top: -WORLD_H, overflow: "visible" }}
+                width={WORLD_W * 3} height={WORLD_H * 3}
+                viewBox={`${-WORLD_W} ${-WORLD_H} ${WORLD_W * 3} ${WORLD_H * 3}`}>
                 {cur.connections.map((c, i) => {
                   const a = node(c.from), b = node(c.to); if (!a || !b) return null;
                   const p1 = anchor(a, "out", c.fromPort), p2 = anchor(b, "in");
