@@ -47,6 +47,35 @@ interface ShotAPI {
   translate(dataUrl: string): Promise<{ ok: boolean; source?: string; translation?: string; error?: string }>;
   pin(dataUrl: string, selection: { x: number; y: number; w: number; h: number }): Promise<{ ok: boolean; error?: string }>;
   onSession(cb: (data: CaptureData) => void): () => void;
+  // 滚动长截图：start 之后主进程接管抓帧，进度/结果由下面两个事件推回来。
+  scrollStart(selection: Selection): Promise<{ ok: boolean; error?: string }>;
+  scrollStop(commit: boolean): Promise<{ ok: boolean }>;
+  scrollAuto(on: boolean): Promise<{ ok: boolean; error?: string }>;
+  onScrollProgress(cb: (p: ScrollProgress) => void): () => void;
+  onScrollDone(cb: (p: ScrollDone) => void): () => void;
+}
+// 抓帧进度：rows/frameHeight 用来换算「已捕获几屏」，gaps>0 说明中间有断层，
+// auto=自动滚是否还开着，atBottom=已判定滚到底（自动滚会自己停下，等用户确认收工）。
+interface ScrollProgress {
+  rows: number;
+  frameHeight: number;
+  gaps: number;
+  status: "first" | "appended" | "same" | "miss" | "gap";
+  full: boolean;
+  auto: boolean;
+  atBottom: boolean;
+  autoError: string;
+}
+// 滚动结束：ok=true 带回拼好的长图；ok=false 表示取消（原截图会话原样保留）。
+// view=覆盖窗恢复整屏后的 CSS 尺寸，用来等窗口真的变回去了再排版（见 waitForView）。
+interface ScrollDone {
+  ok: boolean;
+  dataUrl?: string;
+  width?: number;
+  height?: number;
+  gaps?: number;
+  screens?: number;
+  view?: { width: number; height: number } | null;
 }
 declare global {
   interface Window {
@@ -55,7 +84,8 @@ declare global {
 }
 const shot = window.umbraShot;
 
-type Phase = "wait" | "select" | "annotate";
+// scroll=滚动长截图进行中（此时覆盖窗被主进程缩成了底部控制条）。
+type Phase = "wait" | "select" | "annotate" | "scroll";
 // select=拉截图区域；region/regionMove=二次调整截图区域；marquee=框选多个对象。
 type GestureMode = "none" | "select" | "draw" | "move" | "scale" | "rotate" | "endpoint" | "marquee" | "region" | "regionMove";
 
@@ -72,6 +102,60 @@ interface TextEdit {
   orig?: TextObj; // 再编辑时的原对象（Esc 还原）
 }
 
+// 控制条要显示的滚动状态（进度 + 自动滚开关 + 出错原因）。
+interface ScrollUiState {
+  rows: number;
+  frameHeight: number;
+  gaps: number;
+  full: boolean;
+  auto: boolean;
+  atBottom: boolean;
+  autoError: string;
+}
+
+// 长图上屏时四周留的边距（CSS px）——工具条和提示条得有地方摆。
+const LONG_MARGIN = 28;
+
+/**
+ * 把 w×h 的图等比缩进窗口（只缩不放），返回它在窗口里的居中矩形。
+ * 滚动长截图拼出来的图通常比屏幕高好几倍，只能缩着看；导出仍按原始像素合成，不损失清晰度。
+ */
+/**
+ * 等覆盖窗从「滚动控制条」恢复成整屏之后再执行 run。
+ *
+ * 主进程的 setBounds 是异步生效的，紧跟着发过来的 scrollDone 到达时 window.innerWidth
+ * 很可能还是控制条那 460px——拿它算长图布局会算成一条缝。这里盯 resize 事件，
+ * 尺寸对上（或超时兜底）才继续。
+ */
+function waitForView(view: { width: number; height: number } | null | undefined, run: () => void, timeoutMs = 500): void {
+  if (!view || window.innerWidth >= view.width) {
+    run();
+    return;
+  }
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    window.removeEventListener("resize", onResize);
+    clearTimeout(timer);
+    run();
+  };
+  const onResize = () => {
+    if (window.innerWidth >= view.width) finish();
+  };
+  window.addEventListener("resize", onResize);
+  const timer = setTimeout(finish, timeoutMs); // 兜底：万一没等到 resize，也别把长图卡住
+}
+
+function fitRect(w: number, h: number): Selection {
+  const maxW = Math.max(1, window.innerWidth - LONG_MARGIN * 2);
+  const maxH = Math.max(1, window.innerHeight - LONG_MARGIN * 2);
+  const k = Math.min(1, maxW / w, maxH / h);
+  const dw = Math.max(1, Math.round(w * k));
+  const dh = Math.max(1, Math.round(h * k));
+  return { x: Math.round((window.innerWidth - dw) / 2), y: Math.round((window.innerHeight - dh) / 2), w: dw, h: dh };
+}
+
 export function App() {
   const { t } = useTranslation();
   const [imgSrc, setImgSrc] = useState("");
@@ -85,12 +169,23 @@ export function App() {
   const [editing, setEditing] = useState<TextEdit | null>(null);
   const [cursor, setCursor] = useState("crosshair");
   const [result, setResult] = useState<{ loading: boolean; title: string; text: string; error?: string; kind?: "ocr" | "translate" } | null>(null);
+  // 画面在窗口里占的矩形（CSS px）。null=常规截图，画面铺满整窗；
+  // 拼出来的长图比屏幕高，会被等比缩到窗口内居中显示，这时它就不是 (0,0,W,H) 了。
+  // 所有「窗口坐标 ↔ 图像像素」的换算都要过 rectOf()，别再直接用 window.innerWidth。
+  const [imgRect, setImgRect] = useState<Selection | null>(null);
+  // 滚动长截图的实时状态（控制条显示用）；null=没在滚。
+  const [scrollState, setScrollState] = useState<ScrollUiState | null>(null);
+  // 长图拼完后的提示（断层数），标注阶段顶部飘一条；null=不显示。
+  const [notice, setNotice] = useState<string | null>(null);
+  // 下一张要加载的画面是长图：onImgLoad 里据此走「等比缩放居中」而不是常规的铺满整窗。
+  const pendingLongRef = useRef(false);
 
   const imgRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mosaicBaseRef = useRef<HTMLCanvasElement | null>(null);
   const textAreaRef = useRef<HTMLTextAreaElement>(null);
-  const sampleRef = useRef<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; ratio: number } | null>(null);
+  // 取色采样画布。ratio=图像像素/窗口 CSS px，origin=画面在窗口里的左上角（长图模式下不是 0,0）。
+  const sampleRef = useRef<{ canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D; ratio: number; origin: Point } | null>(null);
   const cursorRef = useRef<Point>({ x: 0, y: 0 });
   // 鼠标是否已经动过：刚进截屏、还没动之前整屏压一层遮罩提示「已进入截屏」，
   // 一动就撤掉（微信 PC 端就是这个手感），免得遮罩挡着取景。
@@ -165,6 +260,10 @@ export function App() {
     setObjects([]);
     setSelectedIds([]);
     setEditing(null);
+    setImgRect(null);
+    setScrollState(null);
+    setNotice(null);
+    pendingLongRef.current = false;
     g.current.mode = "none";
     g.current.draft = null;
     histRef.current = [];
@@ -185,28 +284,48 @@ export function App() {
     return off;
   }, [startSession]);
 
+  // imgRect 的 ref 影子：手势回调不在 React 渲染闭包里跑，只能读 ref（与 st.current 同理）。
+  const imgRectRef = useRef<Selection | null>(null);
+  imgRectRef.current = imgRect;
+  // 画面在窗口里占的矩形。常规截图是铺满整窗；长图模式下是 imgRect（等比缩放后居中）。
+  // 单独抽出来是因为「窗口坐标 → 图像像素」的换算在合成/取色/马赛克/选区限位里各用了一遍。
+  const rectOf = useCallback((): Selection => imgRectRef.current ?? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }, []);
+
   const onImgLoad = useCallback(() => {
     if (!imgSrc || !imgRef.current) return;
     const img = imgRef.current;
     const src = img.src; // 会话令牌：延后的活儿跑起来时要确认还是同一张冻结画面
     sizeCanvas();
-    // 先把窗口显示出来。马赛克底图和取色采样画布都不是首帧必需的，
-    // 而取色画布是「原始分辨率 + willReadFrequently」——后者会强制走软件光栅，
-    // 一张 4K 截图光是分配 + drawImage 就要上百毫秒，摆在 ready() 前面等于让快门白等半拍。
-    setPhase("select");
-    shot.ready();
+    // 长图：等比缩到窗口里居中显示，选区直接设成整张图，跳过框选直接进标注。
+    // 窗口这时已经是显示着的（滚动控制条刚缩回整屏），不用再走 ready()。
+    const isLong = pendingLongRef.current;
+    pendingLongRef.current = false;
+    if (isLong) {
+      const r = fitRect(img.naturalWidth, img.naturalHeight);
+      imgRectRef.current = r;
+      setImgRect(r);
+      setSelection(r);
+      setPhase("annotate");
+    } else {
+      // 先把窗口显示出来。马赛克底图和取色采样画布都不是首帧必需的，
+      // 而取色画布是「原始分辨率 + willReadFrequently」——后者会强制走软件光栅，
+      // 一张 4K 截图光是分配 + drawImage 就要上百毫秒，摆在 ready() 前面等于让快门白等半拍。
+      setPhase("select");
+      shot.ready();
+    }
     requestAnimationFrame(redraw);
     // 画面出来之后再补这两张离屏画布。消费方本来就容忍 null
     // （drawObj 的 mosaicBase、放大镜的 sample），最多头一两帧没有马赛克底与取色。
     requestAnimationFrame(() => requestAnimationFrame(() => {
       if (!imgRef.current || imgRef.current.src !== src) return; // 已经换会话了
-      mosaicBaseRef.current = buildMosaicBase(img, window.innerWidth, window.innerHeight);
+      const r = rectOf();
+      mosaicBaseRef.current = buildMosaicBase(img, window.innerWidth, window.innerHeight, r);
       const s = document.createElement("canvas");
       s.width = img.naturalWidth;
       s.height = img.naturalHeight;
       const sctx = s.getContext("2d", { willReadFrequently: true })!;
       sctx.drawImage(img, 0, 0);
-      sampleRef.current = { canvas: s, ctx: sctx, ratio: img.naturalWidth / window.innerWidth };
+      sampleRef.current = { canvas: s, ctx: sctx, ratio: img.naturalWidth / r.w, origin: { x: r.x, y: r.y } };
     }));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [imgSrc]);
@@ -214,8 +333,8 @@ export function App() {
   function sampleColor(x: number, y: number): string {
     const s = sampleRef.current;
     if (!s) return "#000000";
-    const px = Math.max(0, Math.min(s.canvas.width - 1, Math.round(x * s.ratio)));
-    const py = Math.max(0, Math.min(s.canvas.height - 1, Math.round(y * s.ratio)));
+    const px = Math.max(0, Math.min(s.canvas.width - 1, Math.round((x - s.origin.x) * s.ratio)));
+    const py = Math.max(0, Math.min(s.canvas.height - 1, Math.round((y - s.origin.y) * s.ratio)));
     const d = s.ctx.getImageData(px, py, 1, 1).data;
     return "#" + [d[0], d[1], d[2]].map((v) => v.toString(16).padStart(2, "0")).join("").toUpperCase();
   }
@@ -557,10 +676,11 @@ export function App() {
       g.current.last = p;
       redraw();
     } else if (gm === "region" && g.current.regionHandle && g.current.regionBase) {
-      setSelection(applyRegionResize(g.current.regionBase, g.current.regionHandle, p));
+      // 拖手柄改选区也要限位：长图模式下画面只占窗口中间一块，拖出画面外合成出来会是一片空白。
+      setSelection(clampRegion(applyRegionResize(g.current.regionBase, g.current.regionHandle, p), rectOf()));
     } else if (gm === "regionMove" && g.current.regionBase) {
       const b = g.current.regionBase;
-      setSelection(clampRegion({ x: b.x + (p.x - g.current.start.x), y: b.y + (p.y - g.current.start.y), w: b.w, h: b.h }));
+      setSelection(clampRegion({ x: b.x + (p.x - g.current.start.x), y: b.y + (p.y - g.current.start.y), w: b.w, h: b.h }, rectOf()));
     } else if (gm === "draw" && g.current.draft) {
       const d = g.current.draft;
       if (d.kind === "pen" || d.kind === "mosaic") d.points.push(p);
@@ -790,6 +910,15 @@ export function App() {
         return; // 其余交给输入框
       }
       const mod = e.metaKey || e.ctrlKey;
+      // 滚动截图进行中：整个窗口只剩一条控制条，键盘只认「Enter 收工 / Esc 取消」，
+      // 其余快捷键（删除、撤销、全选…）此刻都没有意义，直接吞掉免得误触。
+      if (s.phase === "scroll") {
+        if (e.key === "Enter" || e.key === "Escape") {
+          e.preventDefault();
+          stopScrollShot(e.key === "Enter");
+        }
+        return;
+      }
       if (e.key === "Escape") {
         e.preventDefault();
         if (s.result) setResult(null);
@@ -837,16 +966,19 @@ export function App() {
   }, []);
 
   // ── 合成输出 ──
+  // 合成导出：按物理像素裁底图 + 用同一个 drawObj 叠标注，保证导出与所见一致。
+  // ratio/原点都取自 rectOf()——长图模式下画面并不铺满窗口，直接用 window.innerWidth 会整体错位。
   function composite(): string | null {
     const img = imgRef.current;
     const sel = st.current.selection;
     if (!img || !sel) return null;
-    const ratio = img.naturalWidth / window.innerWidth;
+    const r = rectOf();
+    const ratio = img.naturalWidth / r.w;
     const out = document.createElement("canvas");
     out.width = Math.max(1, Math.round(sel.w * ratio));
     out.height = Math.max(1, Math.round(sel.h * ratio));
     const octx = out.getContext("2d")!;
-    octx.drawImage(img, sel.x * ratio, sel.y * ratio, sel.w * ratio, sel.h * ratio, 0, 0, out.width, out.height);
+    octx.drawImage(img, (sel.x - r.x) * ratio, (sel.y - r.y) * ratio, sel.w * ratio, sel.h * ratio, 0, 0, out.width, out.height);
     octx.save();
     octx.scale(ratio, ratio);
     octx.translate(-sel.x, -sel.y);
@@ -860,11 +992,12 @@ export function App() {
     const img = imgRef.current;
     const sel = st.current.selection;
     if (!img || !sel) return null;
-    const ratio = img.naturalWidth / window.innerWidth;
+    const r = rectOf();
+    const ratio = img.naturalWidth / r.w;
     const out = document.createElement("canvas");
     out.width = Math.max(1, Math.round(sel.w * ratio));
     out.height = Math.max(1, Math.round(sel.h * ratio));
-    out.getContext("2d")!.drawImage(img, sel.x * ratio, sel.y * ratio, sel.w * ratio, sel.h * ratio, 0, 0, out.width, out.height);
+    out.getContext("2d")!.drawImage(img, (sel.x - r.x) * ratio, (sel.y - r.y) * ratio, sel.w * ratio, sel.h * ratio, 0, 0, out.width, out.height);
     return out.toDataURL("image/png");
   }
   async function doOcr() {
@@ -901,6 +1034,74 @@ export function App() {
     else shot.cancel();
   }
 
+  // ── 滚动长截图 ──
+  // 点「长截图」后主进程把覆盖窗缩成一条控制条让开屏幕，用户自己滚页面、主进程逐帧抓选区去重叠拼接；
+  // 点完成（或 Enter）收工，拼好的长图当作新画面回到标注阶段，标注/马赛克/保存/贴图照常可用。
+
+  /** 进入滚动截图。启动失败（选区太矮、没有会话等）就原地退回标注阶段并提示原因。 */
+  async function startScrollShot() {
+    const s = st.current;
+    if (s.editing) commitText();
+    if (s.phase !== "annotate" || !s.selection) return;
+    setResult(null);
+    setNotice(null);
+    setSelectedIds([]);
+    setScrollState({ rows: 0, frameHeight: 0, gaps: 0, full: false, auto: false, atBottom: false, autoError: "" });
+    setPhase("scroll");
+    const r = await shot.scrollStart(s.selection);
+    if (!r.ok) {
+      setScrollState(null);
+      setPhase("annotate");
+      setNotice(r.error || t("screenshot.scrollFailed"));
+    }
+  }
+  /** 结束滚动截图：commit=true 拼图，false 取消。结果由 onScrollDone 统一处理。 */
+  function stopScrollShot(commit: boolean) {
+    if (st.current.phase !== "scroll") return;
+    void shot.scrollStop(commit);
+  }
+  /**
+   * 开/关「自动滚到底」。开失败（多半是 mac 没给辅助功能权限）就把原因显示在控制条上，
+   * 手动滚不受影响，照样能接着截。
+   */
+  async function toggleScrollAuto(on: boolean) {
+    setScrollState((s) => (s ? { ...s, auto: on, autoError: on ? "" : s.autoError } : s));
+    const r = await shot.scrollAuto(on);
+    if (!r.ok) setScrollState((s) => (s ? { ...s, auto: false, autoError: r.error || t("screenshot.scrollAutoFailed") } : s));
+  }
+
+  // 主进程推来的抓帧进度与拼接结果。
+  useEffect(() => {
+    const offProgress = shot.onScrollProgress((p) =>
+      setScrollState({ rows: p.rows, frameHeight: p.frameHeight, gaps: p.gaps, full: p.full, auto: p.auto, atBottom: p.atBottom, autoError: p.autoError }),
+    );
+    const offDone = shot.onScrollDone((d) => {
+      setScrollState(null);
+      if (!d.ok || !d.dataUrl) {
+        setPhase("annotate"); // 取消：原来的冻结画面和选区都还在，原样接着标注
+        return;
+      }
+      // 长图是一张全新的画面，旧画面上的标注和撤销栈都不能跟着走。
+      setObjects([]);
+      setSelectedIds([]);
+      histRef.current = [];
+      mosaicBaseRef.current = null;
+      sampleRef.current = null;
+      setNotice(d.gaps ? t("screenshot.scrollGapWarn", { count: d.gaps }) : null);
+      const url = d.dataUrl;
+      waitForView(d.view, () => {
+        pendingLongRef.current = true;
+        // 与 startSession 同理：不先清空 src，同一张图不会再触发 onLoad。
+        setImgSrc("");
+        requestAnimationFrame(() => setImgSrc(url));
+      });
+    });
+    return () => {
+      offProgress();
+      offDone();
+    };
+  }, [t]);
+
   const onCanvasDbl = (e: React.MouseEvent) => {
     const s = st.current;
     if (s.phase !== "annotate") return;
@@ -935,11 +1136,38 @@ export function App() {
   return (
     <div style={{ width: "100vw", height: "100vh", overflow: "hidden" }}>
       <style>{TOOLBAR_CSS}</style>
-      {imgSrc ? <img ref={imgRef} src={imgSrc} onLoad={onImgLoad} draggable={false} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", pointerEvents: "none" }} alt="" /> : null}
-      <canvas ref={canvasRef} onMouseDown={onCanvasDown} onMouseMove={onCanvasHover} onDoubleClick={onCanvasDbl} style={{ position: "absolute", inset: 0, cursor: phase === "select" ? "crosshair" : cursor }} />
+      {/* 滚动截图期间覆盖窗被缩成一条控制条，画面和画布留在 DOM 里（img 一卸载就丢了 naturalWidth，
+          取消时没法原样回到标注），只是整体隐藏并停掉命中。 */}
+      {imgSrc ? (
+        <img
+          ref={imgRef}
+          src={imgSrc}
+          onLoad={onImgLoad}
+          draggable={false}
+          style={{
+            position: "absolute",
+            left: imgRect ? imgRect.x : 0,
+            top: imgRect ? imgRect.y : 0,
+            width: imgRect ? imgRect.w : "100%",
+            height: imgRect ? imgRect.h : "100%",
+            pointerEvents: "none",
+            opacity: phase === "scroll" ? 0 : 1,
+          }}
+          alt=""
+        />
+      ) : null}
+      <canvas
+        ref={canvasRef}
+        onMouseDown={onCanvasDown}
+        onMouseMove={onCanvasHover}
+        onDoubleClick={onCanvasDbl}
+        style={{ position: "absolute", inset: 0, cursor: phase === "select" ? "crosshair" : cursor, opacity: phase === "scroll" ? 0 : 1, pointerEvents: phase === "scroll" ? "none" : "auto" }}
+      />
       {(phase === "select" || phase === "annotate") && (selection || g.current.mode === "select") ? <SizeBadge get={() => (g.current.mode === "select" ? currentSel() : st.current.selection)} /> : null}
       {phase === "select" ? <Magnifier getCursor={() => cursorRef.current} sample={() => sampleRef.current} colorAt={sampleColor} /> : null}
       {editing ? <TextEditor edit={editing} onChange={(v) => setEditing((e) => (e ? { ...e, value: v } : e))} onBlurCommit={commitText} taRef={textAreaRef} /> : null}
+      {phase === "scroll" ? <ScrollBar state={scrollState} onStop={stopScrollShot} onAuto={toggleScrollAuto} /> : null}
+      {phase === "annotate" && notice ? <Notice text={notice} onClose={() => setNotice(null)} /> : null}
       {phase === "annotate" && selection ? (
         <Toolbar
           sel={selection}
@@ -956,9 +1184,55 @@ export function App() {
           onOcr={doOcr}
           onTranslate={doTranslate}
           onPin={pin}
+          onScroll={startScrollShot}
+          scrollDisabled={!!imgRect}
         />
       ) : null}
       {result && selection ? <ResultPanel sel={selection} data={result} onClose={() => setResult(null)} /> : null}
+    </div>
+  );
+}
+
+/**
+ * 滚动截图控制条：覆盖窗此刻已被主进程缩成一条，这就是窗口里唯一的内容。
+ * 显示实时进度（几屏 / 多高 / 有没有断层），提供「自动滚到底」开关、完成与取消（也可按 Enter / Esc）。
+ */
+function ScrollBar({ state, onStop, onAuto }: { state: ScrollUiState | null; onStop: (commit: boolean) => void; onAuto: (on: boolean) => void }) {
+  const { t } = useTranslation();
+  const screens = state && state.frameHeight > 0 ? state.rows / state.frameHeight : 0;
+  const auto = !!state?.auto;
+  // 标题按当前状态换：到底了先提示收工，自动滚进行中说一声别动鼠标，否则是手动滚的操作说明。
+  const title = state?.atBottom ? t("screenshot.scrollAtBottom") : auto ? t("screenshot.scrollAutoRunning") : t("screenshot.scrollHint");
+  return (
+    <div className="tb-scrollbar">
+      <div className="tb-scroll-info">
+        <div className="tb-scroll-title">{title}</div>
+        <div className="tb-scroll-sub">
+          {state?.autoError
+            ? state.autoError
+            : t("screenshot.scrollStat", { screens: screens.toFixed(1), rows: state?.rows ?? 0 }) +
+              (state?.gaps ? ` · ${t("screenshot.scrollGap", { count: state.gaps })}` : "") +
+              (state?.full ? ` · ${t("screenshot.scrollFull")}` : "")}
+        </div>
+      </div>
+      <button className={`tb-btn tb-tip ${auto ? "on" : ""}`} data-tip={auto ? t("screenshot.scrollAutoStop") : t("screenshot.scrollAuto")} onClick={() => onAuto(!auto)}>
+        {auto ? ICON.pause : ICON.auto}
+      </button>
+      <button className="tb-btn tb-tip" data-tip={t("screenshot.cancel")} onClick={() => onStop(false)}>
+        {ICON.cancel}
+      </button>
+      <button className="tb-btn tb-tip tb-check" data-tip={t("screenshot.scrollDone")} onClick={() => onStop(true)}>
+        {ICON.check}
+      </button>
+    </div>
+  );
+}
+
+// 一次性提示条（长图有断层时用）。挂在画面顶部中间，点一下关掉。
+function Notice({ text, onClose }: { text: string; onClose: () => void }) {
+  return (
+    <div className="tb-notice" onMouseDown={(e) => e.stopPropagation()} onClick={onClose}>
+      {text}
     </div>
   );
 }
@@ -1191,6 +1465,12 @@ const ICON = {
     </svg>
   ),
   check: <Ic d="M20 6 9 17l-5-5" />,
+  // 长截图：一个竖着的取景框 + 向下的箭头，表意「往下接着截」。
+  scroll: <Ic d="M7 3h10a1 1 0 0 1 1 1v16a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z|M12 8v8|M9 13l3 3 3-3" />,
+  // 自动滚到底：双箭头向下（快进感）。
+  auto: <Ic d="M6 5l6 6 6-6|M6 12l6 6 6-6" />,
+  // 暂停自动滚。
+  pause: <Ic d="M9 5v14|M15 5v14" />,
 };
 
 function Toolbar(props: {
@@ -1208,13 +1488,17 @@ function Toolbar(props: {
   onOcr: () => void;
   onTranslate: () => void;
   onPin: () => void;
+  onScroll: () => void;
+  // 长图模式下置灰：这时画面已经是拼好的长图、不再是实时屏幕，再滚一次没有意义。
+  scrollDisabled: boolean;
 }) {
   const { t } = useTranslation();
   const { sel, tool } = props;
   const sizeTip = [t("common.sizeSmall"), t("common.sizeMedium"), t("common.sizeLarge")] as const;
   const colorTip = [t("common.colorRed"), t("common.colorYellow"), t("common.colorBlue")] as const;
   const gap = 10;
-  const barW = 500;
+  // 工具条估算宽度（7 工具 + 8 动作 + 分隔），只用来把它横向夹在窗口内，宽一点不影响观感。
+  const barW = 540;
   let top = sel.y + sel.h + gap;
   const above = top + 100 > window.innerHeight;
   if (above) top = Math.max(gap, sel.y - 104);
@@ -1236,6 +1520,7 @@ function Toolbar(props: {
         <button className="tb-btn tb-tip" data-tip={t("screenshot.cancel")} onClick={props.onCancel}>{ICON.cancel}</button>
         <button className="tb-btn tb-tip" data-tip={t("screenshot.save")} onClick={props.onSave}>{ICON.save}</button>
         <button className="tb-btn tb-tip" data-tip={t("screenshot.pin")} onClick={props.onPin}>{ICON.pin}</button>
+        <button className="tb-btn tb-tip" data-tip={props.scrollDisabled ? t("screenshot.scrollAgainTip") : t("screenshot.scroll")} disabled={props.scrollDisabled} onClick={props.onScroll}>{ICON.scroll}</button>
         <button className="tb-btn tb-tip" data-tip={t("screenshot.ocr")} onClick={props.onOcr}>{ICON.ocr}</button>
         <button className="tb-btn tb-tip tb-txt" data-tip={t("screenshot.translate")} onClick={props.onTranslate}>文A</button>
         <button className="tb-btn tb-tip tb-check" data-tip={t("screenshot.finish")} onClick={props.onFinish}>{ICON.check}</button>
@@ -1283,6 +1568,8 @@ const TOOLBAR_CSS = `
 .tb-btn{width:32px;height:30px;border-radius:8px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;background:transparent;color:var(--tb-fg);transition:background .12s,color .12s;}
 .tb-btn:hover{background:var(--tb-hover);}
 .tb-btn.on{background:var(--tb-active-bg);color:var(--tb-active-fg);}
+.tb-btn:disabled{opacity:.35;cursor:default;}
+.tb-btn:disabled:hover{background:transparent;}
 .tb-btn.tb-txt{font-size:13px;font-weight:600;}
 .tb-btn.tb-check{color:var(--tb-active-fg);}
 .tb-btn.tb-check:hover{background:var(--tb-active-bg);}
@@ -1301,4 +1588,24 @@ const TOOLBAR_CSS = `
 .tb-bar .tb-tip::after{bottom:calc(100% + 6px);}
 .tb-panel .tb-tip::after{top:calc(100% + 6px);}
 .tb-tip:hover::after,.tb-tip:focus-visible::after{opacity:1;}
+
+/* 滚动截图控制条：此时整个覆盖窗就这么大，铺满即可（留 8px 让阴影透出来）。 */
+.tb-scrollbar{
+  position:absolute;left:8px;right:8px;top:8px;bottom:8px;
+  display:flex;align-items:center;gap:6px;padding:8px 12px;
+  background:var(--tb-bg);border-radius:12px;box-shadow:var(--tb-shadow);color:var(--tb-fg);
+}
+.tb-scroll-info{flex:1;min-width:0;}
+.tb-scroll-title{font-size:12.5px;font-weight:600;line-height:1.35;}
+.tb-scroll-sub{font-size:11px;opacity:.7;line-height:1.4;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* 控制条太矮，气泡朝下会被窗口裁掉，统一朝上。 */
+.tb-scrollbar .tb-tip::after{bottom:calc(100% + 6px);}
+
+/* 一次性提示条（长图有断层等），画面顶部居中，点一下关掉。 */
+.tb-notice{
+  position:absolute;left:50%;top:16px;transform:translateX(-50%);z-index:11;
+  max-width:70vw;padding:7px 14px;border-radius:9px;cursor:pointer;
+  background:var(--tb-bg);color:var(--tb-fg);box-shadow:var(--tb-shadow);
+  font-size:12px;line-height:1.4;
+}
 `;

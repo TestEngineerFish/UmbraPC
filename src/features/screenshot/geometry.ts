@@ -294,12 +294,15 @@ export function onRegionBorder(sel: Selection, pt: Point): boolean {
   return inOuter && !inInner;
 }
 const MIN_REGION = 8;
-export function clampRegion(sel: Selection): Selection {
-  const W = window.innerWidth;
-  const H = window.innerHeight;
-  const w = Math.max(MIN_REGION, Math.min(sel.w, W));
-  const h = Math.max(MIN_REGION, Math.min(sel.h, H));
-  return { x: Math.max(0, Math.min(sel.x, W - w)), y: Math.max(0, Math.min(sel.y, H - h)), w, h };
+/**
+ * 把选区限制在画面范围内。bounds 缺省为整个窗口；
+ * 滚动长图模式下画面只占窗口中间一块，得把那块矩形传进来，否则选区能拖到图外面去。
+ */
+export function clampRegion(sel: Selection, bounds?: Selection): Selection {
+  const b = bounds ?? { x: 0, y: 0, w: window.innerWidth, h: window.innerHeight };
+  const w = Math.max(MIN_REGION, Math.min(sel.w, b.w));
+  const h = Math.max(MIN_REGION, Math.min(sel.h, b.h));
+  return { x: Math.max(b.x, Math.min(sel.x, b.x + b.w - w)), y: Math.max(b.y, Math.min(sel.y, b.y + b.h - h)), w, h };
 }
 export function applyRegionResize(base: Selection, id: RegionHandle, pt: Point): Selection {
   let x1 = base.x;

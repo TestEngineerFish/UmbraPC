@@ -39,7 +39,8 @@ async function requireScreen(): Promise<void> {
   }
 }
 // 辅助功能权限（点击/输入/按键/滚动需要；截图与打开应用不需要）。
-async function requireAccessibility(): Promise<void> {
+// 导出给截图模块复用——滚动长截图的「自动滚到底」同样要模拟滚轮，权限判定与文案只留这一份。
+export async function requireAccessibility(): Promise<void> {
   if (process.platform !== "darwin") return;
   const { systemPreferences } = await import("electron");
   if (!systemPreferences.isTrustedAccessibilityClient(false)) {
@@ -48,7 +49,8 @@ async function requireAccessibility(): Promise<void> {
 }
 
 // 懒加载 nut.js（避免无界面环境在加载期就拉起原生库）。
-async function loadNut(): Promise<any> {
+// 同样导出给截图模块复用：延迟参数（autoDelayMs）只在这里配一次，两边行为一致。
+export async function loadNut(): Promise<any> {
   const nut: any = await import("@nut-tree-fork/nut-js");
   nut.mouse.config.autoDelayMs = 30;
   nut.keyboard.config.autoDelayMs = 20;

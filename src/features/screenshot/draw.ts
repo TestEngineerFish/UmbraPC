@@ -100,11 +100,25 @@ function drawText(ctx: CanvasRenderingContext2D, value: string, at: Point, fontS
   ctx.restore();
 }
 
-// 生成全屏像素化底图（缩小 dividerX 倍再放大，关闭平滑）。CSS px 分辨率，供马赛克 pattern 用。
-export function buildMosaicBase(img: HTMLImageElement, cssW: number, cssH: number, factor = 12): HTMLCanvasElement {
+// 画面在窗口里占的矩形（CSS px）。常规截图铺满整窗；滚动长图是等比缩放后居中的一块。
+export interface ImageRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * 生成像素化底图（缩小 factor 倍再放大、关闭平滑），供马赛克当 pattern 用。
+ *
+ * 底图始终是**整窗大小**（cssW×cssH），画面按 rect 摆进去——马赛克描边用的是窗口坐标，
+ * pattern 靠「与底图同一坐标系」才能自然对齐；rect 缺省为铺满整窗。
+ */
+export function buildMosaicBase(img: HTMLImageElement, cssW: number, cssH: number, rect?: ImageRect, factor = 12): HTMLCanvasElement {
+  const r = rect ?? { x: 0, y: 0, w: cssW, h: cssH };
   const small = document.createElement("canvas");
-  small.width = Math.max(1, Math.round(cssW / factor));
-  small.height = Math.max(1, Math.round(cssH / factor));
+  small.width = Math.max(1, Math.round(r.w / factor));
+  small.height = Math.max(1, Math.round(r.h / factor));
   const sctx = small.getContext("2d")!;
   sctx.drawImage(img, 0, 0, small.width, small.height);
   const big = document.createElement("canvas");
@@ -112,6 +126,6 @@ export function buildMosaicBase(img: HTMLImageElement, cssW: number, cssH: numbe
   big.height = cssH;
   const bctx = big.getContext("2d")!;
   bctx.imageSmoothingEnabled = false;
-  bctx.drawImage(small, 0, 0, cssW, cssH);
+  bctx.drawImage(small, r.x, r.y, r.w, r.h);
   return big;
 }

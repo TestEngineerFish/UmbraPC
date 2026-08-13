@@ -2113,7 +2113,7 @@ export function nodeRows(n: WFNode): SumRow[] {
       { k: "回车", v: "在词典 App 中打开" },
     ];
     case "input.calc": return [
-      { k: "输入", v: "算式，如 3*4+2" },
+      { k: "输入", v: "算式，如 3*4+2、sqrt(16)" },
       { k: "回车", v: "复制结果" },
     ];
     case "input.units": return [
@@ -2950,7 +2950,9 @@ function NodeConfig({ node, wfId, wfOn, onSave, onClose, onDelete }: {
       ) : null}
 
       {node.type === "input.calc" || node.type === "input.units" ? (
-        <Blank>{node.type === "input.calc" ? "输入算式即时求值（如 3*4+2）。" : "输入换算式即时换算（如 10km to mi、72f to c）。"}回车复制结果。无配置项。</Blank>
+        <Blank>{node.type === "input.calc"
+          ? "输入算式即时求值。认中文输入法的全角与标点（１＋１、（1+2）×3）、结尾的等号（1-1=）、千分位（1,234+1）、百分号（200*5%）、隐式乘法（2(3+4)），也支持 sqrt/log10/max/abs 等函数与 PI、阶乘 5!。纯数字和带单位的输入不出结果 —— 那是留给单位换算的。"
+          : "输入换算式即时换算（如 10km to mi、72f to c）。"}回车复制结果。无配置项。</Blank>
       ) : null}
 
       {node.type === "input.filefilter" ? (<>

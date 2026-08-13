@@ -271,6 +271,20 @@ contextBridge.exposeInMainWorld("umbraShot", {
     ipcRenderer.on("screenshot:session", l);
     return () => ipcRenderer.removeListener("screenshot:session", l);
   },
+  // 滚动长截图：start 之后主进程接管抓帧，进度/结果通过下面两个事件推回来。
+  scrollStart: (selection: unknown) => ipcRenderer.invoke("screenshot:scrollStart", selection),
+  scrollStop: (commit: boolean) => ipcRenderer.invoke("screenshot:scrollStop", commit),
+  scrollAuto: (on: boolean) => ipcRenderer.invoke("screenshot:scrollAuto", on),
+  onScrollProgress: (cb: (p: unknown) => void) => {
+    const l = (_e: unknown, p: unknown) => cb(p);
+    ipcRenderer.on("screenshot:scrollProgress", l);
+    return () => ipcRenderer.removeListener("screenshot:scrollProgress", l);
+  },
+  onScrollDone: (cb: (p: unknown) => void) => {
+    const l = (_e: unknown, p: unknown) => cb(p);
+    ipcRenderer.on("screenshot:scrollDone", l);
+    return () => ipcRenderer.removeListener("screenshot:scrollDone", l);
+  },
 });
 
 // 贴图窗口桥。
