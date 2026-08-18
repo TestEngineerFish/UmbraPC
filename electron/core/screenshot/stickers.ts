@@ -40,6 +40,8 @@ export class StickerManager {
       fullscreenable: false,
       minimizable: false,
       maximizable: false,
+      // Windows：工具窗不进 Alt-Tab，也少参与虚拟桌面的「激活这个进程就跳桌面」。
+      ...(process.platform === "win32" ? { type: "toolbar" as const } : {}),
       webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
     });
     win.setAspectRatio(w / h); // 拖边缩放锁定原始比例

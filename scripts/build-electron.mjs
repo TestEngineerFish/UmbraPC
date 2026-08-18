@@ -10,7 +10,7 @@ const common = {
   format: "cjs",
   target: "node20",
   // electron 由运行时提供；nut.js 含原生模块需从 node_modules 运行时加载（不打包）。
-  external: ["electron", "bufferutil", "utf-8-validate", "@nut-tree-fork/nut-js"],
+  external: ["electron", "bufferutil", "utf-8-validate", "@nut-tree-fork/nut-js", "koffi"],
   sourcemap: true,
   logLevel: "info",
 };

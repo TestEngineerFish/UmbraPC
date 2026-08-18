@@ -12,6 +12,7 @@ files:
 asarUnpack:
   - "**/*.node"
   - "node_modules/@nut-tree-fork/**"
+  - "node_modules/koffi/**"
 mac:
   icon: build/icon.png
   target:

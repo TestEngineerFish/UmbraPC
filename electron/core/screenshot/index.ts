@@ -11,6 +11,13 @@ import { ScrollStitcher } from "./scroll";
 import { loadNut, requireAccessibility } from "../computer";
 import { suppressAppActivate } from "../activation";
 import { accelProblem } from "../launcher/hotkey";
+import {
+  detectAppWasActive,
+  pinOverlayToCurrentDesktop,
+  releaseOverlayFocus,
+  waitDidFinishLoad,
+  type OverlayForeground,
+} from "../shared/overlay-focus";
 
 interface CaptureResult {
   dataUrl: string;
@@ -75,6 +82,9 @@ export class ScreenshotManager {
   private showFallback: NodeJS.Timeout | null = null;
   // 非 null 表示正在滚动长截图（此时覆盖窗缩成了底部控制条）。
   private scroll: ScrollSession | null = null;
+  private appWasActive = false;
+  private savedFg: OverlayForeground | null = null;
+  private rebuilding = false;
 
   private stickers: StickerManager;
 
@@ -166,8 +176,14 @@ export class ScreenshotManager {
   }
 
   // ── 覆盖窗 ──
-  private async ensureOverlay(): Promise<Electron.BrowserWindow> {
-    if (this.overlay && !this.overlay.isDestroyed()) return this.overlay;
+  private async ensureOverlay(forceNew = false): Promise<Electron.BrowserWindow> {
+    if (!forceNew && this.overlay && !this.overlay.isDestroyed()) return this.overlay;
+    if (this.overlay && !this.overlay.isDestroyed()) {
+      this.rebuilding = true;
+      try { this.overlay.destroy(); } catch { /* 重建途中 */ }
+      this.overlay = null;
+      this.rebuilding = false;
+    }
     const { BrowserWindow } = await import("electron");
     const win = new BrowserWindow({
       width: 800,
@@ -187,22 +203,29 @@ export class ScreenshotManager {
       webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
     });
     win.setAlwaysOnTop(true, "screen-saver");
+    // Windows 上这是空操作，show 前还要 pinOverlayToCurrentDesktop。
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    const loaded = waitDidFinishLoad(win);
     if (this.opts.devUrl) win.loadURL(`${this.opts.devUrl}/screenshot.html`).catch(() => {});
     else win.loadFile(path.join(this.opts.distDir, "screenshot.html")).catch(() => {});
+    await loaded;
     this.overlay = win;
     return win;
   }
 
   async trigger(): Promise<void> {
     if (this.capturing) return; // 进行中忽略重复触发
+    const fg = await detectAppWasActive();
+    this.appWasActive = fg.appWasActive;
+    this.savedFg = fg.saved;
     const ok = await this.ensureScreenPermission();
     if (!ok) return;
     const cap = await this.capture();
     if (!cap) return;
     this.capturing = true;
     this.lastCapture = cap;
-    const win = await this.ensureOverlay();
+    let win = await this.ensureOverlay();
+    if (!pinOverlayToCurrentDesktop(win, this.savedFg)) win = await this.ensureOverlay(true);
     win.setBounds(cap.bounds);
     // 渲染层收到会话事件 → 重置状态、加载冻结画面 → onLoad 后调 ready 显示窗口。
     win.webContents.send("screenshot:session", cap);
@@ -211,12 +234,14 @@ export class ScreenshotManager {
   }
 
   private showOverlay(): void {
+    if (this.rebuilding) return;
     if (this.showFallback) {
       clearTimeout(this.showFallback);
       this.showFallback = null;
     }
     if (!this.overlay || this.overlay.isDestroyed() || !this.lastCapture) return;
     this.overlay.setBounds(this.lastCapture.bounds);
+    pinOverlayToCurrentDesktop(this.overlay, this.savedFg);
     suppressAppActivate(); // 同上：别让覆盖窗的激活把主窗口拽出来
     this.overlay.show();
     this.overlay.focus();
@@ -225,11 +250,14 @@ export class ScreenshotManager {
   private hideOverlay(): void {
     this.capturing = false;
     this.abortScroll(); // 截图整体结束时，顺手把还挂着的滚动会话拆掉（定时器不能留）
-    // 层级恢复（文字输入阶段可能降过层级）
-    if (this.overlay && !this.overlay.isDestroyed()) {
-      this.overlay.setAlwaysOnTop(true, "screen-saver");
-      this.overlay.hide();
-    }
+    const win = this.overlay;
+    // 先还焦点再藏窗：Windows 上如果先 hide，焦点会落到另一桌面的贴图/主窗口。
+    void releaseOverlayFocus({ appWasActive: this.appWasActive, saved: this.savedFg, returnFocus: true }).then(() => {
+      if (win && !win.isDestroyed()) {
+        win.setAlwaysOnTop(true, "screen-saver");
+        if (win.isVisible()) win.hide();
+      }
+    });
   }
 
   // ── 滚动长截图 ──

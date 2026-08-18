@@ -10,6 +10,14 @@ import { simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
 import { suppressAppActivate } from "../activation";
+import {
+  detectAppWasActive,
+  pinOverlayToCurrentDesktop,
+  releaseOverlayFocus,
+  shouldIgnoreOverlayBlur,
+  waitDidFinishLoad,
+  type OverlayForeground,
+} from "../shared/overlay-focus";
 import { anyStrongMatch, bestMatch, frecency, frecencyBoost, lookupUsage, noteUsage, pruneUsage, type UsageEntry } from "./rank";
 import { readBundleNames, searchableNames, type BundleNames } from "./appinfo";
 import { pinyinAliases } from "./pinyin";
@@ -63,7 +71,9 @@ interface ManagerOpts {
 export class LauncherManager {
   private panel: Electron.BrowserWindow | null = null;
   private appWasActive = false;
+  private savedFg: OverlayForeground | null = null;
   private shownAt = 0;  // 唤起时刻：刚弹出瞬间的失焦（主窗口被激活抢焦）要忽略，避免立刻收起/来回切换
+  private rebuilding = false;
   private cache = new Map<string, LauncherResult>();  // 本次查询结果，供 run 回查
   private lastQuery = "";                              // 本次查询词，供 run 记录使用频率
   // 使用习惯学习：`${查询词前缀}\n${id}` → {次数, 最近时间}。前缀分桶见 rank.ts 的说明。
@@ -142,8 +152,14 @@ export class LauncherManager {
   }
 
   // ── 面板窗口（镜像剪贴板面板）──
-  private async ensurePanel(): Promise<Electron.BrowserWindow> {
-    if (this.panel && !this.panel.isDestroyed()) return this.panel;
+  private async ensurePanel(forceNew = false): Promise<Electron.BrowserWindow> {
+    if (!forceNew && this.panel && !this.panel.isDestroyed()) return this.panel;
+    if (this.panel && !this.panel.isDestroyed()) {
+      this.rebuilding = true;
+      try { this.panel.destroy(); } catch { /* 重建途中 */ }
+      this.panel = null;
+      this.rebuilding = false;
+    }
     const { BrowserWindow } = await import("electron");
     const win = new BrowserWindow({
       width: 720,
@@ -162,17 +178,21 @@ export class LauncherManager {
     // floating 层级：压住主窗口即可；不要更高（如 pop-up-menu），否则会盖住系统输入法候选窗。
     win.setAlwaysOnTop(true, "floating");
     // 在「当前所在的桌面/屏幕」直接显示，不要切换到窗口原来所在的 Space（否则会跳屏）。
+    // Windows 上这是空操作，show 前还要 pinOverlayToCurrentDesktop（见 show）。
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     // 刚弹出瞬间主窗口可能被激活抢走焦点（macOS 激活 app 会带出其它窗口）→ 忽略这段时间的 blur 并夺回焦点。
     win.on("blur", () => {
-      if (Date.now() - this.shownAt < 600) { if (!win.isDestroyed()) win.focus(); return; }
+      if (this.rebuilding) return;
+      if (shouldIgnoreOverlayBlur(this.shownAt)) { if (!win.isDestroyed()) win.focus(); return; }
       this.hide(false);
     });
     win.webContents.on("before-input-event", (_e, input) => {
       if (input.type === "keyDown" && input.key === "Escape") this.hide(true);
     });
+    const loaded = waitDidFinishLoad(win);
     if (this.opts.devUrl) win.loadURL(`${this.opts.devUrl}/launcher.html`).catch(() => {});
     else win.loadFile(path.join(this.opts.distDir, "launcher.html")).catch(() => {});
+    await loaded;
     this.panel = win;
     return win;
   }
@@ -185,11 +205,14 @@ export class LauncherManager {
   // prefill：唤起时预先填进搜索框的内容（Hotkey 节点的「打开快捷入口」用）。
   // 不传就是普通唤起（搜索框清空）。
   private async show(prefill?: { q: string; caret?: "left" | "right" }): Promise<void> {
-    const { BrowserWindow, screen } = await import("electron");
-    this.appWasActive = BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isFocused());
-    const win = await this.ensurePanel();
+    const fg = await detectAppWasActive();
+    this.appWasActive = fg.appWasActive;
+    this.savedFg = fg.saved;
+    let win = await this.ensurePanel();
+    if (!pinOverlayToCurrentDesktop(win, this.savedFg)) win = await this.ensurePanel(true);
     // 每次唤起都居中到光标所在屏幕上方 1/3（Alfred 风格）。
     try {
+      const { screen } = await import("electron");
       const pt = screen.getCursorScreenPoint();
       const wa = screen.getDisplayNearestPoint(pt).workArea;
       const [w] = win.getSize();
@@ -209,14 +232,9 @@ export class LauncherManager {
   private async hide(returnFocus = false): Promise<void> {
     // 面板一收起，脚本要求的自动重查就没意义了，定时器要跟着停掉。
     if (this.rerunTimer) { clearTimeout(this.rerunTimer); this.rerunTimer = undefined; }
-    // 顺序要紧：先 app.hide() 再 panel.hide()。
-    // 反过来的话，面板一收起 macOS 就把同一个 app 的下一个窗口（主窗口）顶到前台，
-    // 等下一行 app.hide() 执行时主窗口已经画出来了 —— 肉眼就是「闪一下主窗口再一起消失」。
-    // 整体先隐藏就没有这个中间态；panel.hide() 仍要补一刀，否则 app 再被唤起时面板会跟着回来。
-    if (returnFocus && !this.appWasActive && process.platform === "darwin") {
-      const { app } = await import("electron");
-      app.hide();
-    }
+    // 顺序要紧：先把焦点还回去（macOS=app.hide，Windows=SetForegroundWindow），再 panel.hide()。
+    // 反过来的话，面板一收起系统就把同一个 app 的下一个窗口（主窗口/贴图）顶到前台。
+    await releaseOverlayFocus({ appWasActive: this.appWasActive, saved: this.savedFg, returnFocus });
     if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) this.panel.hide();
   }
 
@@ -757,6 +775,7 @@ export class LauncherManager {
     ipcMain.handle("largetype:rendered", () => {
       if (!this.largeWin || this.largeWin.isDestroyed()) return;
       if (this.largeBounds) this.largeWin.setBounds(this.largeBounds);
+      pinOverlayToCurrentDesktop(this.largeWin);
       this.largeWin.showInactive();
       this.largeWin.focus();
     });
@@ -767,6 +786,7 @@ export class LauncherManager {
       if (!this.textWin || this.textWin.isDestroyed()) return;
       if (this.textWin.isVisible()) return;              // 已经在显示（流式续写）→ 不重复摆位/抢焦点
       if (this.textBounds) this.textWin.setBounds(this.textBounds);
+      pinOverlayToCurrentDesktop(this.textWin);
       this.textWin.showInactive();
       this.textWin.focus();
     });

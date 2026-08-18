@@ -7,6 +7,14 @@ import { getAppIcon } from "./source-app";
 import { ConfigStore, ClipKeep } from "../config";
 import { suppressAppActivate } from "../activation";
 import { accelProblem } from "../launcher/hotkey";
+import {
+  detectAppWasActive,
+  pinOverlayToCurrentDesktop,
+  releaseOverlayFocus,
+  shouldIgnoreOverlayBlur,
+  waitDidFinishLoad,
+  type OverlayForeground,
+} from "../shared/overlay-focus";
 
 const IMAGE_EXT = /\.(png|jpe?g|gif|bmp|webp)$/i;
 // 过期清理的巡检间隔：保留时长最细一档是 24 小时，半小时扫一次足够，也不会白烧 CPU。
@@ -25,6 +33,9 @@ export class ClipboardManager {
   // 打开面板前 Umbra 自身是否已在前台。false=用户在别的应用里（如 Finder/Chrome），
   // 关闭面板时需把焦点还给那个应用，而不是让 Umbra 主窗口抢到前台。
   private appWasActive = false;
+  private savedFg: OverlayForeground | null = null;
+  private shownAt = 0;
+  private rebuilding = false;
   // 面板当前显示的分类：不同快捷键唤起同一个面板，只是默认落在不同分类上。
   private panelCategory: ClipCategory = "all";
   // 常用语没有数字 id，面板复用的是剪贴板那套按 id 操作的协议，
@@ -74,8 +85,14 @@ export class ClipboardManager {
   }
 
   // ── 面板窗口 ──
-  private async ensurePanel(): Promise<Electron.BrowserWindow> {
-    if (this.panel && !this.panel.isDestroyed()) return this.panel;
+  private async ensurePanel(forceNew = false): Promise<Electron.BrowserWindow> {
+    if (!forceNew && this.panel && !this.panel.isDestroyed()) return this.panel;
+    if (this.panel && !this.panel.isDestroyed()) {
+      this.rebuilding = true;
+      try { this.panel.destroy(); } catch { /* 重建途中 */ }
+      this.panel = null;
+      this.rebuilding = false;
+    }
     const { BrowserWindow } = await import("electron");
     const win = new BrowserWindow({
       width: 680,
@@ -92,13 +109,20 @@ export class ClipboardManager {
     });
     win.setAlwaysOnTop(true, "floating");
     // 在「当前所在的桌面/屏幕」直接显示，不跟随窗口原 Space（否则会跳屏）。
+    // Windows 上这是空操作，show 前还要 pinOverlayToCurrentDesktop（见 showPanel）。
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    win.on("blur", () => this.hidePanel(false));
+    win.on("blur", () => {
+      if (this.rebuilding) return;
+      if (shouldIgnoreOverlayBlur(this.shownAt)) { if (!win.isDestroyed()) win.focus(); return; }
+      this.hidePanel(false);
+    });
     win.webContents.on("before-input-event", (_e, input) => {
       if (input.type === "keyDown" && input.key === "Escape") this.hidePanel(true);
     });
+    const loaded = waitDidFinishLoad(win);
     if (this.opts.devUrl) win.loadURL(`${this.opts.devUrl}/clipboard-panel.html`).catch(() => {});
     else win.loadFile(path.join(this.opts.distDir, "clipboard-panel.html")).catch(() => {});
+    await loaded;
     this.panel = win;
     return win;
   }
@@ -127,10 +151,12 @@ export class ClipboardManager {
   }
 
   private async showPanel(): Promise<void> {
-    const { BrowserWindow } = await import("electron");
-    // 记录打开前 Umbra 是否已在前台（有窗口聚焦即为是）。
-    this.appWasActive = BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isFocused());
-    const win = await this.ensurePanel();
+    const fg = await detectAppWasActive();
+    this.appWasActive = fg.appWasActive;
+    this.savedFg = fg.saved;
+    let win = await this.ensurePanel();
+    // Windows：预热窗还在创建它的那个虚拟桌面。挪不过去就拆掉重建（新 HWND 落在当前桌面）。
+    if (!pinOverlayToCurrentDesktop(win, this.savedFg)) win = await this.ensurePanel(true);
     // 每次唤起都重新定位到「光标所在屏幕」居中（不再只定位一次，否则会弹到上次/前台屏幕）。
     try {
       const { screen } = await import("electron");
@@ -144,6 +170,7 @@ export class ClipboardManager {
     }
     // show()/focus() 会顺带激活整个 app，触发 main.ts 的 app.on("activate")。
     // 那个回调是给「点 Dock 图标」用的，跑到这里只会 dock.show() + 把主窗口拽到前台抢焦点。
+    this.shownAt = Date.now();
     suppressAppActivate();
     win.show();
     win.focus();
@@ -152,15 +179,10 @@ export class ClipboardManager {
 
   // returnFocus=true 且打开面板前不在 Umbra 里时，隐藏整个 app，把焦点还给原应用
   // （否则 macOS 会把 Umbra 主窗口带到前台，粘贴也会落到主窗口而非原应用）。
+  // Windows 没有 app.hide()：必须先把焦点还给唤起前的 HWND，再藏面板——
+  // 否则 hide 后系统会激活同进程下一扇窗（另一桌面的贴图/主窗口），桌面跟着跳走。
   private async hidePanel(returnFocus = false): Promise<void> {
-    // 顺序要紧：先 app.hide() 再 panel.hide()。反过来的话，面板一收起 macOS 就把同一个
-    // app 的下一个窗口（主窗口）顶到前台，等 app.hide() 执行时主窗口已经画出来了，
-    // 肉眼就是「闪一下主窗口再一起消失」。panel.hide() 仍要补一刀，
-    // 否则 app 下次被唤起时这个面板会跟着一起回来。
-    if (returnFocus && !this.appWasActive && process.platform === "darwin") {
-      const { app } = await import("electron");
-      app.hide();
-    }
+    await releaseOverlayFocus({ appWasActive: this.appWasActive, saved: this.savedFg, returnFocus });
     if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) this.panel.hide();
   }
 
