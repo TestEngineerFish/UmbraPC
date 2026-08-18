@@ -11,8 +11,11 @@ import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
 import { suppressAppActivate } from "../activation";
 import {
+  ALL_WORKSPACES,
   detectAppWasActive,
+  markOverlayWindow,
   pinOverlayToCurrentDesktop,
+  presentOverlayWindow,
   releaseOverlayFocus,
   shouldIgnoreOverlayBlur,
   waitDidFinishLoad,
@@ -177,9 +180,8 @@ export class LauncherManager {
     });
     // floating 层级：压住主窗口即可；不要更高（如 pop-up-menu），否则会盖住系统输入法候选窗。
     win.setAlwaysOnTop(true, "floating");
-    // 在「当前所在的桌面/屏幕」直接显示，不要切换到窗口原来所在的 Space（否则会跳屏）。
-    // Windows 上这是空操作，show 前还要 pinOverlayToCurrentDesktop（见 show）。
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    win.setVisibleOnAllWorkspaces(true, ALL_WORKSPACES);
+    markOverlayWindow(win);
     // 刚弹出瞬间主窗口可能被激活抢走焦点（macOS 激活 app 会带出其它窗口）→ 忽略这段时间的 blur 并夺回焦点。
     win.on("blur", () => {
       if (this.rebuilding) return;
@@ -219,11 +221,8 @@ export class LauncherManager {
       win.setPosition(Math.round(wa.x + (wa.width - w) / 2), Math.round(wa.y + wa.height * 0.22));
     } catch { win.center(); }
     this.shownAt = Date.now();
-    // show()/focus() 会顺带激活整个 app，触发 main.ts 的 app.on("activate")。
-    // 那个回调是给「点 Dock 图标」用的，跑到这里只会 dock.show() + 把主窗口拽到前台抢焦点。
     suppressAppActivate();
-    win.show();
-    win.focus();
+    presentOverlayWindow(win);
     // 预填内容跟着 shown 一起发：分两条消息的话，渲染层收到 shown 会先把输入框清空，
     // 预填那条随后到达 —— 中间会闪一下空框，而且两条的先后顺序没有保证。
     win.webContents.send("launcher:shown", prefill || null);
@@ -776,8 +775,7 @@ export class LauncherManager {
       if (!this.largeWin || this.largeWin.isDestroyed()) return;
       if (this.largeBounds) this.largeWin.setBounds(this.largeBounds);
       pinOverlayToCurrentDesktop(this.largeWin);
-      this.largeWin.showInactive();
-      this.largeWin.focus();
+      presentOverlayWindow(this.largeWin);
     });
     ipcMain.handle("largetype:close", () => { if (this.largeWin && !this.largeWin.isDestroyed()) this.largeWin.hide(); });
     // 文本视图浮层：同样是「渲染层 ready 索取内容 → 画好回调 rendered → 主进程才显示」，避免闪出上次内容。
@@ -787,8 +785,7 @@ export class LauncherManager {
       if (this.textWin.isVisible()) return;              // 已经在显示（流式续写）→ 不重复摆位/抢焦点
       if (this.textBounds) this.textWin.setBounds(this.textBounds);
       pinOverlayToCurrentDesktop(this.textWin);
-      this.textWin.showInactive();
-      this.textWin.focus();
+      presentOverlayWindow(this.textWin);
     });
     ipcMain.handle("textview:close", () => {
       this.textLoading = false;
@@ -839,7 +836,8 @@ export class LauncherManager {
         webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
       });
       win.setAlwaysOnTop(true, "screen-saver");
-      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      win.setVisibleOnAllWorkspaces(true, ALL_WORKSPACES);
+      markOverlayWindow(win);
       win.on("blur", () => { if (this.largeWin && !this.largeWin.isDestroyed()) this.largeWin.hide(); });
       win.webContents.on("before-input-event", (_e, input) => { if (input.type === "keyDown" && input.key === "Escape") win.hide(); });
       if (this.opts.devUrl) win.loadURL(`${this.opts.devUrl}/largetype.html`).catch(() => {});
@@ -882,7 +880,8 @@ export class LauncherManager {
         webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
       });
       win.setAlwaysOnTop(true, "screen-saver");
-      win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+      win.setVisibleOnAllWorkspaces(true, ALL_WORKSPACES);
+      markOverlayWindow(win);
       // 等远程回复期间（loading）失焦不收起，否则内容还没回来窗口就没了。
       win.on("blur", () => {
         if (this.textLoading) return;

@@ -28,6 +28,15 @@ export const dialog = {
 };
 export const systemPreferences = { canPromptTouchID: () => false };
 export const safeStorage = { isEncryptionAvailable: () => false };
-export const BrowserWindow = class {};
+export const BrowserWindow = class {
+  static getAllWindows(): unknown[] { return []; }
+  isDestroyed(): boolean { return false; }
+  isFocused(): boolean { return false; }
+  isVisible(): boolean { return false; }
+  show(): void {}
+  focus(): void {}
+  showInactive(): void {}
+  hide(): void {}
+};
 export const globalShortcut = { register: () => false, isRegistered: () => false };
 export default { net, app, ipcMain, clipboard, shell, dialog, systemPreferences, safeStorage, BrowserWindow, globalShortcut };

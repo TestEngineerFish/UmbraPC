@@ -2,6 +2,7 @@
 import * as path from "node:path";
 import { promises as fs } from "node:fs";
 import { mt } from "../../i18n";
+import { markOverlayWindow } from "../shared/overlay-focus";
 
 interface StickerOpts {
   preloadPath: string;
@@ -40,12 +41,14 @@ export class StickerManager {
       fullscreenable: false,
       minimizable: false,
       maximizable: false,
-      // Windows：工具窗不进 Alt-Tab，也少参与虚拟桌面的「激活这个进程就跳桌面」。
+      // 贴图不能成为「激活 app 就跳 Space」的锚点：Mac 用 panel，Windows 用 toolbar。
+      ...(process.platform === "darwin" ? { type: "panel" as const } : {}),
       ...(process.platform === "win32" ? { type: "toolbar" as const } : {}),
       webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
     });
     win.setAspectRatio(w / h); // 拖边缩放锁定原始比例
     win.setAlwaysOnTop(true, "floating");
+    markOverlayWindow(win);
     const id = win.webContents.id;
     this.images.set(id, dataUrl);
     this.base.set(id, { w, h });

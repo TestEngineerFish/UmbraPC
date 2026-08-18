@@ -8,8 +8,11 @@ import { ConfigStore, ClipKeep } from "../config";
 import { suppressAppActivate } from "../activation";
 import { accelProblem } from "../launcher/hotkey";
 import {
+  ALL_WORKSPACES,
   detectAppWasActive,
+  markOverlayWindow,
   pinOverlayToCurrentDesktop,
+  presentOverlayWindow,
   releaseOverlayFocus,
   shouldIgnoreOverlayBlur,
   waitDidFinishLoad,
@@ -108,9 +111,9 @@ export class ClipboardManager {
       webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
     });
     win.setAlwaysOnTop(true, "floating");
-    // 在「当前所在的桌面/屏幕」直接显示，不跟随窗口原 Space（否则会跳屏）。
-    // Windows 上这是空操作，show 前还要 pinOverlayToCurrentDesktop（见 showPanel）。
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // 在当前 Space 显示。Windows 上这是空操作，show 前还要 pinOverlayToCurrentDesktop。
+    win.setVisibleOnAllWorkspaces(true, ALL_WORKSPACES);
+    markOverlayWindow(win);
     win.on("blur", () => {
       if (this.rebuilding) return;
       if (shouldIgnoreOverlayBlur(this.shownAt)) { if (!win.isDestroyed()) win.focus(); return; }
@@ -172,8 +175,7 @@ export class ClipboardManager {
     // 那个回调是给「点 Dock 图标」用的，跑到这里只会 dock.show() + 把主窗口拽到前台抢焦点。
     this.shownAt = Date.now();
     suppressAppActivate();
-    win.show();
-    win.focus();
+    presentOverlayWindow(win);
     win.webContents.send("clipboard:panel:shown", this.panelCategory);
   }
 

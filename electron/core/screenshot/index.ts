@@ -12,8 +12,11 @@ import { loadNut, requireAccessibility } from "../computer";
 import { suppressAppActivate } from "../activation";
 import { accelProblem } from "../launcher/hotkey";
 import {
+  ALL_WORKSPACES,
   detectAppWasActive,
+  markOverlayWindow,
   pinOverlayToCurrentDesktop,
+  presentOverlayWindow,
   releaseOverlayFocus,
   waitDidFinishLoad,
   type OverlayForeground,
@@ -203,8 +206,8 @@ export class ScreenshotManager {
       webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
     });
     win.setAlwaysOnTop(true, "screen-saver");
-    // Windows 上这是空操作，show 前还要 pinOverlayToCurrentDesktop。
-    win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    win.setVisibleOnAllWorkspaces(true, ALL_WORKSPACES);
+    markOverlayWindow(win);
     const loaded = waitDidFinishLoad(win);
     if (this.opts.devUrl) win.loadURL(`${this.opts.devUrl}/screenshot.html`).catch(() => {});
     else win.loadFile(path.join(this.opts.distDir, "screenshot.html")).catch(() => {});
@@ -243,8 +246,7 @@ export class ScreenshotManager {
     this.overlay.setBounds(this.lastCapture.bounds);
     pinOverlayToCurrentDesktop(this.overlay, this.savedFg);
     suppressAppActivate(); // 同上：别让覆盖窗的激活把主窗口拽出来
-    this.overlay.show();
-    this.overlay.focus();
+    presentOverlayWindow(this.overlay);
   }
 
   private hideOverlay(): void {

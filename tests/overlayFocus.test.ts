@@ -1,10 +1,11 @@
-// Windows 多虚拟桌面下，快捷键弹窗会跟着预热窗口/贴图跳回原桌面。
-// 这一层是纯决策：要不要挪窗口、hide 时焦点还给谁、刚弹出的 blur 要不要理。
-// 真正的 user32 / IVirtualDesktopManager 在 win32-desktop.ts，测试用假 API 钉住分支。
+// 快捷键弹窗跨桌面/Space 的决策层。
+// Mac：贴图不算「人在 Umbra」；弹出前 park 其它窗口，避免激活 app 跳 Space。
+// Windows：预热 HWND 绑在创建时的虚拟桌面，show 前要挪到当前桌面。
 import { describe, expect, it } from "vitest";
 import {
   OVERLAY_BLUR_GRACE_MS,
   captureForegroundFromApi,
+  computeAppWasActive,
   hwndFromHandle,
   parseGuid,
   pinHwndToForegroundDesktop,
@@ -121,25 +122,45 @@ describe("planHideOverlay", () => {
   const external: OverlayForeground = { hwnd: 0xabcn };
   const self: OverlayForeground = { self: true };
 
-  it("macOS：唤起前不在 Umbra 里 → 先 app.hide() 再藏面板，焦点还给原应用", () => {
+  it("macOS：唤起前不在 Umbra 里 → 先 app.hide() 再把贴图/主窗口 showInactive 放回原 Space", () => {
     expect(planHideOverlay({ platform: "darwin", appWasActive: false, saved: external, returnFocus: true }))
-      .toEqual({ hideApp: true, restoreHwnd: null });
+      .toEqual({ hideApp: true, restoreHwnd: null, restoreParked: true });
     expect(planHideOverlay({ platform: "darwin", appWasActive: true, saved: self, returnFocus: true }))
-      .toEqual({ hideApp: false, restoreHwnd: null });
+      .toEqual({ hideApp: false, restoreHwnd: null, restoreParked: false });
   });
 
   it("Windows：把焦点还给唤起前的 HWND，避免 hide 后落到另一桌面的贴图/主窗口", () => {
     expect(planHideOverlay({ platform: "win32", appWasActive: false, saved: external, returnFocus: true }))
-      .toEqual({ hideApp: false, restoreHwnd: 0xabcn });
+      .toEqual({ hideApp: false, restoreHwnd: 0xabcn, restoreParked: false });
     expect(planHideOverlay({ platform: "win32", appWasActive: false, saved: self, returnFocus: true }))
-      .toEqual({ hideApp: false, restoreHwnd: null });
+      .toEqual({ hideApp: false, restoreHwnd: null, restoreParked: false });
     expect(planHideOverlay({ platform: "win32", appWasActive: false, saved: external, returnFocus: false }))
-      .toEqual({ hideApp: false, restoreHwnd: null });
+      .toEqual({ hideApp: false, restoreHwnd: null, restoreParked: false });
   });
 
   it("blur 收起（returnFocus=false）不要 restore，否则和正在抢焦点的窗口打架", () => {
     expect(planHideOverlay({ platform: "win32", appWasActive: false, saved: external, returnFocus: false }))
-      .toEqual({ hideApp: false, restoreHwnd: null });
+      .toEqual({ hideApp: false, restoreHwnd: null, restoreParked: false });
+  });
+});
+
+describe("computeAppWasActive", () => {
+  it("贴图/悬浮面板有焦点也不算人在 Umbra 里——否则 Esc 不会 app.hide()，焦点回到另一 Space 的贴图", () => {
+    expect(computeAppWasActive([
+      { focused: true, role: "overlay", onActiveSpace: true },
+    ])).toBe(false);
+  });
+
+  it("主窗口在当前 Space 且有焦点 → 算", () => {
+    expect(computeAppWasActive([
+      { focused: true, role: "chrome", onActiveSpace: true },
+    ])).toBe(true);
+  });
+
+  it("主窗口还 focused 但已经不在当前 Space（只是 Control+← 切走）→ 不算", () => {
+    expect(computeAppWasActive([
+      { focused: true, role: "chrome", onActiveSpace: false },
+    ])).toBe(false);
   });
 });
 
