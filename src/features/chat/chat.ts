@@ -25,6 +25,10 @@ import { hasNotify, notifyApi } from "../notify/bridge";
 import { mdToHtml } from "./markdown";
 import { t } from "../../i18n";
 import { askConfirm, showToast } from "../../components/overlay";
+// 这一层是 vanilla，用不了 React 组件，但**用得了样式工厂** —— kit 返回的是 Tailwind
+// 类名字符串，拼进 class="" 就行。类名字面量在 kit.ts 里，JIT 照样能扫到并生成。
+// 于是按钮这类有工厂对应件的元素不必再手写内联 style，取值也就跟着设计稿走了。
+import { btn, btnWide } from "../../components/kit";
 
 type Block =
   | { kind: "user"; text: string; ts?: string | number }
@@ -489,13 +493,19 @@ const timeLine = (ts: string | number | undefined, align: "flex-start" | "flex-e
 function confirmButtons(taskId: string, scope?: string): string {
   const tid = esc(taskId);
   // scope=agent：授权只在这个任务内有效（端侧只问一次），因此不提供「总是允许(全局)」。
+  //
+  // 稿 1533-1535 在这种情况下还要给一句解释「这类授权不给『总是允许』」——
+  // 光让按钮消失，用户只会以为是 bug。这一句先记在台账里，等文案定了再补。
   const always = scope === "agent"
     ? ""
-    : `<button data-approve-always="${tid}" style="padding:7px 15px;background:var(--orange-soft);color:var(--orange-text);border:1px solid var(--orange);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approveAlways"))}</button>`;
-  return `<div style="display:flex;gap:9px;margin-top:11px;flex-wrap:wrap;">`
-    + `<button data-approve="${tid}" style="padding:7px 15px;background:var(--orange);color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.approve"))}</button>`
+    : `<button data-approve-always="${tid}" class="${btn("ghost", "sm")}">${esc(t("chat.approveAlways"))}</button>`;
+  // 稿 1539-1549 的排布：批准（实心橙）+ 总是允许（描边）+ **spacer** + 拒绝右对齐。
+  // 拒绝被推到最右不是排版偏好 —— 它和另外两个是相反方向的动作，挨着放很容易点错。
+  return `<div style="display:flex;align-items:center;gap:9px;margin-top:11px;flex-wrap:wrap;">`
+    + `<button data-approve="${tid}" class="${btn("primary", "sm")}">${esc(t("chat.approve"))}</button>`
     + always
-    + `<button data-deny="${tid}" style="padding:7px 15px;background:transparent;color:var(--danger);border:1px solid var(--danger);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;">${esc(t("chat.reject"))}</button>`
+    + `<span style="flex:1;"></span>`
+    + `<button data-deny="${tid}" class="${btn("danger", "sm")}">${esc(t("chat.reject"))}</button>`
     + `</div>`;
 }
 
@@ -632,7 +642,7 @@ function blockHtml(b: Block, i: number): string {
   return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--danger-soft);border:1px solid var(--danger);border-radius:11px;padding:11px 13px;display:flex;align-items:center;gap:9px;">
       <span style="flex:none;color:var(--danger);display:flex;">${svgIcon(ICON_ALERT, 15, 2.1)}</span>
       <span style="flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--danger);line-height:1.65;">${esc(b.text)}</span>
-      <button data-reconnect="1" style="flex:none;white-space:nowrap;padding:4px 11px;border-radius:7px;border:1px solid var(--danger);background:transparent;color:var(--danger);font-family:inherit;font-size:11.5px;font-weight:600;cursor:pointer;">${esc(t("chat.reconnect"))}</button>
+      <button data-reconnect="1" class="${btn("danger", "sm")}">${esc(t("chat.reconnect"))}</button>
     </div>`;
 }
 
@@ -680,7 +690,7 @@ function questionCardHtml(b: Extract<Block, { kind: "question" }>, i: number): s
       <div style="display:flex;gap:8px;margin-top:11px;">
         ${b.at > 0 ? `<button data-qprev="${i}" style="padding:7px 14px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;">${esc(t("chat.questionPrev"))}</button>` : ""}
         <span style="flex:1;"></span>
-        <button data-${last ? "qsubmit" : "qnext"}="${i}" ${answered ? "" : "disabled"} style="padding:7px 16px;border:none;border-radius:8px;font-size:13px;font-weight:600;cursor:${answered ? "pointer" : "not-allowed"};background:${answered ? "var(--orange)" : "var(--border)"};color:#fff;">${esc(last ? t("chat.questionSubmit") : t("chat.questionNext"))}</button>
+        <button data-${last ? "qsubmit" : "qnext"}="${i}" ${answered ? "" : "disabled"} class="${btn("primary", "sm")}">${esc(last ? t("chat.questionSubmit") : t("chat.questionNext"))}</button>
       </div>
     </div>`;
 }
@@ -824,7 +834,7 @@ function renderDetail(): void {
         <div style="font-size:12px;font-weight:600;color:var(--muted);">${esc(t("chat.capabilities"))}</div>
         ${caps}
       </div>
-      ${!d.online ? `<button id="uforget" style="margin-top:4px;padding:7px 12px;border:1px solid var(--danger);background:transparent;color:var(--danger);border-radius:8px;font-size:12.5px;cursor:pointer;">${esc(t("chat.forgetDevice"))}</button>` : ""}
+      ${!d.online ? `<button id="uforget" class="${btnWide("danger")} mt-auto">${esc(t("chat.forgetDevice"))}</button>` : ""}
     </div>`;
 
   el.querySelector("#uforget")?.addEventListener("click", async () => {
@@ -890,8 +900,8 @@ function refreshComposer(): void {
       <div id="uoffline"></div>
       <div id="umodebar" style="display:flex;gap:6px;align-items:center;padding:8px 16px 0;"></div>
       <div style="display:flex;gap:10px;align-items:flex-end;padding:10px 16px 12px;">
-        <textarea id="draft" rows="2" style="flex:1;resize:none;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:10px;padding:9px 12px;font-size:13.5px;line-height:1.5;font-family:inherit;outline:none;max-height:120px;"></textarea>
-        <button id="sendbtn" style="flex:none;display:flex;align-items:center;gap:6px;padding:9px 16px;height:40px;background:var(--orange);color:#fff;border:none;border-radius:10px;font-size:13.5px;font-weight:600;cursor:pointer;align-self:center;">${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
+        <textarea id="draft" rows="2" class="flex-1 resize-none border border-border bg-bg text-text rounded-[10px] px-[12px] py-[9px] text-[13.5px] leading-[1.5] font-[inherit] max-h-[120px] outline-none transition-[border-color,box-shadow] duration-[130ms] ease-out hover:border-orange focus:border-orange focus:shadow-[var(--focus-ring)]"></textarea>
+        <button id="sendbtn" class="${btn("primary")} gap-[6px] self-center" ${clearing ? "disabled" : ""}>${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
       </div>`;
     wrap.querySelector("#sendbtn")!.addEventListener("click", send);
     const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
@@ -1126,12 +1136,11 @@ export function mount(el: HTMLElement): void {
           // 就地刷新「下一题/提交」按钮的可用态——之前只存值不刷按钮，
           // 不点选项、直接输入自定义答案时按钮一直是灰的，进不了下一题（实测 bug）。
           const answered = (b.picked[q.id] || []).length > 0 || t2.value.trim().length > 0;
-          const btn = msgsEl.querySelector(`[data-qnext="${i}"],[data-qsubmit="${i}"]`) as HTMLButtonElement | null;
-          if (btn) {
-            btn.disabled = !answered;
-            btn.style.cursor = answered ? "pointer" : "not-allowed";
-            btn.style.background = answered ? "var(--orange)" : "var(--border)";
-          }
+          // 只翻 disabled 就够了：按钮走的是工厂类名，禁用态由 disabled: 变体接管，
+          // 不用再手改 background / cursor（以前那两行写死了 --border 底 + 白字，
+          // 深色下是一块灰底白字的东西，跟「禁用态一律 chip 底 + faint 字」的硬规则也对不上）。
+          const nextBtn = msgsEl.querySelector(`[data-qnext="${i}"],[data-qsubmit="${i}"]`) as HTMLButtonElement | null;
+          if (nextBtn) nextBtn.disabled = !answered;
         }
       }
     }

@@ -7,11 +7,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComponentType, CSSProperties, ReactNode, SVGProps } from "react";
 import { Pill, btnGhost, btnPrimary, selectBox, fieldFlex, EmptyState } from "../../components/ui";
+import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
+import { displayAccel } from "../../components/hotkey";
+import { useHotkeyConflict, OWNER_LABEL } from "../tools/hotkeys";
 import {
   IconAlert, IconCheck, IconChevronDown, IconChevronRight, IconCloud, IconCopy, IconDice, IconDots,
   IconDownload, IconExternal, IconEye, IconEyeOff, IconFile, IconFolder, IconGrid, IconImage, IconKey,
   IconLock, IconPencil, IconPlus, IconRefresh, IconSearch, IconStar, IconTag,
-  IconText, IconTouchId, IconTrash, IconUp, IconDown, IconUser, IconX,
+  IconText, IconTouchId, IconTrash, IconUp, IconDown, IconUser, IconX, IconKeyboard, IconWindow,
 } from "../../components/icons";
 
 interface VaultInfo { id: string; name: string; owner: string; icon: string; order: number }
@@ -57,6 +60,10 @@ interface VaultAPI {
   addAttachment(vid: string, iid: string, name: string, mime: string, dataB64: string): Promise<Att>;
   readAttachment(vid: string, aid: string): Promise<string>;
   deleteAttachment(vid: string, iid: string, aid: string): Promise<void>;
+  // 「承载方式」相关：唤起快捷键与独立窗口。preload 里一直有，之前只有 VaultTool 在用，
+  // 这个接口里没声明 —— 现在两个控件都收进保险箱自己的 ⋯ 菜单，就得在这儿声明。
+  setShortcut(acc: string): Promise<void>;
+  openWindow(): Promise<void>;
 }
 const api = (window as unknown as { umbraVault: VaultAPI }).umbraVault;
 
@@ -241,7 +248,7 @@ export function VaultApp({ embedded = false }: { embedded?: boolean }) {
       <style>{CSS}</style>
       {!ready ? null : !st.exists ? <Setup onDone={refresh} />
         : !st.unlocked ? <Unlock onDone={refresh} st={st} />
-          : <Main onLock={async () => { await api.lock(); await refresh(); }} st={st} onStatus={refresh} />}
+          : <Main onLock={async () => { await api.lock(); await refresh(); }} st={st} onStatus={refresh} embedded={embedded} />}
     </div>
   );
 }
@@ -467,7 +474,18 @@ function syncLabel(st: VStatus): string {
   return min < 1 ? "刚刚已同步" : `${min} 分钟前同步`;
 }
 
-function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStatus; onStatus: () => Promise<void> }) {
+function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>; st: VStatus; onStatus: () => Promise<void>; embedded: boolean }) {
+  // ── 唤起快捷键 / 独立窗口 ────────────────────────────────────────────────
+  // 这两个控件原先在外面一层的 VaultTool 里，占了一条独立的 50px 顶栏 —— 于是主窗口里
+  // 两条 50px 栏上下叠着，而稿（3660-3672）画的保险箱只有一条。
+  //
+  // 它们管的是「保险箱以什么方式承载」（全局唤起、拉到独立窗口），不是保险箱里的数据操作，
+  // 设置一次基本就不再动 —— 正是溢出菜单该放的东西。收进 ⋯ 里，顶栏就回到稿的样子了。
+  const shortcut = st.shortcut || "";
+  const shortcutConflict = useHotkeyConflict("vault", shortcut);
+  const { recording, start: startRecord } = useHotkeyRecorder((acc) => {
+    void api.setShortcut(acc).then(onStatus);
+  });
   const [vaults, setVaults] = useState<VaultInfo[]>([]);
   const [vid, setVid] = useState("");
   const [types, setTypes] = useState<VType[]>([]);
@@ -703,6 +721,23 @@ function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStat
                 label="下载导入模板 (CSV)"
                 onClick={async () => { setGearOpen(false); await api.downloadTemplate("csv"); flash("已下载 CSV 导入模板"); }}
               />
+              <div className="h-px bg-border-soft my-[5px]" />
+              {/* 录制期间**不关菜单** —— 关掉的话用户就看不到「按下组合键…」这个提示，
+                  会以为点了没反应。录到之后 useHotkeyRecorder 自己会停。 */}
+              <MenuItem
+                icon={<IconKeyboard size={14} />}
+                label="唤起快捷键"
+                hint={recording ? "按下组合键…" : shortcutConflict ? `与「${OWNER_LABEL[shortcutConflict]}」重复` : displayAccel(shortcut) || "未设置"}
+                hintWarn={recording || !!shortcutConflict}
+                onClick={startRecord}
+              />
+              {embedded ? (
+                <MenuItem
+                  icon={<IconWindow size={14} />}
+                  label="在独立窗口打开"
+                  onClick={() => { setGearOpen(false); void api.openWindow(); }}
+                />
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -961,7 +996,7 @@ function NavRow({ label, Icon, mono, count, active, onClick, onContextMenu }: {
 
 // 菜单/下拉里的一行。danger 用红字 + 红底悬停，不做红色实心（实心只留给确认弹窗的最终按钮）。
 // hint 是右侧的一小段说明文字，trail 是右侧的节点（折叠箭头这种），两者可同时出现。
-function MenuItem({ icon, label, hint, trail, danger, onClick }: { icon?: ReactNode; label: string; hint?: string; trail?: ReactNode; danger?: boolean; onClick: () => void }) {
+function MenuItem({ icon, label, hint, hintWarn, trail, danger, onClick }: { icon?: ReactNode; label: string; hint?: string; hintWarn?: boolean; trail?: ReactNode; danger?: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -969,7 +1004,7 @@ function MenuItem({ icon, label, hint, trail, danger, onClick }: { icon?: ReactN
     >
       {icon ? <span className="flex-none inline-flex items-center">{icon}</span> : null}
       <span className="flex-1 min-w-0 truncate">{label}</span>
-      {hint ? <span className="flex-none whitespace-nowrap text-[11px] text-faint">{hint}</span> : null}
+      {hint ? <span className={`flex-none whitespace-nowrap text-[11px] ${hintWarn ? "text-warning font-semibold" : "text-faint"}`}>{hint}</span> : null}
       {trail ? <span className="flex-none inline-flex items-center text-faint">{trail}</span> : null}
     </button>
   );

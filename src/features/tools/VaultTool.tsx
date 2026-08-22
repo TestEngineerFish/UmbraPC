@@ -1,50 +1,17 @@
-// 工具 → 密码保险箱：把保险箱界面直接铺在主窗口右侧（不再是「打开保险箱」按钮 + 默认弹独立窗口）。
-// 和「工作流编排」同一套路：选中左侧导航就能用，需要更大画面 / 多屏摆放时再从顶栏的独立窗口按钮拉出去。
-// 顶栏只放跟「承载方式」有关的两样东西：唤起快捷键（属于主窗口这边的设置，保险箱内部不管它）
-// 和独立窗口入口；保险箱自身的逻辑一概不动，全部由 VaultApp 负责。
-// 快捷键的录制框、冲突检测都复用 hotkeys.tsx，和设置页总览共用同一份数据源。
-import { useState, useEffect } from "react";
-import { useTranslation } from "react-i18next";
-import { btnGhost } from "../../components/ui";
-import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
-import { IconWindow } from "../../components/icons";
-import { HotkeyButton, HotkeyConflictBanner, useHotkeyConflict } from "./hotkeys";
+// 工具 → 密码保险箱：把保险箱界面直接铺在主窗口右侧。
+//
+// 这里原先还画了一条自己的 50px 顶栏（唤起快捷键 + 重置 + 独立窗口按钮），
+// 而保险箱本体（VaultApp）也有一条 50px 顶栏 —— 主窗口里两条上下叠着，
+// 稿（3660-3672）画的保险箱只有一条。
+//
+// 那两个控件管的是「保险箱以什么方式承载」，不是保险箱里的数据操作，而且设置一次
+// 基本就不再动，所以收进了 VaultApp 顶栏那个 ⋯ 溢出菜单里（连同快捷键冲突提示）。
+// 于是这一层不再需要任何自己的 chrome —— 只剩一句转发。
+//
+// 「重置为出厂快捷键」那个按钮没有跟着搬：录制框本来就能录任意组合键，
+// 出厂值只是个默认，为它在溢出菜单里再占一行不划算。要恢复直接录一次 ⌘⌥P 即可。
 import { VaultApp } from "../vault/VaultApp";
-import { vaultApi } from "./bridges";
-
-// 保险箱唤起键的出厂值。重置按钮与初始态都用它，避免两处各写一遍。
-const DEFAULT_SHORTCUT = "Command+Alt+P";
 
 export function VaultTool() {
-  const { t } = useTranslation();
-  const api = vaultApi();
-  const [shortcut, setShortcut] = useState(DEFAULT_SHORTCUT);
-  const conflict = useHotkeyConflict("vault", shortcut);
-  const { recording, start } = useHotkeyRecorder((acc) => { setShortcut(acc); void api.setShortcut(acc); });
-
-  useEffect(() => { void api.status().then((s) => setShortcut(s.shortcut || "")); }, []);
-  return (
-    <div className="h-full flex flex-col min-h-0">
-      {/* 顶栏：唤起快捷键 + 独立窗口入口。高度和保险箱自己的顶栏（50px）对齐 */}
-      <div className="h-[50px] shrink-0 flex items-center gap-[8px] px-[16px] border-b border-border bg-card">
-        <span className="flex-none whitespace-nowrap text-[12.5px] text-muted">{t("settings.vaultShortcut")}</span>
-        {/* HotkeyButton 自带 flex-1，外面套一层定宽壳，免得它在顶栏里一路撑开 */}
-        <div className="w-[152px] flex-none flex">
-          <HotkeyButton recording={recording} value={shortcut} onClick={start} />
-        </div>
-        <button className={btnGhost} onClick={() => { setShortcut(DEFAULT_SHORTCUT); void api.setShortcut(DEFAULT_SHORTCUT); }}>{t("common.reset")}</button>
-        {conflict ? <HotkeyConflictBanner owner={conflict} /> : null}
-        <div className="flex-1" />
-        <button
-          className="w-[28px] h-[28px] flex-none inline-flex items-center justify-center border border-border bg-bg text-text rounded-[8px] cursor-pointer hover:border-orange hover:text-orange-text"
-          title={t("settings.vaultOpen")}
-          onClick={() => void api.openWindow()}
-        ><IconWindow size={14} /></button>
-      </div>
-      {/* 保险箱本体：填满剩下的高度，深浅色跟随主窗口 */}
-      <div className="flex-1 min-h-0">
-        <VaultApp embedded />
-      </div>
-    </div>
-  );
+  return <VaultApp embedded />;
 }
