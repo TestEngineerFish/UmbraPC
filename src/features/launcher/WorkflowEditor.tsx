@@ -612,7 +612,7 @@ function ObjectLibrary({ prefabs, canAdd, onDragItem, onPrefab, onDelPrefab, onC
                 {prefabs.map((p) => (
                   <div key={p.id} className="group flex items-center gap-1">
                     <button disabled={!canAdd} title={`落地到画布中央（${p.nodes.length} 个节点）`} onClick={() => onPrefab(p)}
-                      className={`${row} flex-1 min-w-0 bg-transparent hover:bg-hover disabled:opacity-40`}>
+                      className={`${row} flex-1 min-w-0 bg-transparent hover:bg-hover disabled:text-faint disabled:cursor-not-allowed disabled:hover:bg-transparent`}>
                       <span className="w-5 h-5 flex-none flex items-center justify-center rounded-[5px] text-muted"><IconGrid size={14} /></span>
                       <span className="flex-1 min-w-0 truncate">{p.name}</span>
                     </button>
@@ -641,7 +641,7 @@ function ObjectLibrary({ prefabs, canAdd, onDragItem, onPrefab, onDelPrefab, onC
                         title={it.hint || it.type}
                         onMouseDown={(e) => onDragItem(it.type, e)}
                         onClick={() => setSel(on ? "" : it.type)}
-                        className={`${item(on)} disabled:opacity-40`}>
+                        className={`${item(on)} disabled:text-faint disabled:cursor-not-allowed disabled:hover:bg-transparent`}>
                         <span className="flex items-center gap-[9px] w-full">
                           <span className={itemIcon(on)}><it.icon size={14} /></span>
                           <span className="flex-1 min-w-0 text-left truncate whitespace-nowrap">{it.label}</span>
@@ -1447,7 +1447,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     try {
       const r = await api.runWorkflow(cur.id, selNode || "", runArg);
       setDrawer(true);
-      setNote(r.ok ? (r.feedback || "已运行 ✓") : `运行失败：${r.error}`);
+      setNote(r.ok ? (r.feedback || "已运行") : `运行失败：${r.error}`);
     } catch (e) {
       setNote(`运行失败：${String(e).replace("Error: ", "")}`);
     } finally {

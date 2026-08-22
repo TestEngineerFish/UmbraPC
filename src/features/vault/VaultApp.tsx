@@ -6,7 +6,7 @@
 // inline style 只留给真正动态的值：右键菜单坐标、monogram 尺寸、强度条百分比、动画延迟。
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComponentType, CSSProperties, ReactNode, SVGProps } from "react";
-import { Pill, btnGhost, btnPrimary, selectBox } from "../../components/ui";
+import { Pill, btnGhost, btnPrimary, selectBox, fieldFlex, EmptyState } from "../../components/ui";
 import {
   IconAlert, IconCheck, IconChevronDown, IconChevronRight, IconCloud, IconCopy, IconDice, IconDots,
   IconDownload, IconExternal, IconEye, IconEyeOff, IconFile, IconFolder, IconGrid, IconImage, IconKey,
@@ -90,21 +90,23 @@ const CSS = `
 
 // ── 共用类名 ──
 // 大号输入框（创建 / 解锁 / 弹窗），控件圆角统一 8px。
-const vInput = "w-full border border-border bg-card text-text rounded-[8px] px-[12px] py-[9px] text-[13.5px] outline-none focus:border-orange";
+// 保险箱是独立窗口，整体字号比主窗大一档（输入 13.5 / 按钮 13.5），这一档**不在设计包里**，
+// 是本模块自己的取舍，见交付清单。但聚焦态照设计硬规则补上：描边转橙 + 3px 橙软光环。
+const vInput = "w-full border border-border bg-card text-text rounded-[7px] px-[12px] py-[9px] text-[13.5px] outline-none transition-[border-color,box-shadow] duration-[130ms] ease-out hover:border-orange focus:border-orange focus:shadow-[var(--focus-ring)]";
 // 卡片内的小号输入框（详情编辑态）。
-const vInputSm = "w-full border border-border bg-bg text-text rounded-[8px] px-[11px] py-[8px] text-[13px] outline-none focus:border-orange";
+const vInputSm = "w-full border border-border bg-bg text-text rounded-[7px] px-[11px] py-[8px] text-[13px] outline-none transition-[border-color,box-shadow] duration-[130ms] ease-out hover:border-orange focus:border-orange focus:shadow-[var(--focus-ring)]";
 // 整宽主按钮（创建 / 解锁 / 进入保险箱）。看起来禁用的一定真禁用，disabled 样式在这里一并声明。
-const vBtnWide = "w-full inline-flex items-center justify-center gap-[6px] whitespace-nowrap px-[15px] py-[10px] bg-orange text-white border-none rounded-[8px] text-[13.5px] font-semibold cursor-pointer hover:bg-orange-deep disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-orange";
+const vBtnWide = "w-full inline-flex items-center justify-center gap-[6px] whitespace-nowrap px-[15px] py-[10px] bg-orange text-white border-none rounded-[7px] text-[13.5px] font-semibold cursor-pointer hover:bg-orange-deep disabled:bg-chip disabled:text-faint disabled:cursor-not-allowed disabled:hover:bg-chip disabled:hover:text-faint";
 // 等分的次要按钮（Secret Key 页的复制 / 下载）。不能复用 btnGhost：它带 flex-none，和 flex-1 是同一个属性会互相盖。
-const vBtnSplit = "flex-1 inline-flex items-center justify-center gap-[6px] whitespace-nowrap px-[12px] py-[7px] border border-border bg-card text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text";
+const vBtnSplit = "flex-1 inline-flex items-center justify-center gap-[6px] whitespace-nowrap px-[12px] py-[7px] border border-border bg-card text-text rounded-[7px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text";
 // 虚线的「新建」按钮（新建分组 / 添加控件 / 添加附件）。
-const vDash = "w-full inline-flex items-center justify-center gap-[6px] whitespace-nowrap border border-dashed border-border bg-transparent text-muted rounded-[8px] py-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text";
+const vDash = "w-full inline-flex items-center justify-center gap-[6px] whitespace-nowrap border border-dashed border-border bg-transparent text-muted rounded-[7px] py-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text";
 // 纯文字的小按钮（多选、切换解锁方式这类）。
-const vTextBtn = "flex-none whitespace-nowrap inline-flex items-center gap-[5px] bg-transparent border-none p-0 text-[11.5px] text-muted cursor-pointer hover:text-orange-text disabled:opacity-40 disabled:cursor-not-allowed";
+const vTextBtn = "flex-none whitespace-nowrap inline-flex items-center gap-[5px] bg-transparent border-none p-0 text-[11.5px] text-muted cursor-pointer hover:text-orange-text disabled:text-faint disabled:cursor-not-allowed disabled:hover:text-faint";
 // 卡片内的图标小按钮（复制、显示密码、调序、删除控件）。
-const vIconBtn = "w-[24px] h-[24px] flex-none inline-flex items-center justify-center bg-transparent border-none rounded-[7px] text-muted cursor-pointer hover:bg-hover hover:text-orange-text disabled:opacity-30 disabled:cursor-not-allowed";
+const vIconBtn = "w-[24px] h-[24px] flex-none inline-flex items-center justify-center bg-transparent border-none rounded-[7px] text-muted cursor-pointer hover:bg-hover hover:text-orange-text disabled:text-faint disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-faint";
 // 菜单/下拉的浮层外壳。
-const vPanel = "absolute z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow)]";
+const vPanel = "absolute z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow-floating)]";
 // 分组小标题。
 const vGroupHead = "text-[10.5px] font-semibold tracking-[.06em] text-faint px-[10px] pt-[4px] pb-[5px]";
 
@@ -155,7 +157,7 @@ function Modal({ width, onClose, children }: { width: number; onClose: () => voi
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
       <div
-        className="bg-card border border-border rounded-[12px] p-[18px] shadow-[var(--shadow)] max-h-[82vh] overflow-y-auto"
+        className="bg-card border border-border rounded-[12px] p-[18px] shadow-[var(--shadow-floating)] max-h-[82vh] overflow-y-auto"
         style={{ width }}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -441,7 +443,7 @@ function Unlock({ onDone, st }: { onDone: () => Promise<void>; st: VStatus }) {
         <button className={vBtnWide} disabled={busy || !mp} onClick={() => void submit()}>{busy ? "解锁中…" : "解锁保险箱"}</button>
         {canBio ? (
           <button
-            className="w-full inline-flex items-center justify-center gap-[7px] whitespace-nowrap px-[15px] py-[9px] border border-border bg-card text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
+            className="w-full inline-flex items-center justify-center gap-[7px] whitespace-nowrap px-[15px] py-[9px] border border-border bg-card text-text rounded-[7px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
             onClick={() => void touchId()}
           ><IconTouchId size={15} />使用 Touch ID 解锁</button>
         ) : null}
@@ -518,7 +520,7 @@ function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStat
   const doExport = async (plain: boolean) => {
     setGearOpen(false);
     const r = plain ? await api.exportPlain() : await api.exportBackup();
-    if (r.ok) flash(plain ? "已导出明文 JSON" : "已导出加密备份 ✓");
+    if (r.ok) flash(plain ? "已导出明文 JSON" : "已导出加密备份");
   };
   const doSync = async () => {
     setGearOpen(false);
@@ -527,7 +529,7 @@ function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStat
     try {
       const r = await api.syncNow();
       await refresh(); await onStatus();
-      flash(`已同步 ✓${r.pulled ? " · 已拉取云端更新" : ""}`);
+      flash(`已同步${r.pulled ? " · 已拉取云端更新" : ""}`);
     } catch (e) { flash(String(e).replace("Error: ", "")); }
   };
   const afterImport = async (a: { added: number }) => { setCat("all"); await refresh(); flash(`已导入 ${a.added} 条记录到当前身份库`); };
@@ -807,20 +809,19 @@ function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStat
                 </div>
               );
             }) : (
-              <div className="flex flex-col items-center text-center gap-[10px] px-[18px] pt-[46px]">
-                <span className="w-[40px] h-[40px] rounded-[11px] flex-none inline-flex items-center justify-center bg-chip text-faint"><IconSearch size={19} /></span>
-                {q ? (
-                  <>
-                    <div className="text-[13px]">没有匹配「{q}」的记录</div>
-                    <div className="text-[11.5px] text-faint leading-[1.8]">密码与密文内容不参与搜索<br />可以试试名称、账号或网址</div>
-                    <button className={btnGhost} onClick={() => void addRecord(q)}>新建「{q}」</button>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-[13px]">这个分组还没有记录</div>
-                    <div className="text-[11.5px] text-faint leading-[1.8]">用右上角的「添加记录」新建一条</div>
-                  </>
-                )}
+              /* 空态走通用空态件（稿 3736 是「PC 空态」的 compact 档 + secondary 动作）。
+                 之前是手抄的一份：40px 图标框 / 圆角 11，而组件（照稿）compact 档是 44px / 圆角 12。
+                 搜索无结果时给「新建「xxx」」作为次动作 —— 稿里就是这么画的，搜不到往往
+                 意味着这条还没存过。 */
+              <div className="pt-[46px]">
+                <EmptyState
+                  compact
+                  icon="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4"
+                  title={q ? `没有匹配「${q}」的记录` : "这个分组还没有记录"}
+                  body={q ? "密码与密文内容不参与搜索，可以试试名称、账号或网址" : "用右上角的「添加记录」新建一条"}
+                  secondaryLabel={q ? `新建「${q}」` : undefined}
+                  onSecondary={q ? () => void addRecord(q) : undefined}
+                />
               </div>
             )}
           </div>
@@ -856,7 +857,7 @@ function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStat
 
       {/* 记录右键菜单 */}
       {ctx.open && ctxItem ? (
-        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow)] w-[200px] max-h-[calc(100vh-16px)] overflow-y-auto" style={{ ...at(ctx.x, ctx.y), animation: "vPop .14s ease" }}>
+        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow-floating)] w-[200px] max-h-[calc(100vh-16px)] overflow-y-auto" style={{ ...at(ctx.x, ctx.y), animation: "vPop .14s ease" }}>
           <MenuItem icon={<IconPencil size={14} />} label="编辑记录" onClick={() => { setSelId(ctxItem.id); setAutoEditId(ctxItem.id); closeMenus(); }} />
           <MenuItem icon={<IconStar size={14} />} label={ctxItem.favorite ? "取消收藏" : "加入收藏"} onClick={async () => { closeMenus(); await toggleFav(ctxItem); }} />
           <div className="h-px bg-border-soft my-[5px]" />
@@ -885,7 +886,7 @@ function Main({ onLock, st, onStatus }: { onLock: () => Promise<void>; st: VStat
 
       {/* 分组右键菜单 */}
       {tctx.open && tctxType ? (
-        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow)] w-[168px]" style={{ ...at(tctx.x, tctx.y), animation: "vPop .14s ease" }}>
+        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow-floating)] w-[168px]" style={{ ...at(tctx.x, tctx.y), animation: "vPop .14s ease" }}>
           <MenuItem icon={<IconPencil size={14} />} label="重命名分组" onClick={() => { setRenaming(tctxType.id); closeMenus(); }} />
           <MenuItem icon={<IconTrash size={14} />} label="删除分组" danger onClick={() => askDeleteType(tctxType.id)} />
         </div>
@@ -997,7 +998,7 @@ function VaultsManager({ vaults, vid, onClose, reload, onDeleted, flash }: {
             <div key={v.id} className={`flex items-center gap-[10px] py-[10px] ${i === vaults.length - 1 ? "" : "border-b border-border-soft"}`}>
               <Mono text={v.name} size={30} radius={9} font={12} plain={v.id !== vid} />
               <input
-                className="flex-1 min-w-0 border border-border bg-bg text-text rounded-[8px] px-[10px] py-[6px] text-[12.5px] outline-none focus:border-orange"
+                className={fieldFlex("bg")}
                 defaultValue={v.name}
                 onBlur={async (e) => {
                   const val = e.target.value.trim();
@@ -1006,7 +1007,7 @@ function VaultsManager({ vaults, vid, onClose, reload, onDeleted, flash }: {
               />
               {v.id === vid ? <span className="flex-none whitespace-nowrap text-[11px] text-orange-text">当前</span> : null}
               <button
-                className="flex-none whitespace-nowrap inline-flex items-center gap-[5px] px-[10px] py-[6px] border border-danger bg-transparent text-danger rounded-[8px] text-[12px] cursor-pointer hover:bg-danger hover:text-white disabled:opacity-35 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-danger"
+                className="flex-none whitespace-nowrap inline-flex items-center gap-[5px] px-[10px] py-[6px] border border-danger bg-transparent text-danger rounded-[8px] text-[12px] cursor-pointer hover:bg-danger hover:text-white disabled:bg-chip disabled:text-faint disabled:border-transparent disabled:cursor-not-allowed disabled:hover:bg-chip disabled:hover:text-faint"
                 disabled={vaults.length <= 1}
                 title={vaults.length <= 1 ? "至少保留一个身份库" : "删除身份库"}
                 onClick={() => { if (vaults.length <= 1) return; setAsk(v); }}
@@ -1042,7 +1043,7 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
   const [addOpen, setAddOpen] = useState(false);
   useEffect(() => { setDraft(structuredClone(item)); setEdit(autoEdit); }, [item, autoEdit]);
 
-  const save = async () => { await api.updateItem(vid, draft); setEdit(false); await onChange(); flash("已保存 ✓"); };
+  const save = async () => { await api.updateItem(vid, draft); setEdit(false); await onChange(); flash("已保存"); };
   const setData = (bid: string, k: string, v: unknown) =>
     setDraft((d) => ({ ...d, blocks: d.blocks.map((b) => (b.id === bid ? { ...b, data: { ...b.data, [k]: v } } : b)) }));
   const setLabel = (bid: string, v: string) =>
@@ -1131,7 +1132,7 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
               <button
                 key={c.type}
                 onClick={() => addBlock(c.type)}
-                className="flex items-center gap-[9px] px-[11px] py-[10px] border border-border bg-card text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
+                className="flex items-center gap-[9px] px-[11px] py-[10px] border border-border bg-card text-text rounded-[7px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
               >
                 <span className="w-[26px] h-[26px] rounded-[7px] flex-none inline-flex items-center justify-center bg-chip text-muted"><c.Icon size={14} /></span>
                 <span className="flex-none whitespace-nowrap">{c.name}</span>

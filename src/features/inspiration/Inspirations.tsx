@@ -5,7 +5,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
-import { btnGhost, btnIcon, btnPrimary, selectBox, ConfirmDialog, Modal, RefreshButton } from "../../components/ui";
+import { btnGhost, btnIcon, btnPrimary, selectBox, ConfirmDialog, Modal, RefreshButton, EmptyState } from "../../components/ui";
 import {
   IconArrowRight, IconBulb, IconChat, IconCheck, IconCopy, IconKeyboard,
   IconPencil, IconPhone, IconPlus, IconSearch, IconTrash,
@@ -216,11 +216,18 @@ export function Inspirations() {
               {list.map((i) => <Card key={i.id} item={i} on={current?.id === i.id} tag={tag} onPick={() => pick(i.id)} />)}
             </div>
           ) : (
-            <div className="h-[420px] flex flex-col items-center justify-center gap-[11px]">
-              <span className="w-[46px] h-[46px] rounded-[13px] bg-orange-soft text-orange-text flex items-center justify-center"><IconBulb size={22} /></span>
-              <div className="text-[13.5px] font-semibold">{st.loading ? t("inspiration.loading") : t("inspiration.emptyTitle")}</div>
-              <div className="text-[12px] text-muted text-center leading-[1.7] max-w-[330px]">{t("inspiration.emptyHint")}</div>
-              <button className={btnPrimary} onClick={() => setEditing(null)}>{t("inspiration.emptyAction")}</button>
+            /* 空态走通用空态件（稿 4632 就是「PC 空态」组件）。
+               之前这里是手抄的一份：46px 图标框 / 圆角 13 / **橙软底橙字** / 标题 13.5px，
+               而组件（照稿）是 52px / 圆角 14 / --chip 底 --muted 字 / 标题 14px。
+               橙色那一处尤其要改 —— 硬规则说橙色只出现在主操作、当前选中、进度三处，
+               空态图标不属于任何一处。 */
+            <div className="h-[420px] flex items-center justify-center">
+              <EmptyState
+                title={st.loading ? t("inspiration.loading") : t("inspiration.emptyTitle")}
+                body={t("inspiration.emptyHint")}
+                actionLabel={st.loading ? undefined : t("inspiration.emptyAction")}
+                onAction={st.loading ? undefined : () => setEditing(null)}
+              />
             </div>
           )}
         </div>
@@ -435,11 +442,11 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
       </button>
       <div className="flex gap-[7px]">
         <button disabled={busy} onClick={() => setStatus(item.status === "done" ? "open" : "done")}
-          className="flex-1 py-[7px] border border-border bg-transparent text-text rounded-[8px] text-[12px] cursor-pointer whitespace-nowrap hover:border-success hover:text-success disabled:opacity-45">
+          className="flex-1 py-[7px] border border-border bg-transparent text-text rounded-[8px] text-[12px] cursor-pointer whitespace-nowrap hover:border-success hover:text-success disabled:bg-chip disabled:text-faint disabled:border-transparent disabled:cursor-not-allowed disabled:hover:bg-chip disabled:hover:text-faint disabled:hover:border-transparent">
           {item.status === "done" ? t("inspiration.markOpen") : t("inspiration.markDone")}
         </button>
         <button disabled={busy} onClick={() => setStatus(item.status === "archived" ? "open" : "archived")}
-          className="flex-1 py-[7px] border border-border bg-transparent text-text rounded-[8px] text-[12px] cursor-pointer whitespace-nowrap hover:border-orange hover:text-orange-text disabled:opacity-45">
+          className="flex-1 py-[7px] border border-border bg-transparent text-text rounded-[8px] text-[12px] cursor-pointer whitespace-nowrap hover:border-orange hover:text-orange-text disabled:bg-chip disabled:text-faint disabled:border-transparent disabled:cursor-not-allowed disabled:hover:bg-chip disabled:hover:text-faint disabled:hover:border-transparent">
           {item.status === "archived" ? t("inspiration.unarchive") : t("inspiration.archive")}
         </button>
       </div>
@@ -472,7 +479,7 @@ function Research({ item, onChanged }: { item: Inspiration; onChanged: () => voi
 
   const askBtn = (label: string) => (
     <button disabled={busy} onClick={go}
-      className="flex-none whitespace-nowrap px-[11px] py-[6px] border border-border bg-transparent text-text rounded-[8px] text-[12px] cursor-pointer hover:border-orange hover:text-orange-text disabled:opacity-45">
+      className="flex-none whitespace-nowrap px-[11px] py-[6px] border border-border bg-transparent text-text rounded-[8px] text-[12px] cursor-pointer hover:border-orange hover:text-orange-text disabled:bg-chip disabled:text-faint disabled:border-transparent disabled:cursor-not-allowed disabled:hover:bg-chip disabled:hover:text-faint disabled:hover:border-transparent">
       {busy ? t("inspiration.researchQueuing") : label}
     </button>
   );

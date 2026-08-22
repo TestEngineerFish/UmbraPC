@@ -787,3 +787,56 @@ export function IconInfo(p: IconProps) {
     </svg>
   );
 }
+
+// ── 能力页的 provider 图标 ────────────────────────────────────────────────────
+// 取值逐个照抄设计稿（Umbra PC 端.dc.html 1842 / 1856 / 1882 / 1895 四行的 <svg> 内容）。
+// 之前这五张卡共用一个字符「▤」，撞了「图标只用线性描边，不用填充图标、彩色图标、emoji」
+// 这条硬规则 —— 字符图标的字形和基线在 Windows / macOS 上都不一样，排版也对不齐。
+// 稿里第三张（系统）用的形状和已有的 IconWindow 完全一致，就不再重复定义了。
+
+// Claude Code：一对尖括号 + 中间一道斜杠。
+export function IconBrackets(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13 5l-2 14" />
+    </svg>
+  );
+}
+
+// Codex：裸终端提示符（不带外框，跟 IconTerminal 的带框版是两回事）。
+export function IconPrompt(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 17l6-6-6-6M12 19h8" />
+    </svg>
+  );
+}
+
+// FFmpeg：摄像机 —— 机身 + 右侧镜筒。
+export function IconVideo(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="m22 8-6 4 6 4V8z" />
+      <rect x="2" y="6" width="14" height="12" rx="2" />
+    </svg>
+  );
+}
+
+// 电脑操作：显示器 + 底座。实时操作页的空态也用它（稿 1928 同一张）。
+export function IconMonitor(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <rect x="2.5" y="4" width="19" height="13" rx="2" />
+      <path d="M8 21h8M12 17v4" />
+    </svg>
+  );
+}
+
+// 停止：圆角方块。用于实时操作的紧急停止（稿 1921，描边 2.2）。
+export function IconStop(p: IconProps) {
+  return (
+    <svg {...base(p)} strokeWidth={2.2}>
+      <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+  );
+}

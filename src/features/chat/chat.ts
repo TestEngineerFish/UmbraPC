@@ -498,13 +498,72 @@ function confirmButtons(taskId: string, scope?: string): string {
     + `</div>`;
 }
 
+// ── 图标 ────────────────────────────────────────────────────────────────────
+// 这一层是 vanilla（不是 React），拿不到 components/icons.tsx 里的组件，只能拼 SVG 字符串。
+// 取值照抄设计稿：对勾 1626、授权三档 7267-7269。
+//
+// 为什么非换不可：原先这几处用的是 🎉 / ✅ / 🚫 emoji。emoji 在 Windows 和 macOS 上是两套
+// 完全不同的彩色字形，既撞了「图标只用线性描边，不用填充图标、彩色图标、emoji」这条硬规则，
+// 也没法跟着 --success / --danger 变色 —— 拒绝态的 🚫 在深色下依然是刺眼的红白圆盘。
+//
+// TODO(icons)：等 ClaudeDesign 交回图标清单后，这几条 path 会挪进跨端共用的图标源，
+// 由脚本生成 PC / iOS 两边的图标文件，这里改成从那个源取。
+const ICON_CHECK = "m5 12.5 4 4 10-10";
+const ICON_AUTH_APPROVED = "M20 11a8 8 0 0 0-13.7-5.7L3 8M3 4v4h4";
+const ICON_AUTH_DENIED = "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 9l6 6M15 9l-6 6";
+// 和 ui.tsx 的 ErrorCard 用的是同一组 path，只是那边分成三条、这边拼成一条 d
+// （每段都以 M 起头，描边渲染等价）。
+const ICON_ALERT = "M12 8v4M12 16v.01M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z";
+
+function svgIcon(d: string, size: number, width: number): string {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${width}" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="${d}"></path></svg>`;
+}
+
+// 设备会话里，每条气泡上方带一行发言人标签（稿 1417-1427）。
+//
+// 为什么必须跟着 D12 一起做：设备消息从「靠右」改成「靠左」之后，秘书和设备的气泡
+// 长得一模一样 —— 没有标签就分不出谁在说话。只改对齐等于把界面改坏，两件事是一件事。
+//
+// 主会话不标：那里只有你和秘书，靠左右就分得清。
+function speakerLabel(who: "assistant" | "device"): string {
+  if (activeConv === MAIN) return "";
+  const inner = who === "device"
+    // 设备用 emoji + 设备名 —— 稿 1425 就是 `{{ ch.curEmoji }} {{ ch.curName }}`，
+    // 这处 emoji 是设计要求的，不在「emoji 换线性图标」那条规则的适用范围里。
+    ? `${esc(platformIcon(deviceOf(activeConv)?.platform))} ${esc(convLabel(activeConv))}`
+    : `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><rect x="4" y="8" width="16" height="12" rx="3"></rect><path d="M12 4v4M8 14v.01M16 14v.01"></path></svg>${esc(t("chat.secretary"))}`;
+  return `<span style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--faint);white-space:nowrap;">${inner}</span>`;
+}
+
+// 把气泡裹进「标签 + 气泡」的一列（gap 5，照稿 1417）。没有标签时原样返回，
+// 不多包一层 div —— 外面那层 gap:8 的包装还在，多套一层会多出 8px 的缝。
+//
+// ⚠️ 外层**不设** align-self：让它在纵向 flex 里默认 stretch 撑满整个消息区宽度，
+// 里面靠 align-items:flex-start 把标签和气泡按左边缘对齐。这样气泡自己那个
+// `max-width:80%` 才是「消息区的 80%」。如果外层 align-self:flex-start，容器会先
+// 收缩到内容宽，80% 再乘一次，气泡会被压得很窄。
+function labeled(who: "assistant" | "device", bubbleHtml: string): string {
+  const label = speakerLabel(who);
+  if (!label) return bubbleHtml;
+  return `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:5px;">${label}${bubbleHtml}</div>`;
+}
+
 function blockHtml(b: Block, i: number): string {
   if (b.kind === "user")
     return `<div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
 
   if (b.kind === "device") {
-    // 设备发出的消息：在设备聊天窗里，本机（PC）是“自己” → **靠右**显示（秘书的请求靠左）。
-    return `<div style="align-self:flex-end;max-width:78%;background:var(--track);border:1px dashed var(--border);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
+    // 设备发出的消息**靠左**。
+    //
+    // 这里翻过一次案：之前是靠右 + --track 底 + 虚线描边，理由是「本机(PC)是自己」。
+    // 但那个口径下，同一条流水里「谁是自己」会随着你在哪台设备上看而变，两端的左右
+    // 正好相反。现在统一成一条规则（决策 D12）：**只有用户自己发的消息靠右，其余一律靠左**。
+    // 稿 1424-1427 画的也是靠左的 --card 实线气泡。
+    // 取值先跟同页的秘书气泡保持一致（80% / 圆角 14 / 内距 11-14 / 行高 1.6）。
+    // 稿给设备会话的气泡是 78% / 圆角 12 / 内距 10-13 / 行高 1.65 —— 那一档要连秘书
+    // 气泡一起改，属于「逐页取值对齐」那一趟活，不在这次范围里。这里先保证两种气泡长一样。
+    return labeled("device", `<div style="align-self:flex-start;max-width:80%;background:var(--card);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.6;white-space:pre-wrap;">${esc(b.text)}</div>`)
+      + timeLine(b.ts, "flex-start");
   }
 
   if (b.kind === "assistant") {
@@ -517,7 +576,7 @@ function blockHtml(b: Block, i: number): string {
     // 注意：这里不能用 white-space:pre-wrap —— Markdown 渲染已把换行转成块/段落/<br>，
     // 再 pre-wrap 会把 md 源码里的换行重复显示成大片空白。
     const bubble = `<div style="align-self:flex-start;max-width:80%;background:var(--card);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.6;min-height:20px;overflow-wrap:break-word;">${b.thinking ? dots : ""}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
-    return trace + bubble + (b.streaming ? "" : timeLine(b.ts, "flex-start"));
+    return trace + labeled("assistant", bubble) + (b.streaming ? "" : timeLine(b.ts, "flex-start"));
   }
 
   if (b.kind === "job") {
@@ -544,13 +603,16 @@ function blockHtml(b: Block, i: number): string {
         return `${img}<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg><a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--orange-text);text-decoration:none;font-weight:500;">${esc(r.title)}</a></div>`;
       })
       .join("");
-    return `<div style="align-self:flex-start;max-width:80%;background:var(--success-soft);border:1px solid var(--success);border-left:3px solid var(--success);border-radius:10px;padding:13px 15px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;">🎉 ${esc(t("chat.done"))}：${esc(b.goal)}</div>${links}</div>`;
+    return `<div style="align-self:flex-start;max-width:80%;background:var(--success-soft);border:1px solid var(--success);border-left:3px solid var(--success);border-radius:10px;padding:13px 15px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;display:flex;align-items:center;gap:7px;">${svgIcon(ICON_CHECK, 14, 2.2)}<span style="min-width:0;">${esc(t("chat.done"))}：${esc(b.goal)}</span></div>${links}</div>`;
   }
 
   if (b.kind === "confirm") {
     const detail = b.detail != null ? (typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail)) : "";
     const foot = b.resolved
-      ? `<div style="font-size:12.5px;font-weight:600;margin-top:9px;color:${b.resolved === "approved" ? "var(--success)" : "var(--danger)"};">${b.resolved === "approved" ? `✅ ${esc(t("chat.approved"))}` : `🚫 ${esc(t("chat.denied"))}`}</div>`
+      ? `<div style="font-size:12.5px;font-weight:600;margin-top:9px;display:flex;align-items:center;gap:6px;color:${b.resolved === "approved" ? "var(--success)" : "var(--danger)"};">${
+          b.resolved === "approved"
+            ? `${svgIcon(ICON_AUTH_APPROVED, 12, 1.9)}${esc(t("chat.approved"))}`
+            : `${svgIcon(ICON_AUTH_DENIED, 12, 1.9)}${esc(t("chat.denied"))}`}</div>`
       : confirmButtons(b.taskId, b.scope);
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--orange-soft);border:1px solid var(--orange);border-radius:10px;padding:13px 15px;">
         <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>${esc(t("chat.needConfirm"))}</div>
@@ -562,7 +624,15 @@ function blockHtml(b: Block, i: number): string {
 
   if (b.kind === "question") return questionCardHtml(b, i);
 
-  return `<div style="align-self:flex-start;max-width:80%;border:1px solid rgba(180,35,24,.3);background:var(--danger-soft);color:var(--danger);padding:11px 14px;border-radius:10px;">${esc(b.text)}</div>`;
+  // 错误块照「PC 错误卡」的 strip 档重画（稿 1672-1673）。原先这里有两个问题：
+  //   ① 描边写死了 `rgba(180,35,24,.3)` —— 撞「颜色一律走 CSS 变量」，深色下也不跟着变
+  //   ② 只有一行字，没有动作 —— 撞「失败态三段式，第三段必须是可点按钮」
+  // 稿给的动作是「重新连接」（7323）。这里接 chatConn.connect()，它内部对已连接是幂等的。
+  return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--danger-soft);border:1px solid var(--danger);border-radius:11px;padding:11px 13px;display:flex;align-items:center;gap:9px;">
+      <span style="flex:none;color:var(--danger);display:flex;">${svgIcon(ICON_ALERT, 15, 2.1)}</span>
+      <span style="flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--danger);line-height:1.65;">${esc(b.text)}</span>
+      <button data-reconnect="1" style="flex:none;white-space:nowrap;padding:4px 11px;border-radius:7px;border:1px solid var(--danger);background:transparent;color:var(--danger);font-family:inherit;font-size:11.5px;font-weight:600;cursor:pointer;">${esc(t("chat.reconnect"))}</button>
+    </div>`;
 }
 
 // 问答卡：一次一题（可回上一题改），全部答完统一提交。
@@ -573,7 +643,7 @@ function questionCardHtml(b: Extract<Block, { kind: "question" }>, i: number): s
   if (b.done) {
     return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 15px;">
       <div style="font-weight:600;margin-bottom:6px;">${esc(b.title)}</div>
-      <div style="font-size:12.5px;color:var(--success);">✅ ${esc(t("chat.questionSubmitted"))}</div>
+      <div style="font-size:12.5px;color:var(--success);display:flex;align-items:center;gap:6px;">${svgIcon(ICON_CHECK, 13, 2.2)}${esc(t("chat.questionSubmitted"))}</div>
     </div>`;
   }
   const q = b.questions[Math.min(b.at, total - 1)];
@@ -1070,8 +1140,14 @@ export function mount(el: HTMLElement): void {
 }
 
 function onMsgsClick(e: Event): void {
-  const el = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit]") as HTMLElement | null;
+  const el = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit],[data-reconnect]") as HTMLElement | null;
   if (!el) return;
+  // ── 错误块的「重新连接」──
+  // 用 data-* 而不是 id：一屏里可能有多条错误块，id 会重复。
+  if (el.dataset.reconnect !== undefined) {
+    chatConn.connect();
+    return;
+  }
   // ── 问答卡 ──
   const qi = el.dataset.qopt ?? el.dataset.qprev ?? el.dataset.qnext ?? el.dataset.qsubmit;
   if (qi !== undefined) {

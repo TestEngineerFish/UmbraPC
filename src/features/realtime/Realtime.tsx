@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import * as desktop from "../../services/desktop";
 import { chatConn } from "../../services/server";
 import * as legacy from "../../app/shell";
+import { IconStop, IconMonitor } from "../../components/icons";
 
 const SKILL_KEYS: Record<string, string> = {
   click: "realtime.skillClick",
@@ -26,7 +27,8 @@ function StopButton() {
       }}
       className="flex items-center gap-[7px] px-[15px] py-[7px] border-[1.5px] border-danger text-danger bg-danger-soft rounded-lg text-[13px] font-bold cursor-pointer"
     >
-      {t("realtime.emergencyStop")}
+      {/* 稿 1921 是 14px 线性方块、描边 2.2；之前是把「■」拼在 i18n 文案里。 */}
+      <IconStop size={14} />{t("realtime.emergencyStop")}
     </button>
   );
 }
@@ -48,7 +50,8 @@ export function Realtime() {
           <h1 className="m-0 text-[16px] font-semibold">{t("realtime.title")}</h1>
         </div>
         <div className="flex flex-col items-center justify-center gap-3 text-muted h-[380px]">
-          <span className="w-[54px] h-[54px] rounded-[14px] bg-card border border-border flex items-center justify-center text-[22px]">🖥</span>
+          {/* 图标照抄稿 1928（24px 显示器，描边 1.6）。之前这里是 🖥 emoji。 */}
+          <span className="w-[54px] h-[54px] rounded-[14px] bg-card border border-border flex items-center justify-center text-muted"><IconMonitor size={24} strokeWidth={1.6} /></span>
           <div className="text-[14px]">{t("realtime.notEnabled")}</div>
           <button onClick={() => legacy.navigate("settings")} className="px-[15px] py-[7px] bg-orange text-white rounded-lg text-[13px] font-semibold cursor-pointer">{t("realtime.goSettings")}</button>
         </div>

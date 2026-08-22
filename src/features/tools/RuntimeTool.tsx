@@ -8,7 +8,7 @@
 // Java 扫得快（一条 java_home 就够），Python 慢得多（要跑 pyenv / uv 好几个命令），
 // 合成一个刷新按钮就是让快的等慢的。
 import { useCallback, useEffect, useState } from "react";
-import { Panel, Pill, RefreshButton } from "../../components/ui";
+import { Panel, Pill, RefreshButton, ErrorCard } from "../../components/ui";
 import { IconCheck, IconAlert, IconInfo, IconCopy, IconCpu, IconCode } from "../../components/icons";
 import { RUNTIME_SOURCE, hasRuntime, runtimeApi, type RuntimeIssue, type RuntimeScan } from "./bridges";
 
@@ -120,8 +120,14 @@ function RuntimeCard({ kind, label, hint }: { kind: "java" | "python"; label: st
         <RefreshButton onClick={() => { void load(); }} spinning={busy} title={`重新扫描 ${label}`} />
       </div>
 
+      {/* 走通用错误卡（稿 3045-3049）。之前这里是一行红字 —— 只有第一段「发生了什么」，
+          缺了「为什么」和「现在能做什么」。硬规则要求失败态三段式，第三段必须是可点按钮。 */}
       {err ? (
-        <div className="text-[12px] text-danger bg-danger-soft rounded-[8px] px-[10px] py-[7px]">扫描失败：{err}</div>
+        <ErrorCard
+          title={`扫描失败：${err}`}
+          reason="上一次的结果已经不可信，这里不再显示。"
+          actions={[{ label: "重试", onClick: () => { void load(); } }]}
+        />
       ) : null}
 
       {!scan && busy ? <div className="text-[12px] text-muted py-[6px]">正在扫描…</div> : null}

@@ -9,7 +9,7 @@ import * as legacy from "../../app/shell";
 import { deleteJobs, getServerUrl, retryJob, stopJob } from "../../services/server";
 import type { Job, JobDetail, StepError, Subtask } from "../../services/server";
 import { ImageViewer } from "../../components/ImageViewer";
-import { btnGhost, btnDanger, RefreshButton } from "../../components/ui";
+import { btnGhost, btnDanger, RefreshButton, filterChip, filterChipCount, ErrorCard, EmptyState } from "../../components/ui";
 import { IconSearch, IconRefresh, IconCheck, IconX, IconClock, IconAlert, IconFolder } from "../../components/icons";
 
 // 全局图片预览：任意 Step 图片点击后打开（避免逐层透传 onClick）。
@@ -190,15 +190,15 @@ export function Tasks() {
               className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
           </div>
 
-          <div className="flex gap-[4px]">
+          {/* 六档筛选（比稿多了 待确认 / 已挂起 / 已取消 三档）。稿里 452px 列表栏是按五档算的宽度，
+              这里补 flex-wrap 让它窄窗折行，不要挤成一条压扁的胶囊带。 */}
+          <div className="flex flex-wrap gap-[4px]">
             {FILTERS.map((f) => {
               const on = filter === f.k;
               return (
-                <button key={f.k} onClick={() => setFilter(f.k)}
-                  className={`flex-none whitespace-nowrap flex items-center gap-[5px] px-[9px] py-[4px] rounded-full text-[11.5px] border ${
-                    on ? "border-orange bg-orange-soft text-orange-text font-semibold" : "border-border bg-transparent text-muted hover:border-orange"}`}>
+                <button key={f.k} onClick={() => setFilter(f.k)} className={filterChip(on, "sm")}>
                   <span>{f.label}</span>
-                  <span className={`text-[10.5px] font-semibold ${on ? "text-orange-text" : "text-faint"}`}>{counts[f.k] || 0}</span>
+                  <span className={filterChipCount(on)}>{counts[f.k] || 0}</span>
                 </button>
               );
             })}
@@ -219,9 +219,17 @@ export function Tasks() {
               selectMode={selectMode} checked={selected.has(j.id)}
               onOpen={() => (selectMode ? toggle(j.id) : legacy.openJob(j.id))} />
           ))}
+          {/* 空态走通用空态件。compact 是因为它落在 452px 的列表列里，不是主区。
+              「搜索无结果」和「一条都没有」给的是两套动作：前者该能一键清掉筛选，
+              后者清筛选没有意义。加载中不给动作 —— 那不是空，是还没到。 */}
           {!list.length ? (
-            <div className="py-10 text-center text-[12.5px] text-muted">
-              {tasks.loading ? t("tasks.loading") : kw ? t("tasks.noMatch", { q: kw }) : filter !== "all" ? t("tasks.noneInFilter") : t("tasks.empty")}
+            <div className="py-6">
+              <EmptyState
+                compact
+                title={tasks.loading ? t("tasks.loading") : kw ? t("tasks.noMatch", { q: kw }) : filter !== "all" ? t("tasks.noneInFilter") : t("tasks.empty")}
+                actionLabel={!tasks.loading && (kw || filter !== "all") ? t("tasks.clearFilter") : undefined}
+                onAction={!tasks.loading && (kw || filter !== "all") ? () => { setQ(""); setFilter("all"); } : undefined}
+              />
             </div>
           ) : null}
         </div>
@@ -334,6 +342,7 @@ function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
   // 重试/停止的进行中标志与失败提示。成功不提示——列表会自己刷新，状态胶囊就是反馈。
   const [busy, setBusy] = useState("");
   const [actErr, setActErr] = useState("");
+  const [retryNote, setRetryNote] = useState("");
   // 目标描述默认收起（两行截断）；这份 state 靠外层的 key={job.id} 在切换任务时自动重置。
   const [descOpen, setDescOpen] = useState(false);
   const st = displayStatus(d.job);
@@ -459,24 +468,29 @@ function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
 
           {/* 失败卡：优先用失败步骤的结构化错误（带分类），没有就退回任务级的 result_summary。
               另给一个「前往能力设置」的出口（失败多半是 Key/额度问题）。 */}
+          {/* 失败态走通用错误卡（稿 2176 就是 `PC 错误卡 variant="card"`）。
+              之前这里是手抄的一份近似结构，缺了两样稿里要求的东西：
+              ① meta 行（稿要 模型 / HTTP / 错误码 三项，我们目前只拿得到分类和步数，就先给这两项）
+              ② 第一动作「重试任务」—— 三段式的第三段必须是**可点的**，只剩一个「前往能力设置」不算。
+              原始返回改走 raw 槽（稿 2177-2180 的「查看原始响应」）。 */}
           {st === "failed" ? (
-            <div className="bg-card border border-danger rounded-[11px] overflow-hidden">
-              <div className="flex items-center gap-[8px] px-[13px] py-[10px] bg-danger-soft">
-                <span className="flex-none text-danger"><IconAlert size={14} /></span>
-                <span className="flex-1 min-w-0 truncate text-[12.5px] font-semibold text-danger">{t("tasks.statusFailed")}</span>
-                {total ? <span className="flex-none whitespace-nowrap text-[11px] text-danger">{done + 1} / {total}</span> : null}
-              </div>
-              <div className="px-[13px] py-[11px] flex flex-col gap-[9px]">
-                {failErr?.kind && ERR_KIND_KEY[failErr.kind] ? (
-                  <span className="self-start flex-none whitespace-nowrap px-[7px] py-[2px] rounded-full bg-danger-soft text-danger text-[10.5px] font-semibold">{t(ERR_KIND_KEY[failErr.kind])}</span>
-                ) : null}
-                <div className="text-[12.5px] leading-[1.65] whitespace-pre-wrap break-all">
-                  {failErr?.message || d.job.result_summary || t("tasks.statusFailed")}
-                </div>
-                <div className="flex gap-[8px]">
-                  <button className={btnGhost} onClick={() => legacy.goNav("abilities")}>{t("tasks.goAbilities")}</button>
-                </div>
-              </div>
+            <div className="flex flex-col gap-[8px]">
+              <ErrorCard
+                variant="card"
+                title={t("tasks.statusFailed")}
+                reason={failErr?.message || d.job.result_summary || t("tasks.statusFailed")}
+                raw={failErr?.detail || undefined}
+                meta={[
+                  ...(failErr?.kind && ERR_KIND_KEY[failErr.kind] ? [{ label: t("tasks.errKindLabel"), value: t(ERR_KIND_KEY[failErr.kind]) }] : []),
+                  ...(total ? [{ label: t("tasks.errStepLabel"), value: `${done + 1} / ${total}` }] : []),
+                ]}
+                actions={[
+                  { label: t("tasks.retry"), kind: "primary", onClick: () => setRetryNote(t("tasks.retryNotReady")) },
+                  { label: t("tasks.goAbilities"), kind: "ghost", onClick: () => legacy.goNav("abilities") },
+                ]}
+              />
+              {/* 重试链路还在调试（决策 D22），按钮保留但如实说清点了不会发生什么，不要静默无反应。 */}
+              {retryNote ? <div className="text-[11.5px] text-warning leading-[1.6]">{retryNote}</div> : null}
             </div>
           ) : null}
 

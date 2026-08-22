@@ -4,35 +4,30 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { IconRefresh, IconX } from "./icons";
+import { btn, icon as iconBtn, field, fieldFlex, mono, menuRow, select as selectCls } from "./kit";
+import type { MenuTone } from "./kit";
 
-// 开关按钮：on 时滑块靠右并变橙色。
+// 样式一律从 kit 工厂取（对应设计移交包的 `UI` 工厂）。这里只做转发，
+// 别在本文件里再写第二份近似样式 —— 那正是工厂要消灭的东西。
+export * from "./kit";
+
+// 开关按钮。设计稿取值：轨 36×21、滑块 16、左位 2.5 / 17.5、130ms 缓动，关时轨用 --track。
+// 之前是 38×22 + 18 滑块 + bg-border，跟设计稿差一档，也和 iOS 那边对不上。
 export function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   return (
-    <button onClick={onClick} className={`w-[38px] h-[22px] rounded-full p-[2px] flex shrink-0 transition-colors ${on ? "justify-end bg-orange" : "justify-start bg-border"}`}>
-      <span className="w-[18px] h-[18px] rounded-full bg-white shadow" />
+    <button onClick={onClick}
+      className={`w-[36px] h-[21px] flex-none rounded-full relative border-none cursor-pointer transition-colors duration-[130ms] ease-out ${on ? "bg-orange" : "bg-track"}`}>
+      <span className={`absolute top-[2.5px] w-[16px] h-[16px] rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,.18)] transition-[left] duration-[130ms] ease-out ${on ? "left-[17.5px]" : "left-[2.5px]"}`} />
     </button>
   );
 }
 
-// 以下三个按钮类名统一带 flex-none + whitespace-nowrap：中文按钮文字只有三四个字时，
-// 在 flex 行里默认可收缩，宽度刚好等于内容就会从中间断成两行。
-// 通用次要按钮类名（悬停转橙描边）。
-export const btnGhost = "flex-none whitespace-nowrap px-[13px] py-[6px] border border-border bg-transparent text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text";
-// 通用主按钮类名（禁用时压暗并禁掉悬停色，配合 disabled 属性使用）。
-export const btnPrimary = "flex-none whitespace-nowrap px-[15px] py-[7px] bg-orange text-white rounded-[8px] text-[12.5px] font-semibold cursor-pointer hover:bg-orange-deep disabled:opacity-45 disabled:cursor-not-allowed disabled:hover:bg-orange";
-// 危险操作按钮：平时红描边透明底，悬停才填成红底白字（实心红只留给确认弹窗里的最终按钮）。
-export const btnDanger = "flex-none whitespace-nowrap px-[13px] py-[6px] border border-danger text-danger bg-transparent rounded-[8px] text-[12.5px] font-semibold cursor-pointer hover:bg-danger hover:text-white";
-// 纯图标的小方按钮（删除、调序这类），26×26。
-export const btnIcon = "w-[26px] h-[26px] flex-none flex items-center justify-center border border-border bg-transparent text-muted rounded-[7px] cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed";
-
-// 占满剩余宽度的输入框（表单行右半区用）。min-w-0 是必须的：不加的话内容一长就把整行撑破。
-export const inputFlex = "flex-1 min-w-0 border border-border bg-bg text-text rounded-[8px] px-[11px] py-[7px] text-[12.5px] outline-none";
-// 同上，但用等宽字体——快捷键、关键词这类要对齐着看的内容。
-export const inputHotkey = `${inputFlex} font-mono`;
-// 定宽小输入框（132px，一行里并排放两三个的那种）。
-export const inputSmall = "w-[132px] flex-none border border-border bg-card text-text rounded-[8px] px-[11px] py-[7px] text-[12.5px] outline-none";
-// 下拉框：flex-none + nowrap，同样是防中文选项把行挤断。
-export const selectBox = "flex-none whitespace-nowrap border border-border bg-card text-text rounded-[8px] px-[9px] py-[5px] text-[12.5px] outline-none cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed";
+// 输入框类名。全部转成工厂产物，取值随之对齐设计稿（高 32 / 圆角 7 / 聚焦转橙 + 3px 光环）。
+// 之前这几个是 py-[7px] + 圆角 8 + outline-none，**根本没有聚焦态**。
+export const inputFlex = fieldFlex("bg");
+export const inputHotkey = `flex-1 ${mono({ bg: "bg" })}`;
+export const inputSmall = `w-[132px] flex-none ${field("card")}`;
+export const selectBox = selectCls();
 
 // 一张设置卡：12px 圆角 + 1px 描边，内部逐行铺 SettingRow（行间发丝线由行自己画）。
 // 上下内边距不对称是因为第一行/最后一行本身带 13px 的行内边距。
@@ -165,7 +160,7 @@ export function RefreshButton({ onClick, spinning, minMs = 550, title }: {
   };
 
   return (
-    <button className={`${btnIcon} hover:border-orange hover:text-orange-text`}
+    <button className={iconBtn(26)}
       title={title || t("common.refresh")} onClick={() => void run()}>
       <span className={`flex ${on ? "animate-spin" : ""}`}><IconRefresh size={13} /></span>
     </button>
@@ -176,27 +171,32 @@ export function RefreshButton({ onClick, spinning, minMs = 550, title }: {
 // 遮罩 + 居中卡片。标题栏与底栏都是可选的：不传 title 就没有标题栏（确认框那种），
 // 不传 footer 就没有底栏。点遮罩关闭，点卡片内部不关闭。
 // 用 fixed 而不是 absolute：页面根节点不一定是定位元素，absolute 会往上找到不确定的祖先。
-export function Modal({ width = 460, title, children, footer, onClose }: {
+// 宽度三档（设计稿）：460 表单 / 560 中等 / 720 表格。默认 460。
+export function Modal({ width = 460, title, sub, children, footer, onClose }: {
   width?: number;
   title?: React.ReactNode;
+  sub?: string;
   children: React.ReactNode;
   footer?: React.ReactNode;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center" onMouseDown={onClose}>
-      <div className="bg-card border border-border rounded-[14px] overflow-hidden flex flex-col max-h-[calc(100%-32px)]"
+    <div className="fixed inset-0 z-50 bg-[rgba(20,16,12,.42)] flex items-center justify-center p-[24px]" onMouseDown={onClose}>
+      <div className="bg-card border border-border rounded-[12px] shadow-[var(--shadow-modal)] overflow-hidden flex flex-col max-w-full max-h-full"
         style={{ width }} onMouseDown={(e) => e.stopPropagation()}>
         {title ? (
-          <div className="flex-none flex items-center gap-[10px] px-[16px] py-[14px] border-b border-border">
-            <span className="flex-1 min-w-0 truncate text-[14px] font-semibold">{title}</span>
-            <button className={btnIcon} title={t("common.close")} onClick={onClose}><IconX size={12} /></button>
+          <div className="flex-none flex items-center gap-[9px] px-[16px] py-[12px] border-b border-border">
+            <span className="flex-1 min-w-0 truncate text-[13.5px] font-semibold">{title}</span>
+            {sub ? <span className="flex-none text-[11.5px] text-faint whitespace-nowrap">{sub}</span> : null}
+            {/* 标题右侧只放关闭图标，不放第二个动作（设计稿硬规则）。
+                关闭用 22 档无描边图标钮：带描边的方按钮会和标题抢注意力。 */}
+            <button className={iconBtn(22)} title={t("common.close")} onClick={onClose}><IconX size={14} /></button>
           </div>
         ) : null}
-        <div className="flex-1 overflow-y-auto px-[16px] py-[15px] flex flex-col gap-[13px]">{children}</div>
+        <div className="flex-1 min-h-0 overflow-y-auto px-[16px] py-[15px] flex flex-col gap-[13px]">{children}</div>
         {footer ? (
-          <div className="flex-none flex items-center gap-[8px] px-[16px] py-[12px] border-t border-border bg-bg">{footer}</div>
+          <div className="flex-none flex items-center gap-[9px] px-[16px] py-[12px] border-t border-border-soft bg-rail">{footer}</div>
         ) : null}
       </div>
     </div>
@@ -219,12 +219,9 @@ export function ConfirmDialog({ title, message, confirmText, danger, busy, onCon
   return (
     <Modal width={400} title={title} onClose={onCancel} footer={<>
       <span className="flex-1" />
-      <button className={btnGhost} onClick={onCancel}>{t("common.cancel")}</button>
-      <button
-        className={danger
-          ? "flex-none whitespace-nowrap px-[15px] py-[7px] bg-danger text-white rounded-[8px] text-[12.5px] font-semibold cursor-pointer disabled:opacity-45 disabled:cursor-not-allowed"
-          : btnPrimary}
-        disabled={busy} onClick={onConfirm}>{confirmText}</button>
+      <button className={btn("ghost")} onClick={onCancel}>{t("common.cancel")}</button>
+      {/* 实心红只出现在这里 —— 确认弹窗里的最终动作。别处的破坏性操作一律描边红。 */}
+      <button className={btn(danger ? "dangerSolid" : "primary")} disabled={busy} onClick={onConfirm}>{confirmText}</button>
     </>}>
       <div className="text-[12.5px] leading-[1.7]">{message}</div>
       {children}
@@ -235,12 +232,20 @@ export function ConfirmDialog({ title, message, confirmText, danger, busy, onCon
 // ── 右键菜单 ────────────────────────────────────────────────────────────────
 // 贴着光标弹出的小菜单（列表行的删除等破坏性操作放这里，不必在每行常驻一个按钮）。
 // 自己夹在视口内：贴着右边/下边弹时翻到另一侧，免得菜单被窗口边裁掉。
+// 设计稿硬规则：**右键菜单分三组：状态类、编辑类、破坏性。删除永远单独一组、放最后，
+// 红色只出现在这一项和确认弹窗里。** 分组靠 divider 行，别靠留白。
 export interface MenuAction {
-  label: string;
-  onClick: () => void;
-  danger?: boolean;   // 破坏性操作，标红
+  label?: string;
+  onClick?: () => void;
+  danger?: boolean;          // 破坏性操作，标红（等价于 tone:"danger"，旧调用点保留）
+  tone?: "warn" | "danger";
+  divider?: boolean;         // 一条分隔线，不是可点行
+  group?: string;            // 组标题（11px 字距标签），不是可点行
+  icon?: React.ReactNode;    // 13px 线性图标
+  hint?: string;             // 右侧的快捷键提示，等宽
+  disabled?: boolean;
 }
-const MENU_W = 148;
+const MENU_W = 168;
 export function ContextMenu({ x, y, items, onClose }: {
   x: number; y: number; items: MenuAction[]; onClose: () => void;
 }) {
@@ -263,20 +268,246 @@ export function ContextMenu({ x, y, items, onClose }: {
     };
   }, [onClose]);
 
+  // 距窗口边至少 8px（设计稿）。
   const left = x + MENU_W + 8 <= window.innerWidth ? x : Math.max(8, x - MENU_W);
   const top = Math.min(y, Math.max(8, window.innerHeight - 12 - items.length * 30));
-  // 不留上下内边距：菜单项的悬停底色要一直铺到边框，留白会让高亮看着「没对齐」。
+  // 4px 内边距 + 行自带 6px 圆角：悬停底是一块**内缩的圆角**，不铺满到边框。
+  // 这和之前「不留内边距、高亮铺满」是相反的做法，按设计稿改。
   return (
-    <div ref={boxRef} className="fixed z-50 bg-card border border-border rounded-[9px] shadow-[var(--shadow)] overflow-hidden"
+    <div ref={boxRef} className="fixed z-50 bg-card border border-border rounded-[9px] shadow-[var(--shadow-floating)] p-[4px]"
       style={{ left, top, width: MENU_W }}>
-      {items.map((it, i) => (
-        <button key={i}
-          onClick={() => { onClose(); it.onClick(); }}
-          className={`w-full text-left whitespace-nowrap px-[12px] py-[6px] bg-transparent border-none text-[12.5px] cursor-pointer ${
-            it.danger ? "text-danger hover:bg-danger-soft" : "text-text hover:bg-hover"}`}>
-          {it.label}
+      {items.map((it, i) => {
+        if (it.divider) return <div key={i} className="h-[1px] bg-border-soft my-[4px] mx-[6px]" />;
+        if (it.group) return <div key={i} className="px-[10px] pt-[5px] pb-[3px] text-[10.5px] font-semibold tracking-[.06em] text-faint whitespace-nowrap">{it.group}</div>;
+        const tone: MenuTone | undefined = it.tone ?? (it.danger ? "danger" : undefined);
+        return (
+          <button key={i} disabled={it.disabled}
+            onClick={() => { if (it.disabled) return; onClose(); it.onClick?.(); }}
+            className={menuRow(tone)}>
+            {it.icon ? <span className="flex-none flex">{it.icon}</span> : null}
+            <span className="flex-1 min-w-0 whitespace-nowrap">{it.label}</span>
+            {it.hint ? <span className="flex-none font-mono text-[10.5px] text-faint whitespace-nowrap">{it.hint}</span> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── 状态胶囊 ────────────────────────────────────────────────────────────────
+// 设计稿硬规则：**状态永不只靠颜色表意，必须图标 + 文字**，且五个状态的图标是固定映射：
+//   运行中 = 旋转弧 · 已完成 = 对勾 · 需确认 = 三角感叹 · 失败 = 圆叉 · 排队中 = 时钟
+// 图标写在这里而不是 icons.tsx：设计稿给这五个的描边是 2.2 / 2.2 / 2 / 2 / 2，
+// 和 icons.tsx 统一的 1.8 不同，混进去会让那边的「统一描边」变成一句空话。
+export type StatusKind = "running" | "done" | "confirm" | "failed" | "queued";
+
+const STATUS_SKIN: Record<StatusKind, string> = {
+  running: "bg-orange-soft text-orange-text",
+  done: "bg-success-soft text-success",
+  confirm: "bg-warning-soft text-warning",
+  failed: "bg-danger-soft text-danger",
+  queued: "bg-chip text-muted",
+};
+
+function StatusIcon({ kind }: { kind: StatusKind }) {
+  const p = { width: 13, height: 13, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeLinecap: "round" as const, strokeLinejoin: "round" as const, className: "flex-none" };
+  switch (kind) {
+    // Tailwind 的 animate-spin 正好是 1s linear infinite，与设计稿的 umspin 一致。
+    case "running": return <svg {...p} strokeWidth={2.2} className="flex-none animate-spin"><path d="M12 3a9 9 0 0 1 9 9" /></svg>;
+    case "done": return <svg {...p} strokeWidth={2.2}><path d="M4 12.5l5 5L20 6.5" /></svg>;
+    case "confirm": return <svg {...p} strokeWidth={2}><path d="M12 4l9 16H3z" /><path d="M12 10v4" /><path d="M12 17v.01" /></svg>;
+    case "failed": return <svg {...p} strokeWidth={2}><circle cx="12" cy="12" r="9" /><path d="M15 9l-6 6" /><path d="M9 9l6 6" /></svg>;
+    case "queued": return <svg {...p} strokeWidth={2}><circle cx="12" cy="12" r="9" /><path d="M12 7.5V12l3 2" /></svg>;
+  }
+}
+
+/** 状态胶囊。图标是固定映射，调用方只给 kind 和文字 —— 别自己换图标。 */
+export function StatusPill({ kind, children }: { kind: StatusKind; children: React.ReactNode }) {
+  return (
+    <span className={`inline-flex items-center gap-[6px] flex-none whitespace-nowrap h-[24px] px-[10px] rounded-full text-[11.5px] ${STATUS_SKIN[kind]}`}>
+      <StatusIcon kind={kind} />
+      {children}
+    </span>
+  );
+}
+
+/** 状态点（列表行用）。只有点没有字的场合，务必另外给文字或 title。 */
+export function StatusDot({ tone }: { tone: "success" | "faint" | "danger" }) {
+  const c = tone === "success" ? "bg-success" : tone === "danger" ? "bg-danger" : "bg-faint";
+  return <span className={`w-[7px] h-[7px] flex-none rounded-full ${c}`} />;
+}
+
+/** 进度条。done 时填充转成功色并铺满 —— 完成态不显示百分比（设计稿）。 */
+export function ProgressBar({ pct, done }: { pct: number; done?: boolean }) {
+  return (
+    <span className="block h-[4px] rounded-full bg-track overflow-hidden">
+      <span className={`block h-full rounded-full ${done ? "bg-success" : "bg-orange"}`} style={{ width: `${done ? 100 : Math.max(0, Math.min(100, pct))}%` }} />
+    </span>
+  );
+}
+
+// ── 空态 ────────────────────────────────────────────────────────────────────
+// 对应设计包的「PC 空态」。三种 kind 只改图标底色与标题色，结构完全一样。
+export type EmptyKind = "empty" | "error" | "offline";
+const EMPTY_SKIN: Record<EmptyKind, { box: string; title: string }> = {
+  empty: { box: "bg-chip text-muted", title: "text-text" },
+  error: { box: "bg-danger-soft text-danger", title: "text-danger" },
+  offline: { box: "bg-warning-soft text-warning", title: "text-text" },
+};
+const EMPTY_PATH: Record<EmptyKind, string[]> = {
+  empty: ["M4 7h16v13H4z", "M4 7l2-3h12l2 3", "M9 12h6"],
+  error: ["M12 8v4", "M12 16v.01", "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"],
+  offline: ["M3 3l18 18", "M8.5 16.4a5 5 0 0 1 7 0", "M5 12.9a10 10 0 0 1 4-2.6", "M12 20h.01"],
+};
+
+export function EmptyState({ kind = "empty", title, body, hint, compact, icon, actionLabel, onAction, secondaryLabel, onSecondary }: {
+  kind?: EmptyKind;
+  title: string;
+  body?: string;
+  hint?: string;
+  compact?: boolean;
+  icon?: string;           // 单条 path，覆盖 kind 的默认图标
+  actionLabel?: string;
+  onAction?: () => void;
+  secondaryLabel?: string;
+  onSecondary?: () => void;
+}) {
+  const skin = EMPTY_SKIN[kind];
+  const paths = icon ? [icon] : EMPTY_PATH[kind];
+  const n = compact ? "w-[40px] h-[40px] rounded-[12px]" : "w-[52px] h-[52px] rounded-[14px]";
+  const s = compact ? 18 : 24;
+  return (
+    <div className={`flex-1 min-h-0 flex flex-col items-center justify-center text-center ${compact ? "gap-[9px] p-[30px_18px]" : "gap-[11px] p-[0_18px]"}`}>
+      <span className={`${n} ${skin.box} flex-none flex items-center justify-center`}>
+        <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+          {paths.map((d, i) => <path key={i} d={d} />)}
+        </svg>
+      </span>
+      <span className={`${compact ? "text-[13.5px]" : "text-[14px]"} font-semibold ${skin.title}`}>{title}</span>
+      {body ? <span className="text-[12.5px] text-muted max-w-[360px] leading-[1.7]">{body}</span> : null}
+      {hint ? <span className="text-[11.5px] text-faint max-w-[340px] leading-[1.65]">{hint}</span> : null}
+      {actionLabel || secondaryLabel ? (
+        <span className="flex gap-[9px] mt-[3px] flex-wrap justify-center">
+          {actionLabel ? <button className={btn("primary")} onClick={onAction}>{actionLabel}</button> : null}
+          {secondaryLabel ? <button className={btn("ghost")} onClick={onSecondary}>{secondaryLabel}</button> : null}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+// ── 错误卡 ──────────────────────────────────────────────────────────────────
+// 对应设计包的「PC 错误卡」。硬规则：**三段式 —— 发生了什么 → 为什么 → 现在能做什么，
+// 第三段必须是可点按钮**。三种形态：strip（行内条）/ card（带明细的卡）/ banner（贴顶边）。
+export interface ErrAction { label: string; kind?: "primary" | "danger" | "ghost"; onClick?: () => void }
+export function ErrorCard({ kind = "danger", variant = "strip", title, reason, meta, raw, actions }: {
+  kind?: "danger" | "warning";
+  variant?: "strip" | "card" | "banner";
+  title: string;
+  reason?: string;
+  meta?: { label: string; value: string }[];
+  raw?: string;
+  actions?: ErrAction[];
+}) {
+  const isCard = variant === "card";
+  const tone = kind === "warning" ? "text-warning" : "text-danger";
+  const bd = kind === "warning" ? "border-warning" : "border-danger";
+  const soft = kind === "warning" ? "bg-warning-soft" : "bg-danger-soft";
+  const path = kind === "warning"
+    ? ["M12 4l9 16H3z", "M12 10v4", "M12 17v.01"]
+    : ["M12 8v4", "M12 16v.01", "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"];
+  const Ico = (
+    <svg width={isCard ? 14 : 15} height={isCard ? 14 : 15} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.1} strokeLinecap="round" strokeLinejoin="round"
+      className={`flex-none ${tone} ${reason && !isCard ? "mt-[1px]" : ""}`}>
+      {path.map((d, i) => <path key={i} d={d} />)}
+    </svg>
+  );
+  const actionRow = actions?.length ? (
+    <span className={`flex gap-[8px] flex-wrap ${isCard ? "" : "flex-none items-center"}`}>
+      {actions.map((a, i) => (
+        <button key={i} onClick={a.onClick}
+          className={`flex-none whitespace-nowrap rounded-[7px] cursor-pointer ${isCard ? "px-[13px] py-[6px] text-[12px]" : "px-[11px] py-[4px] text-[11.5px]"} ${
+            a.kind === "primary" ? "bg-orange text-white border-none font-semibold"
+            : a.kind === "ghost" ? "bg-transparent border border-border text-text"
+            : `bg-transparent border ${bd} ${tone} font-semibold`}`}>
+          {a.label}
         </button>
       ))}
+    </span>
+  ) : null;
+
+  // banner 贴弹窗或面板顶边：无圆角、只有下边框（设计稿硬规则）。
+  const shell = isCard
+    ? `bg-card border ${bd} rounded-[11px] overflow-hidden`
+    : variant === "banner"
+      ? `flex-none ${soft} border-b ${bd} px-[16px] py-[9px] flex gap-[9px] ${reason ? "items-start" : "items-center"}`
+      : `${soft} border ${bd} rounded-[9px] px-[13px] py-[11px] flex gap-[9px] ${reason ? "items-start" : "items-center"}`;
+
+  return (
+    <div className={shell}>
+      <div className={isCard ? `flex items-center gap-[9px] px-[13px] py-[10px] ${soft}` : `flex gap-[9px] flex-1 min-w-0 ${reason ? "items-start" : "items-center"}`}>
+        {Ico}
+        <div className="flex-1 min-w-0 flex flex-col gap-[4px]">
+          <span className={`text-[12.5px] font-semibold ${tone} ${isCard ? "truncate" : "leading-[1.65]"}`}>{title}</span>
+          {reason && !isCard ? <span className={`text-[11.5px] ${tone} leading-[1.65]`}>{reason}</span> : null}
+        </div>
+        {!isCard ? actionRow : null}
+      </div>
+      {isCard ? (
+        <div className="px-[14px] py-[12px] flex flex-col gap-[9px]">
+          {meta?.length ? (
+            <div className="flex gap-[14px] flex-wrap">
+              {meta.map((m, i) => (
+                <span key={i} className="text-[11.5px] text-muted whitespace-nowrap">
+                  {m.label} <span className="text-text font-mono">{m.value}</span>
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {reason ? <span className="text-[12.5px] leading-[1.7]">{reason}</span> : null}
+          {raw ? <pre className="m-0 text-[11px] text-faint font-mono bg-track rounded-[7px] px-[10px] py-[8px] break-all whitespace-pre-wrap">{raw}</pre> : null}
+          {actionRow}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── 吐司 ────────────────────────────────────────────────────────────────────
+// 对应设计包的「PC 吐司」。**这是 PC 端唯一硬编码深色的面** —— 它浮在任何界面之上，
+// 跟随主题反而会在浅色下变成一块白底白字的东西。所以这里不用主题变量。
+export type ToastTone = "" | "ok" | "warn" | "fail";
+const TOAST_PATH: Record<Exclude<ToastTone, "">, string[]> = {
+  ok: ["M5 13l4.5 4.5L19 7"],
+  warn: ["M12 4l9 16H3z", "M12 10v4", "M12 17v.01"],
+  fail: ["M12 8v4", "M12 16v.01", "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0z"],
+};
+const TOAST_COLOR: Record<Exclude<ToastTone, "">, string> = {
+  ok: "var(--success)", warn: "var(--warning)", fail: "var(--danger)",
+};
+
+export function Toast({ text, tone = "", actionLabel, onAction, place = "right" }: {
+  text: string;
+  tone?: ToastTone;
+  actionLabel?: string;
+  onAction?: () => void;
+  place?: "right" | "center";
+}) {
+  return (
+    <div className={`fixed z-[60] flex items-center gap-[10px] px-[12px] py-[9px] rounded-full bg-[rgba(21,17,14,.86)] backdrop-blur-[12px] shadow-[0_10px_30px_rgba(0,0,0,.24)] ${
+      place === "center" ? "left-1/2 -translate-x-1/2 bottom-[26px]" : "right-[18px] bottom-[18px]"}`}>
+      {tone ? (
+        <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke={TOAST_COLOR[tone]} strokeWidth={2.1} strokeLinecap="round" strokeLinejoin="round" className="flex-none">
+          {TOAST_PATH[tone].map((d, i) => <path key={i} d={d} />)}
+        </svg>
+      ) : null}
+      <span className="flex-none text-[12.5px] text-[#F4F1EA] whitespace-nowrap">{text}</span>
+      {actionLabel ? (
+        <button onClick={onAction}
+          className="flex-none h-[24px] px-[10px] rounded-full border border-[rgba(255,255,255,.28)] bg-transparent text-[#F4F1EA] text-[11.5px] font-semibold cursor-pointer whitespace-nowrap hover:border-[rgba(255,255,255,.55)]">
+          {actionLabel}
+        </button>
+      ) : null}
     </div>
   );
 }

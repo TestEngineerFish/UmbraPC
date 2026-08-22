@@ -442,7 +442,11 @@
     "errTimeout": "Stalled",
     "errDetail": "Raw error",
     "copied": "Copied",
-    "statusAwaitingReview": "Awaiting review"
+    "statusAwaitingReview": "Awaiting review",
+    "errKindLabel": "Kind",
+    "errStepLabel": "Failed at",
+    "retryNotReady": "Retry is still being debugged and is unavailable in this build.",
+    "clearFilter": "Clear filters"
   },
   "inspiration": {
     "title": "Ideas",
@@ -513,7 +517,7 @@
     "title": "Abilities",
     "deviceHint": "Local capabilities · Device {{name}}",
     "notReady": "Device engine not ready or no providers.",
-    "addProgram": "+ Add program",
+    "addProgram": "Add program",
     "footer": "Built-in programs work when installed; toggle off programs you don't want AI to use. Custom programs (providers.json) can be edited/deleted, or use Add program without writing JSON.",
     "custom": "Custom",
     "disabled": "Disabled",
@@ -539,7 +543,7 @@
   },
   "realtime": {
     "title": "Realtime",
-    "emergencyStop": "■ Emergency stop",
+    "emergencyStop": "Emergency stop",
     "notEnabled": "computer-use is off",
     "goSettings": "Enable in Settings",
     "permIncomplete": "Missing permissions: {{missing}} not granted; computer-use cannot run",
@@ -613,7 +617,8 @@
     "questionMulti": "multiple",
     "questionCustom": "Other (write your own)",
     "questionAnswer": "Type your answer",
-    "questionSubmitted": "Submitted — the secretary is on it"
+    "questionSubmitted": "Submitted — the secretary is on it",
+    "reconnect": "Reconnect"
   },
   "clipboard": {
     "searchPh": "Search clipboard…",

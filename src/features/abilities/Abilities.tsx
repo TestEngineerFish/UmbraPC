@@ -4,6 +4,22 @@ import { useTranslation } from "react-i18next";
 import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import type { ProviderManifest, CustomProviderCfg } from "../../services/desktop";
+import { field } from "../../components/kit";
+import { IconBrackets, IconPrompt, IconVideo, IconMonitor, IconWindow, IconGrid, IconPlus } from "../../components/icons";
+
+// provider → 图标。五张示例卡的取值照抄设计稿（1842 / 1856 / 1868 / 1882 / 1895）。
+// 认不出来的（用户自己加的程序）落到通用的方块图标，**不留字符兜底** ——
+// 之前所有卡共用一个「▤」，撞了「图标只用线性描边」这条硬规则。
+const PROVIDER_ICON: Record<string, (p: { size?: number }) => JSX.Element> = {
+  agent: IconBrackets,     // 编码代理（claude / codex 引擎）
+  codex: IconPrompt,
+  system: IconWindow,
+  ffmpeg: IconVideo,
+  computer: IconMonitor,   // 电脑操作
+};
+function providerIcon(provider: string) {
+  return PROVIDER_ICON[provider] || IconGrid;
+}
 
 interface SkillForm {
   skill: string;
@@ -79,7 +95,8 @@ export function Abilities() {
           <h1 className="m-0 text-[16px] font-semibold">{t("abilities.title")}</h1>
           <span className="text-[12px] text-muted">{t("abilities.deviceHint", { name: ds.deviceName })}</span>
         </div>
-        <button onClick={openAdd} className="flex items-center gap-1.5 px-[13px] py-1.5 border border-border bg-card text-text rounded-lg text-[13px] cursor-pointer shrink-0">{t("abilities.addProgram")}</button>
+        {/* 加号从文案里拆出来了：之前是全角「＋」拼在 i18n 串里，字形和基线跟正文对不齐。 */}
+        <button onClick={openAdd} className="flex items-center gap-1.5 px-[13px] py-1.5 border border-border bg-card text-text rounded-lg text-[13px] cursor-pointer shrink-0"><IconPlus size={14} />{t("abilities.addProgram")}</button>
       </div>
 
       <div className="grid grid-cols-2 gap-[13px]">
@@ -106,7 +123,9 @@ function ProviderCard({ m, onEdit }: { m: ProviderManifest; onEdit: () => void }
   return (
     <div className={`bg-card border border-border rounded-xl p-[15px] ${enabled && !m.available ? "opacity-70" : ""}`}>
       <div className="flex items-center gap-[11px] mb-3">
-        <span className="w-[34px] h-[34px] rounded-[9px] bg-orange-soft text-orange-text flex items-center justify-center shrink-0">▤</span>
+        <span className="w-[34px] h-[34px] rounded-[9px] bg-orange-soft text-orange-text flex items-center justify-center shrink-0">
+          {(() => { const Ico = providerIcon(m.provider); return <Ico size={18} />; })()}
+        </span>
         <div className="flex-1 min-w-0">
           <div className="font-semibold">
             {m.display_name || m.provider}
@@ -140,7 +159,9 @@ function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
   );
 }
 
-const inp = "w-full border border-border bg-bg text-text rounded-lg px-2.5 py-[7px] text-[13px] outline-none box-border";
+// 走工厂：之前这行是自己拼的近似值（圆角 8、无 hover、**完全没有聚焦态**），
+// 换成 field() 之后跟着设计稿走 —— 高 32 / 圆角 7 / 聚焦描边转橙 + 3px 橙软光环。
+const inp = `w-full ${field("bg")}`;
 
 function ProvModal({ form, setForm, onSave, onCancel }: { form: ProvForm; setForm: (f: ProvForm) => void; onSave: () => void; onCancel: () => void }) {
   const { t } = useTranslation();

@@ -61,7 +61,14 @@
   --bg: #F6F5F2; --card: #FFFFFF; --titlebar: #EFEDE8; --border: #E6E3DC; --border-soft: #EEEBE4; --text: #1F2320; --muted: #6B716B; --faint: #9A9992;
   --nav: #15110E; --orange: #E8590C; --orange-deep: #C2410C; --orange-soft: #FFF1E6; --orange-text: #9A3412;
   --success: #0F766E; --success-soft: #E2F1EF; --warning: #B45309; --warning-soft: #FBEEDD; --danger: #B42318; --danger-soft: #FBE9E7;
-  --user-bubble: #EAF1F7; --track: #F3F2EF; --chip: #F2F0EC; --hover: #F1EFEA; --rail: #FBFAF8;
+  --user-bubble: #EAF1F7; --track: #EDEBE6; --chip: #F2F0EC; --hover: #F1EFEA; --rail: #FBFAF8;
+  /* 窗口外的桌面底。目前只有截图/贴图那类脱窗界面用得上，但 token 先对齐设计包，
+     免得以后有人现调一个近似值出来。 */
+  --desk: #DEDBD5;
+  /* 图表色槽：按槽位取色，**不表意状态**。记账的分类占比、趋势图从这里取。
+     语义四色（success/warning/danger/orange）不许进这组，反过来也一样。 */
+  --c1: #2A78D6; --c2: #1BAF7A; --c3: #EDA100; --c4: #E87BA4;
+  --c5: #008300; --c6: #4A3AA7; --c7: #8A5A44; --c8: #9A9992;
   --shadow: 0 14px 40px rgba(31,35,32,.14);
 }
 /* 深色下 --nav 比 --bg 更深：一级侧边栏始终是画面里最重的一块，主内容区反而抬高一档。 */
@@ -70,8 +77,21 @@
   --bg: #1C1A17; --card: #232019; --titlebar: #1C1A17; --border: #332E26; --border-soft: #2B2721; --text: #EDEAE3; --muted: #9A938A; --faint: #6E675E;
   --nav: #15110E; --orange-soft: rgba(232,89,12,.16); --orange-text: #F0A878;
   --success: #34B5A6; --success-soft: rgba(15,118,110,.2); --warning: #D98A29; --warning-soft: rgba(180,83,9,.22); --danger: #E0675C; --danger-soft: rgba(180,35,24,.22);
-  --user-bubble: #2B2620; --track: #1B1915; --chip: #2A251F; --hover: #2A251F; --rail: #1F1C18;
+  --user-bubble: #2B2620; --track: #302B24; --chip: #2A251F; --hover: #2A251F; --rail: #1F1C18;
+  --desk: #151310;
+  --c1: #3987E5; --c2: #199E70; --c3: #C98500; --c4: #D55181;
+  --c5: #3FA93F; --c6: #9085E9; --c7: #B58163; --c8: #6E675E;
   --shadow: 0 14px 40px rgba(0,0,0,.45);
+}
+
+/* ── 分层：1px 描边 + 底色差；阴影只给真正浮起的那两层 ─────────────────────
+   设计包把「浮层」和「模态」分成了两个深度，两个主题共用同一组值（阴影是黑的
+   透明度，本来就不该跟着主题翻）。--shadow 是旧的单一变量，保留给还没迁过来的
+   调用点，新代码一律用下面三个。 */
+:root, [data-theme="dark"] {
+  --shadow-floating: 0 8px 24px rgba(0,0,0,.13);
+  --shadow-modal: 0 18px 48px rgba(0,0,0,.22);
+  --focus-ring: 0 0 0 3px var(--orange-soft);
 }
 
 * { box-sizing: border-box; }

@@ -442,7 +442,11 @@
     "errTimeout": "疑似卡住",
     "errDetail": "原始错误",
     "copied": "已复制",
-    "statusAwaitingReview": "待确认"
+    "statusAwaitingReview": "待确认",
+    "errKindLabel": "分类",
+    "errStepLabel": "失败于",
+    "retryNotReady": "重试链路还在调试，这一版先不可用。",
+    "clearFilter": "清空筛选"
   },
   "inspiration": {
     "title": "灵感",
@@ -513,7 +517,7 @@
     "title": "能力",
     "deviceHint": "本机真实能力 · 设备 {{name}}",
     "notReady": "设备引擎未就绪或暂无 Provider。",
-    "addProgram": "＋ 新增程序",
+    "addProgram": "新增程序",
     "footer": "内置程序装了就自动可用；开关可停用不想让 AI 用的程序。自定义程序（providers.json）可编辑/删除，或点「新增程序」添加，无需手写 JSON。",
     "custom": "自定义",
     "disabled": "已停用",
@@ -539,7 +543,7 @@
   },
   "realtime": {
     "title": "实时操作",
-    "emergencyStop": "■ 紧急停止",
+    "emergencyStop": "紧急停止",
     "notEnabled": "computer-use 未开启",
     "goSettings": "去设置开启",
     "permIncomplete": "权限不全：{{missing}}未授予，computer-use 无法执行",
@@ -613,7 +617,8 @@
     "questionMulti": "可多选",
     "questionCustom": "其它（自己写）",
     "questionAnswer": "在这里作答",
-    "questionSubmitted": "已提交，秘书这就去安排"
+    "questionSubmitted": "已提交，秘书这就去安排",
+    "reconnect": "重新连接"
   },
   "clipboard": {
     "searchPh": "搜索剪贴板…",

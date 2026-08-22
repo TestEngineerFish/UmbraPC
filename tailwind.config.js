@@ -29,6 +29,15 @@ module.exports = {
         "danger-soft": "var(--danger-soft)",
         chip: "var(--chip)",
         track: "var(--track)",
+        desk: "var(--desk)",
+        // 图表色槽（记账等分类图表按槽位取色，不表意状态）。语义四色不许进这组。
+        c1: "var(--c1)", c2: "var(--c2)", c3: "var(--c3)", c4: "var(--c4)",
+        c5: "var(--c5)", c6: "var(--c6)", c7: "var(--c7)", c8: "var(--c8)",
+      },
+      boxShadow: {
+        floating: "var(--shadow-floating)",
+        modal: "var(--shadow-modal)",
+        focus: "var(--focus-ring)",
       },
     },
   },

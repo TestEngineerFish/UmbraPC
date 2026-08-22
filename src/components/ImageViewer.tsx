@@ -1,6 +1,7 @@
 // 通用图片预览器（可复用）：全屏遮罩看大图，支持放大/缩小、拖动、下载、ESC/点击背景关闭。
 // 用法：受控组件——传 src 打开、onClose 关闭。
 import { useEffect, useRef, useState } from "react";
+import { IconMinus, IconPlus, IconRefresh, IconDownload, IconX } from "./icons";
 
 export function ImageViewer({ src, alt, onClose }: { src: string | null; alt?: string; onClose: () => void }) {
   const [scale, setScale] = useState(1);
@@ -45,12 +46,14 @@ export function ImageViewer({ src, alt, onClose }: { src: string | null; alt?: s
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80" onClick={onClose}>
       {/* 工具条 */}
       <div className="absolute top-4 right-4 flex items-center gap-2 z-[101]" onClick={(e) => e.stopPropagation()}>
-        <button className={btn} title="缩小" onClick={() => zoom(-0.25)}>－</button>
+        {/* 六个动作原先都是字符（－＋⟲⭳✕）。字符图标的字形、粗细、基线随系统字体走，
+            六个摆一排会明显参差；换成同一套线性描边图标之后尺寸和光学重心才对得齐。 */}
+        <button className={btn} title="缩小" onClick={() => zoom(-0.25)}><IconMinus size={15} /></button>
         <span className="text-white/80 text-[12px] w-12 text-center select-none">{Math.round(scale * 100)}%</span>
-        <button className={btn} title="放大" onClick={() => zoom(0.25)}>＋</button>
-        <button className={btn} title="重置" onClick={() => { setScale(1); setTx(0); setTy(0); }}>⟲</button>
-        <button className={btn} title="下载" onClick={download}>⭳</button>
-        <button className={btn} title="关闭" onClick={onClose}>✕</button>
+        <button className={btn} title="放大" onClick={() => zoom(0.25)}><IconPlus size={15} /></button>
+        <button className={btn} title="重置" onClick={() => { setScale(1); setTx(0); setTy(0); }}><IconRefresh size={15} /></button>
+        <button className={btn} title="下载" onClick={download}><IconDownload size={15} /></button>
+        <button className={btn} title="关闭" onClick={onClose}><IconX size={15} /></button>
       </div>
       {/* 图片（可拖动、滚轮缩放） */}
       <img

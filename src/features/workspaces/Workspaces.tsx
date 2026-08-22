@@ -11,7 +11,7 @@ import { getState } from "../../services/deviceTransport";
 import * as desktop from "../../services/desktop";
 import type { DirEntry } from "../../services/desktop";
 import * as legacy from "../../app/shell";
-import { btnGhost, btnPrimary, btnIcon, inputFlex, Modal, RefreshButton } from "../../components/ui";
+import { btnGhost, btnPrimary, btnIcon, inputFlex, Modal, RefreshButton, filterChip, filterChipCount } from "../../components/ui";
 import { IconSearch, IconPlus, IconCopy, IconCheck, IconFolder, IconTrash, IconX, IconAlert, IconPencil } from "../../components/icons";
 
 // 名字首字母（或首个汉字）做 monogram 方块 —— 设计规范里分类与记录一律用字母方块，不用彩色 emoji。
@@ -150,15 +150,14 @@ export function Workspaces() {
               className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
           </div>
 
-          <div className="flex gap-[4px]">
+          {/* 稿 2253 要求 flex-wrap：窄窗折行，不压缩。 */}
+          <div className="flex flex-wrap gap-[4px]">
             {FILTERS.map((f) => {
               const on = filter === f.k;
               return (
-                <button key={f.k} onClick={() => setFilter(f.k)}
-                  className={`flex-none whitespace-nowrap flex items-center gap-[5px] px-[9px] py-[4px] rounded-full text-[11.5px] border ${
-                    on ? "border-orange bg-orange-soft text-orange-text font-semibold" : "border-border bg-transparent text-muted hover:border-orange"}`}>
+                <button key={f.k} onClick={() => setFilter(f.k)} className={filterChip(on, "sm")}>
                   <span>{f.label}</span>
-                  <span className={`text-[10.5px] font-semibold ${on ? "text-orange-text" : "text-faint"}`}>{f.n}</span>
+                  <span className={filterChipCount(on)}>{f.n}</span>
                 </button>
               );
             })}
