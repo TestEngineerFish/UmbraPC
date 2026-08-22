@@ -22,6 +22,7 @@ import type { DlgWidth } from "./nodeform";
 import { displayAccel } from "../../components/hotkey";
 import { ContextMenu } from "./menu";
 import type { MenuItem } from "./menu";
+import { askConfirm, showToast } from "../../components/overlay";
 
 // 对象清单里每一项的图标：统一是 icons.tsx 里那套线性图标组件（只吃 size，颜色跟父级 color 走）。
 type IconComp = ComponentType<{ size?: number }>;
@@ -1067,6 +1068,18 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
 
   // ── 预制件（E3）──
   const savePrefabs = (next: WFPrefab[]) => { setPrefabs(next); void api.setPrefabs(next); };
+  // 删预制件走二次确认（决策 D24）。画布上的节点删除有 ⌘Z 兜底，预制件**没有** ——
+  // savePrefabs 直接落盘，不进撤销栈，点错了就真没了。
+  const askDelPrefab = async (p: WFPrefab) => {
+    const ok = await askConfirm({
+      message: `删除预制件「${p.name}」？删除后无法恢复，已经落在画布上的节点不受影响。`,
+      confirmText: "删除预制件",
+      danger: true,
+    });
+    if (!ok) return;
+    savePrefabs(prefabsRef.current.filter((x) => x.id !== p.id));
+    showToast(`已删除预制件「${p.name}」`, { tone: "ok" });
+  };
   // 真正落盘：命名框确认后调用。坐标归一到组内左上角，只带上组内部的连线（跨出选区的线不带走）。
   const savePrefab = (ids: string[], name: string) => {
     const w = wfsRef.current.find((x) => x.id === curIdRef.current);
@@ -1390,7 +1403,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   const prefabMenu = (px: number, py: number): MenuItem[] => (prefabs.length ? [
     { sep: true },
     { label: "落地预制件", icon: <IconGrid size={14} />, sub: prefabs.map((p) => ({ label: `${p.name}（${p.nodes.length} 节点）`, icon: <IconGrid size={14} />, onClick: () => placePrefab(p, px, py) })) },
-    { label: "删除预制件", icon: <IconTrash size={14} />, sub: prefabs.map((p) => ({ label: p.name, icon: <IconGrid size={14} />, danger: true, onClick: () => { savePrefabs(prefabsRef.current.filter((x) => x.id !== p.id)); setNote(`已删除预制件「${p.name}」`); } })) },
+    { label: "删除预制件", icon: <IconTrash size={14} />, sub: prefabs.map((p) => ({ label: p.name, icon: <IconGrid size={14} />, danger: true, onClick: () => void askDelPrefab(p) })) },
   ] : []);
   // 选区相关的菜单项（E4/E3）：两个以上节点才有意义。
   const selMenu = (): MenuItem[] => (selSetRef.current.length >= 2 ? [
@@ -1809,7 +1822,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           <ObjectLibrary prefabs={prefabs} canAdd={!!cur}
             onDragItem={armDrag}
             onPrefab={(p) => { const c = canvasCenter(); placePrefab(p, c.x, c.y); }}
-            onDelPrefab={(p) => { savePrefabs(prefabs.filter((x) => x.id !== p.id)); setNote(`已删除预制件「${p.name}」`); }}
+            onDelPrefab={(p) => void askDelPrefab(p)}
             onClose={() => setLib(false)} />
         ) : null}
       </div>

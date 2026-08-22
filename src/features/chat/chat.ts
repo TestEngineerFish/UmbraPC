@@ -24,6 +24,7 @@ import { getDesktopConfig } from "../../services/desktop";
 import { hasNotify, notifyApi } from "../notify/bridge";
 import { mdToHtml } from "./markdown";
 import { t } from "../../i18n";
+import { askConfirm, showToast } from "../../components/overlay";
 
 type Block =
   | { kind: "user"; text: string; ts?: string | number }
@@ -827,12 +828,19 @@ function renderDetail(): void {
     </div>`;
 
   el.querySelector("#uforget")?.addEventListener("click", async () => {
-    if (!window.confirm(t("chat.forgetConfirm", { name: d.device_name }))) return;
+    // 走全局确认弹窗而不是 window.confirm —— 系统弹窗跟设计稿完全两回事，深色下还是一块白板。
+    const ok = await askConfirm({
+      message: t("chat.forgetConfirm", { name: d.device_name }),
+      confirmText: t("chat.forgetDevice"),
+      danger: true,
+    });
+    if (!ok) return;
     if (await forgetDevice(d.device_id)) {
       detailOpen = false;
       if (activeConv === `device:${d.device_id}`) switchConv(MAIN);
       await loadDevices();
       renderDetail();
+      showToast(t("chat.forgotDevice", { name: d.device_name }), { tone: "ok" });
     }
   });
 }
@@ -1043,13 +1051,14 @@ async function clearActiveHistory(): Promise<void> {
   if (clearing) return;
   const conv = activeConv;
   const confirmMsg = conv === MAIN ? t("chat.clearConfirm") : t("chat.clearConfirmDevice", { name: convLabel(conv) });
-  if (!window.confirm(confirmMsg)) return;
+  if (!await askConfirm({ message: confirmMsg, confirmText: t("chat.clearHistory"), danger: true })) return;
   clearing = true;
   resetConv(conv);
   renderMessages();
   renderContacts();
   try {
     await clearHistory(conv);
+    showToast(t("chat.clearedToast"), { tone: "ok" });
   } finally {
     clearing = false;
   }
@@ -1186,14 +1195,19 @@ function onMsgsClick(e: Event): void {
     chatConn.sendConfirm(el.dataset.approveAlways, true);
     resolveConfirm(el.dataset.approveAlways, true);
     renderMessages();
+    // 这一下改的是**全局开关**，以后同类操作都不再问了 —— 影响比「批准这一次」大得多，
+    // 必须给回执。稿 7273 的文案就是这句。
+    showToast(t("chat.alwaysAllowed"), { tone: "warn" });
   } else if (el.dataset.approve) {
     chatConn.sendConfirm(el.dataset.approve, true);
     resolveConfirm(el.dataset.approve, true);
     renderMessages();
+    showToast(t("chat.approvedToast"), { tone: "ok" });
   } else if (el.dataset.deny) {
     chatConn.sendConfirm(el.dataset.deny, false);
     resolveConfirm(el.dataset.deny, false);
     renderMessages();
+    showToast(t("chat.deniedToast"));
   } else if (el.dataset.img) {
     openLightbox(el.dataset.img);
   }

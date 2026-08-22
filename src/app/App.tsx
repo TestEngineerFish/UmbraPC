@@ -12,6 +12,7 @@ import { Reminders } from "../features/notify/Reminders";
 import { Abilities } from "../features/abilities/Abilities";
 import { Tools } from "../features/tools/Tools";
 import { subscribeLocale } from "../i18n";
+import { OverlayHost } from "../components/overlay";
 
 // 把 legacy 生成的 HTML 挂进一个 div，挂载后还原滚动位置 / 触发回调（如挂载聊天子树）。
 function LegacyHost({ html, onMounted, style }: { html: string; onMounted?: () => void; style?: React.CSSProperties }) {
@@ -81,6 +82,8 @@ export function App() {
           )}
         </main>
       </div>
+      {/* 吐司与确认弹窗的唯一宿主。挂在根上而不是各页自己画，页面切换时浮层才不会跟着卸载。 */}
+      <OverlayHost />
     </div>
   );
 }

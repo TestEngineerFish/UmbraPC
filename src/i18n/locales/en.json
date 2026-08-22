@@ -150,7 +150,8 @@
     "colorBlue": "Blue",
     "add": "Add",
     "reset": "Reset",
-    "done": "Done"
+    "done": "Done",
+    "undo": "Undo"
   },
   "time": {
     "yesterday": "Yesterday",
@@ -371,7 +372,10 @@
     "clipKeepForever": "Forever",
     "clipKeepHint": "Entries older than this are removed automatically (counted from last use). Favourites never expire.",
     "phrasesShortcut": "Snippets shortcut",
-    "phrasesShortcutHint": "Opens the clipboard panel on the Snippets tab; press Enter to paste."
+    "phrasesShortcutHint": "Opens the clipboard panel on the Snippets tab; press Enter to paste.",
+    "clipClearedToast": "Clipboard history cleared",
+    "clipFavClearedToast": "Favourites cleared",
+    "profileResetDone": "Reset to a blank template"
   },
   "logs": {
     "title": "Logs",
@@ -511,7 +515,13 @@
     "researchQueueFailed": "Couldn't queue it. The server may not support this yet, or the connection dropped.",
     "researchAt": "Researched",
     "researchOnCreate": "Look into it too",
-    "researchOnCreateHint": "After saving, have Umbra scout it out. You can also trigger this later from the detail pane."
+    "researchOnCreateHint": "After saving, have Umbra scout it out. You can also trigger this later from the detail pane.",
+    "deletedToast": "Deleted",
+    "deleteFailed": "Delete failed — it's still there",
+    "updateFailed": "Couldn't update; status unchanged",
+    "doneToast": "Marked done",
+    "archivedToast": "Archived",
+    "reopenToast": "Moved back to open"
   },
   "abilities": {
     "title": "Abilities",
@@ -539,7 +549,9 @@
     "skillDescPh": "Description (for AI)",
     "skillCmdPh": "Command template, e.g. ffmpeg -y -i {input} {output}",
     "confirmBeforeRun": "Confirm before execution",
-    "addSkill": "+ Add skill"
+    "addSkill": "+ Add skill",
+    "deleteConfirm": "Delete the custom program “{{name}}”? The AI will no longer be able to call its skills, and the entry is removed from providers.json.",
+    "deleted": "Deleted “{{name}}”"
   },
   "realtime": {
     "title": "Realtime",
@@ -618,7 +630,12 @@
     "questionCustom": "Other (write your own)",
     "questionAnswer": "Type your answer",
     "questionSubmitted": "Submitted — the secretary is on it",
-    "reconnect": "Reconnect"
+    "reconnect": "Reconnect",
+    "forgotDevice": "Removed “{{name}}” from contacts",
+    "clearedToast": "Chat cleared",
+    "approvedToast": "Approved, running…",
+    "deniedToast": "Denied",
+    "alwaysAllowed": "Won't ask again for this kind of action"
   },
   "clipboard": {
     "searchPh": "Search clipboard…",
@@ -729,5 +746,6 @@
     "scrolled": "Scroll {{dir}} {{amount}}",
     "operateUnsupported": "operate is not connected to the decision engine yet. Supported: open_app / click / type / key / scroll / screenshot.",
     "favLimit": "Favorite limit reached"
-  }
+  },
+  "notify": {}
 }

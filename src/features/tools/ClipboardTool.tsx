@@ -5,6 +5,7 @@ import * as legacy from "../../app/shell";
 import { Toggle, RowsCard, SettingRow, RowHint, Panel, btnGhost, btnDanger, selectBox } from "../../components/ui";
 import { HotkeyButton, HotkeyConflictBanner, useHotkeyConflict } from "./hotkeys";
 import { clipApi, type ClipKeep } from "./bridges";
+import { askConfirm, showToast } from "../../components/overlay";
 
 // 保留时长候选（小时）。0 = 永久，对应勾选框不勾。
 const KEEP_OPTIONS = [24, 168, 720, 2160] as const;
@@ -99,7 +100,11 @@ export function ClipboardTool() {
           <RowHint>{t("settings.clipClearFavDesc")}</RowHint>
           <button
             className={btnDanger}
-            onClick={() => { if (confirm(t("settings.clipClearFavConfirm"))) void api.clearFavorites(); }}
+            onClick={() => void askConfirm({
+              message: t("settings.clipClearFavConfirm"),
+              confirmText: t("settings.clipClearFavBtn"),
+              danger: true,
+            }).then((ok) => { if (ok) { void api.clearFavorites(); showToast(t("settings.clipFavClearedToast"), { tone: "ok" }); } })}
           >
             {t("settings.clipClearFavBtn")}
           </button>

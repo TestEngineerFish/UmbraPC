@@ -150,7 +150,8 @@
     "colorBlue": "蓝色",
     "add": "新增",
     "reset": "重置",
-    "done": "完成"
+    "done": "完成",
+    "undo": "撤销"
   },
   "time": {
     "yesterday": "昨天",
@@ -371,7 +372,10 @@
     "clipKeepForever": "永久保留",
     "clipKeepHint": "超过时长的记录会自动清掉（按最近一次使用的时间算）；收藏的条目永不过期。",
     "phrasesShortcut": "常用语快捷键",
-    "phrasesShortcutHint": "按下后打开剪贴板面板并直接停在「常用语」分类，回车即粘贴。"
+    "phrasesShortcutHint": "按下后打开剪贴板面板并直接停在「常用语」分类，回车即粘贴。",
+    "clipClearedToast": "已清空剪贴板历史",
+    "clipFavClearedToast": "已清空收藏",
+    "profileResetDone": "已重置为空白模板"
   },
   "logs": {
     "title": "日志",
@@ -511,7 +515,13 @@
     "researchQueueFailed": "没能排上队。可能是服务端版本还不支持，或者连接断了。",
     "researchAt": "查于",
     "researchOnCreate": "顺便查一查",
-    "researchOnCreateHint": "记完之后让秘书上网摸个底。也可以之后在详情里随时点。"
+    "researchOnCreateHint": "记完之后让秘书上网摸个底。也可以之后在详情里随时点。",
+    "deletedToast": "已删除",
+    "deleteFailed": "删除失败，这条还在",
+    "updateFailed": "改不动，状态没变",
+    "doneToast": "已标记完成",
+    "archivedToast": "已归档",
+    "reopenToast": "已标回待办"
   },
   "abilities": {
     "title": "能力",
@@ -539,7 +549,9 @@
     "skillDescPh": "说明（给 AI 看的）",
     "skillCmdPh": "命令模板(空格分隔)，如 ffmpeg -y -i {input} {output}",
     "confirmBeforeRun": "执行前需确认",
-    "addSkill": "+ 添加技能"
+    "addSkill": "+ 添加技能",
+    "deleteConfirm": "删除自定义程序「{{name}}」？删除后 AI 将不能再调用它的技能，配置也会从 providers.json 里移除。",
+    "deleted": "已删除「{{name}}」"
   },
   "realtime": {
     "title": "实时操作",
@@ -618,7 +630,12 @@
     "questionCustom": "其它（自己写）",
     "questionAnswer": "在这里作答",
     "questionSubmitted": "已提交，秘书这就去安排",
-    "reconnect": "重新连接"
+    "reconnect": "重新连接",
+    "forgotDevice": "已把「{{name}}」移出联系人列表",
+    "clearedToast": "已清空这段聊天",
+    "approvedToast": "已批准，执行中…",
+    "deniedToast": "已拒绝",
+    "alwaysAllowed": "以后同类操作不再问"
   },
   "clipboard": {
     "searchPh": "搜索剪贴板…",
@@ -729,5 +746,6 @@
     "scrolled": "滚动 {{dir}} {{amount}}",
     "operateUnsupported": "operate（自主操作）尚未接入决策引擎，当前仅支持原子动作：open_app / click / type / key / scroll / screenshot。",
     "favLimit": "收藏条目已达上限"
-  }
+  },
+  "notify": {}
 }

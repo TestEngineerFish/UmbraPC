@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ConfirmDialog, Modal, Pill, RefreshButton, btnGhost, btnPrimary, inputFlex, selectBox } from "../../components/ui";
+import { showToast } from "../../components/overlay";
 import {
   AHEAD_OPTIONS, FREQ_LABELS, GROUP_ORDER, RULE_LABELS,
   fromLocalInput, groupOf, hasNotify, notifyApi, timeLabel, toLocalInput,
@@ -85,8 +86,9 @@ export function Reminders() {
   const doSync = async () => {
     setSyncing(true);
     try {
-      await notifyApi().syncNow();
+      const ok = await notifyApi().syncNow();
       await refresh();
+      showToast(ok ? "已同步" : "同步失败", { tone: ok ? "ok" : "fail" });
     } finally {
       setSyncing(false);
     }
@@ -94,9 +96,13 @@ export function Reminders() {
 
   const doSave = async (r: Reminder) => {
     if (!r.text.trim()) return;                 // 空内容不存，与 iOS 一致
-    await notifyApi().save({ ...r, text: r.text.trim() });
+    // save() 是有返回的：{ ok, error }。之前这里整个丢掉了 —— 服务端连不上也照样关窗、
+    // 照样刷新，用户以为存成功了，其实什么都没存。存不上就把窗留着，内容不丢。
+    const r2 = await notifyApi().save({ ...r, text: r.text.trim() });
+    if (!r2.ok) { showToast(`没存上：${r2.error || "服务端没有响应"}。内容都还在，联网后再点一次保存。`, { tone: "fail" }); return; }
     setEditing(null);
     await refresh();
+    showToast("已保存", { tone: "ok" });
   };
 
   return (
@@ -140,7 +146,18 @@ export function Reminders() {
                         background: r.done ? "var(--success)" : "transparent",
                       }}
                       title={r.done ? "标回待办" : "标记完成"}
-                      onClick={async () => { await notifyApi().setDone(r.id, !r.done); await refresh(); }}
+                      onClick={async () => {
+                        const next = !r.done;
+                        await notifyApi().setDone(r.id, next);
+                        await refresh();
+                        // 完成态给一个 5 秒的撤销（稿要求）——「点错了一条提醒」是很常见的误操作，
+                        // 而这一下是可逆的，给回退比给确认弹窗合适得多。
+                        showToast(next ? "已完成" : "已标回待办", {
+                          tone: "ok",
+                          actionLabel: "撤销",
+                          onAction: async () => { await notifyApi().setDone(r.id, !next); await refresh(); },
+                        });
+                      }}
                     />
                     <div className="min-w-0 flex-1">
                       <div
@@ -159,7 +176,7 @@ export function Reminders() {
                     {r.dirty ? <Pill tone="warning">待同步</Pill> : null}
                     <button
                       className={btnGhost}
-                      onClick={async () => { await notifyApi().snooze(r.id, 10); await refresh(); }}
+                      onClick={async () => { await notifyApi().snooze(r.id, 10); await refresh(); showToast("已推迟 10 分钟", { tone: "ok" }); }}
                     >
                       再等 10 分钟
                     </button>
@@ -181,7 +198,12 @@ export function Reminders() {
           message="删除后无法恢复，其它设备上的这条也会一并删掉。"
           confirmText="删除"
           danger
-          onConfirm={async () => { await notifyApi().remove(removing.id); setRemoving(null); await refresh(); }}
+          onConfirm={async () => {
+            const r = await notifyApi().remove(removing.id);
+            setRemoving(null);
+            await refresh();
+            showToast(r.ok ? "已删除" : `删除失败：${r.error || "服务端没有响应"}`, { tone: r.ok ? "ok" : "fail" });
+          }}
           onCancel={() => setRemoving(null)}
         />
       ) : null}

@@ -5,6 +5,7 @@ import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import type { ProviderManifest, CustomProviderCfg } from "../../services/desktop";
 import { field } from "../../components/kit";
+import { askConfirm, showToast } from "../../components/overlay";
 import { IconBrackets, IconPrompt, IconVideo, IconMonitor, IconWindow, IconGrid, IconPlus } from "../../components/icons";
 
 // provider → 图标。五张示例卡的取值照抄设计稿（1842 / 1856 / 1868 / 1882 / 1895）。
@@ -143,7 +144,11 @@ function ProviderCard({ m, onEdit }: { m: ProviderManifest; onEdit: () => void }
           <>
             <span className="flex-1" />
             <button onClick={onEdit} className="px-2.5 py-[3px] border border-border bg-transparent text-text rounded-md text-[11.5px] cursor-pointer">{t("common.edit")}</button>
-            {isCustom ? <button onClick={() => legacy.deleteCustomProvider(m.provider)} className="px-2.5 py-[3px] border border-danger bg-transparent text-danger rounded-md text-[11.5px] cursor-pointer">{t("common.delete")}</button> : null}
+            {isCustom ? <button onClick={() => void askConfirm({
+              message: t("abilities.deleteConfirm", { name: m.display_name || m.provider }),
+              confirmText: t("common.delete"),
+              danger: true,
+            }).then((ok) => { if (ok) { legacy.deleteCustomProvider(m.provider); showToast(t("abilities.deleted", { name: m.display_name || m.provider }), { tone: "ok" }); } })} className="px-2.5 py-[3px] border border-danger bg-transparent text-danger rounded-md text-[11.5px] cursor-pointer">{t("common.delete")}</button> : null}
           </>
         ) : null}
       </div>

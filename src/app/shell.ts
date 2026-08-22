@@ -10,6 +10,7 @@ import { readLayout, toAccelerator, type LayoutMap } from "../components/hotkey"
 import * as chat from "../features/chat/chat";
 import * as desktop from "../services/desktop";
 import { t } from "../i18n";
+import { askConfirm, showToast } from "../components/overlay";
 
 export type Nav = "chat" | "tasks" | "workspaces" | "inspiration" | "notify" | "abilities" | "realtime" | "tools" | "logs" | "settings";
 
@@ -364,8 +365,17 @@ function toggleClipEnabled(): void {
 
 function clearClipHistory(): void {
   if (!clipBridge) return;
-  if (!confirm(t("settings.clipClearConfirm"))) return;
-  clipBridge.clear().catch(() => {});
+  // 破坏性操作走统一的确认弹窗（决策 D24/D25）。这里是 legacy 层，拿不到组件，
+  // 所以走全局宿主暴露的 askConfirm —— 它返回 Promise，vanilla 里 then 一下就行。
+  void askConfirm({
+    message: t("settings.clipClearConfirm"),
+    confirmText: t("settings.clipClearBtn"),
+    danger: true,
+  }).then((ok) => {
+    if (!ok) return;
+    clipBridge!.clear().catch(() => {});
+    showToast(t("settings.clipClearedToast"), { tone: "ok" });
+  });
 }
 
 function toggleShotEnabled(): void {

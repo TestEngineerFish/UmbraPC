@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
 import { btnGhost, btnIcon, btnPrimary, selectBox, ConfirmDialog, Modal, RefreshButton, EmptyState } from "../../components/ui";
+import { showToast } from "../../components/overlay";
 import {
   IconArrowRight, IconBulb, IconChat, IconCheck, IconCopy, IconKeyboard,
   IconPencil, IconPhone, IconPlus, IconSearch, IconTrash,
@@ -124,11 +125,15 @@ export function Inspirations() {
   const doDelete = async () => {
     if (!current) return;
     setBusy(true);
-    await deleteInspirations([current.id]);
+    // deleteInspirations 失败时返回 0 —— 之前这个返回值被丢掉了，删不掉也照样清空选中并刷新，
+    // 界面看起来跟删成功一模一样。
+    const n = await deleteInspirations([current.id]);
     setBusy(false);
     setConfirming(false);
+    if (!n) { showToast(t("inspiration.deleteFailed"), { tone: "fail" }); return; }
     setSel(null);
     legacy.manualRefreshInsp();
+    showToast(t("inspiration.deletedToast"), { tone: "ok" });
   };
 
   return (
@@ -347,9 +352,17 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
 
   const setStatus = async (status: string) => {
     setBusy(true);
-    await updateInspiration(item.id, { status });
+    const prev = item.status;
+    const r = await updateInspiration(item.id, { status });
     setBusy(false);
+    if (!r) { showToast(t("inspiration.updateFailed"), { tone: "fail" }); return; }
     onChanged();
+    // 状态切换是可逆的，给撤销而不是给确认。
+    showToast(t(status === "done" ? "inspiration.doneToast" : status === "archived" ? "inspiration.archivedToast" : "inspiration.reopenToast"), {
+      tone: "ok",
+      actionLabel: t("common.undo"),
+      onAction: async () => { await updateInspiration(item.id, { status: prev }); onChanged(); },
+    });
   };
   const copy = () => {
     const text = [item.title, item.raw, item.summary, item.tags.join(" ")].filter(Boolean).join("\n");

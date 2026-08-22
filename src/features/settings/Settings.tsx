@@ -14,6 +14,7 @@ import { SUPPORTED_LOCALES, type Locale } from "../../i18n/locale";
 import { changeLocale } from "../../i18n";
 import { Toggle, RowsCard, SettingRow, RowHint, Pill, Segmented, btnGhost, btnPrimary, btnDanger, btnIcon, inputFlex, selectBox } from "../../components/ui";
 import type { PillTone } from "../../components/ui";
+import { askConfirm, showToast } from "../../components/overlay";
 import { OWNER_LABEL, normAcc, readHotkeys, type HotkeyOwner } from "../tools/hotkeys";
 import { displayAccel } from "../../components/hotkey";
 import { gotoTool } from "../tools/Tools";
@@ -455,10 +456,16 @@ function ProfileCard() {
     setBusy(false);
   };
   const doReset = async () => {
-    if (!window.confirm(t("settings.profileResetConfirm"))) return;
+    if (!await askConfirm({
+      message: t("settings.profileResetConfirm"),
+      confirmText: t("settings.profileReset"),
+      danger: true,
+    })) return;
     setBusy(true);
     const r = await resetProfile();
-    if (r !== null) setMd(r);
+    // 重置是把助手对你的全部认知清成空白模板 —— 不给回执的话，界面上只是文本框变了内容，
+    // 用户分不清「重置成功」和「加载失败被清空了」。
+    if (r !== null) { setMd(r); showToast(t("settings.profileResetDone"), { tone: "ok" }); }
     setBusy(false);
   };
   return (
