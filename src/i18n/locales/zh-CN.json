@@ -6,10 +6,13 @@
     "inspiration": "灵感",
     "abilities": "能力",
     "realtime": "实时操作",
-    "tools": "工具",
+    "tools": "小工具",
     "logs": "日志",
     "settings": "设置",
-    "notify": "提醒"
+    "notify": "提醒",
+    "flow": "工作流",
+    "vault": "密码保险箱",
+    "runtime": "运行时环境"
   },
   "tools": {
     "clipboardDesc": "复制过的文本、图片、文件都会留在这里，按快捷键随时翻出来。",

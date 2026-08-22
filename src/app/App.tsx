@@ -66,7 +66,9 @@ export function App() {
             <Reminders />
           ) : nav === "abilities" ? (
             <Abilities />
-          ) : nav === "tools" ? (
+          ) : legacy.TOOLS_NAV.includes(nav) ? (
+            /* 工作流 / 密码保险箱 / 运行时环境 / 小工具四项共用这一个视图，
+               进哪个子页由 Tools 自己按当前 nav 取值决定（稿 4884-4889）。 */
             <Tools />
           ) : (
             <LegacyHost

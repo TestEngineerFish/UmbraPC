@@ -12,7 +12,16 @@ import * as desktop from "../services/desktop";
 import { t } from "../i18n";
 import { askConfirm, showToast } from "../components/overlay";
 
-export type Nav = "chat" | "tasks" | "workspaces" | "inspiration" | "notify" | "abilities" | "realtime" | "tools" | "logs" | "settings";
+// 一级导航。工作流 / 密码保险箱 / 运行时环境 / 小工具**四项并列**（稿 4884-4889），
+// 它们共用同一个 tools 视图，靠这里的取值决定进哪个子页 —— 不是四个独立页面。
+// 之前只有一个 "tools"，四个功能全塞在它的二级侧栏里，跟稿差了一整层。
+export type Nav = "chat" | "tasks" | "notify" | "workspaces" | "inspiration"
+  | "abilities" | "flow" | "realtime" | "vault" | "runtime" | "tools"
+  | "logs" | "settings";
+
+// 走 tools 视图的四项。用于判断「要不要显示 190px 二级目录」——
+// 只有小工具那一项要（它下面还有剪贴板/截图/快捷入口/常用语四个子页），其余三项自己铺满。
+export const TOOLS_NAV: readonly Nav[] = ["flow", "vault", "runtime", "tools"];
 
 // 外观偏好的持久化 key。标题栏那颗按钮与设置页的「外观」是同一份状态，
 // 独立窗口（保险箱 vault.html / 工作流 workflow.html）与主窗口同源共享 localStorage，
@@ -146,11 +155,22 @@ const SVG = {
   settings: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><circle cx="16" cy="7" r="2.4"></circle><circle cx="8" cy="17" r="2.4"></circle></svg>`,
   notify: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg>`,
   tools: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5a4 4 0 0 0 5 5L9 19a3 3 0 1 1-4-4z"></path></svg>`,
+  // 以下三项的 path 照抄稿里 MODULES 对应条目的 d。
+  flow: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6v5H4zM14 14h6v5h-6zM10 7.5h4a2 2 0 0 1 2 2v4"></path></svg>`,
+  vault: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16v9H4zM8 11V7.5a4 4 0 0 1 8 0V11M12 15v2"></path></svg>`,
+  runtime: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v10H4zM9 19h6M12 15v4M8 8l2 2-2 2M13 12h3"></path></svg>`,
 };
 
-function navItem(key: Nav, label: string, svg: string): string {
+// 组间分隔线。稿的取值：1px、rgba(255,255,255,.07)、上下留白 7 / 5、左右缩进 6。
+function navSep(): string {
+  return `<span style="height:1px;background:rgba(255,255,255,.07);margin:7px 6px 5px;"></span>`;
+}
+
+// 稿 7719-7721 的取值：未选中主组 .62、底部组 .5、选中是橙底白字 **560**（不是 600）。
+function navItem(key: Nav, label: string, svg: string, foot = false): string {
   const active = state.nav === key;
-  const style = `display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;font-size:13px;cursor:pointer;border:none;width:100%;text-align:left;font-family:inherit;white-space:nowrap;background:${active ? "var(--orange)" : "transparent"};color:${active ? "#fff" : "rgba(255,255,255,.7)"};font-weight:${active ? 600 : 500};`;
+  const idle = foot ? "rgba(255,255,255,.5)" : "rgba(255,255,255,.62)";
+  const style = `display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;font-size:13px;cursor:pointer;border:none;width:100%;text-align:left;font-family:inherit;white-space:nowrap;transition:background .13s ease;background:${active ? "var(--orange)" : "transparent"};color:${active ? "#fff" : idle};font-weight:${active ? 560 : 500};`;
   // 图标套一层 17px 定宽的 flex 壳：各图标的实际墨迹宽度不一样，不套壳文字起点会参差。
   return `<button data-act="nav-${key}" style="${style}"><span style="display:flex;width:17px;justify-content:center;flex:none;">${svg}</span><span>${label}</span></button>`;
 }
@@ -209,19 +229,26 @@ function sidebar(): string {
       <span style="color:#fff;font-weight:600;font-size:14px;">Umbra</span>
     </div>
     ${navItem("chat", t("nav.chat"), SVG.chat)}
+    ${navSep()}
     ${navItem("tasks", t("nav.tasks"), SVG.tasks)}
+    ${navItem("notify", t("nav.notify"), SVG.notify)}
     ${navItem("workspaces", t("nav.workspaces"), SVG.workspaces)}
     ${navItem("inspiration", t("nav.inspiration"), SVG.inspiration)}
-    ${navItem("notify", t("nav.notify"), SVG.notify)}
+    ${navSep()}
     ${navItem("abilities", t("nav.abilities"), SVG.abilities)}
+    ${navItem("flow", t("nav.flow"), SVG.flow)}
     ${navItem("realtime", t("nav.realtime"), SVG.realtime)}
+    ${navItem("vault", t("nav.vault"), SVG.vault)}
+    ${navItem("runtime", t("nav.runtime"), SVG.runtime)}
     ${navItem("tools", t("nav.tools"), SVG.tools)}
-    ${navItem("logs", t("nav.logs"), SVG.logs)}
-    ${navItem("settings", t("nav.settings"), SVG.settings)}
-    <div style="flex:1;"></div>
-    <div style="border-top:1px solid rgba(255,255,255,.08);padding:12px 6px 2px;">
-      <div style="color:rgba(255,255,255,.88);font-size:12px;font-weight:500;">MacBook-Pro-2.local</div>
-      <div style="color:rgba(255,255,255,.4);font-size:11px;margin-top:2px;">macOS · ${t("sidebar.thisDevice")}</div>
+    <div style="flex:1;min-height:10px;"></div>
+    <div style="border-top:1px solid rgba(255,255,255,.07);padding-top:9px;display:flex;flex-direction:column;gap:2px;">
+      ${navItem("logs", t("nav.logs"), SVG.logs, true)}
+      ${navItem("settings", t("nav.settings"), SVG.settings, true)}
+    </div>
+    <div style="border-top:1px solid rgba(255,255,255,.08);padding:12px 6px 2px;margin-top:10px;">
+      <div style="color:rgba(255,255,255,.88);font-size:12px;font-weight:500;white-space:nowrap;">MacBook-Pro-2.local</div>
+      <div style="color:rgba(255,255,255,.4);font-size:11px;margin-top:2px;white-space:nowrap;">macOS · ${t("sidebar.thisDevice")}</div>
     </div>
   </nav>`;
 }

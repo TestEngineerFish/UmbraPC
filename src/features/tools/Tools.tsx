@@ -43,13 +43,23 @@ const ITEMS: { key: ToolKey; group: GroupKey; labelKey: string; descKey: string;
   { key: "runtime", group: "env", labelKey: "tools.runtime", descKey: "tools.runtimeDesc", icon: IconCpu, avail: hasRuntime, wide: true },
 ];
 
+// 「小工具」那一项下面的四个子页。工作流 / 保险箱 / 运行时环境**不在这里** ——
+// 它们各自是一级导航项，进去就铺满，没有二级目录（稿 5626 的 smallTools 就是这四个）。
+const SMALL_TOOLS: ToolKey[] = ["clipboard", "screenshot", "launcher", "phrases"];
+
+// 一级导航取值 → 固定进哪个子页。这三项是一对一的，不给用户在二级目录里切。
+const NAV_TOOL: Partial<Record<string, ToolKey>> = { flow: "workflow", vault: "vault", runtime: "runtime" };
+
 // 别处（设置页的快捷键总览）要求「跳到某个工具的详情页」时，先把目标记在这里再切一级导航。
 // 用模块级变量而不是 props/context：Tools 是路由式挂载的，切页时组件重建，
-// 值取一次就清掉——否则下次手点进「工具」还会被弹回上次跳转的那一页。
+// 值取一次就清掉——否则下次手点进「小工具」还会被弹回上次跳转的那一页。
 let pendingTool: ToolKey | null = null;
 export function gotoTool(key: string): void {
-  pendingTool = key as ToolKey;
-  legacy.goNav("tools");
+  const k = key as ToolKey;
+  pendingTool = k;
+  // 三个独立成一级导航的，直接切到对应的导航项；其余走「小工具」。
+  const nav = (Object.keys(NAV_TOOL) as string[]).find((n) => NAV_TOOL[n] === k);
+  legacy.goNav((nav || "tools") as legacy.Nav);
 }
 function takePendingTool(): ToolKey | null {
   const k = pendingTool;
@@ -59,13 +69,20 @@ function takePendingTool(): ToolKey | null {
 
 export function Tools() {
   const { t } = useTranslation();
+  const nav = legacy.getNav();
+  // 被一级导航锁定的子页（工作流 / 保险箱 / 运行时）：不给二级目录，也不记忆上次停在哪。
+  const locked = NAV_TOOL[nav];
   const items = ITEMS.filter((i) => i.avail);
-  const [cur, setCur] = useState<ToolKey>(() => takePendingTool() || items[0]?.key || "clipboard");
-  const active = items.some((i) => i.key === cur) ? cur : items[0]?.key;
+  // 二级目录只列小工具那四个。
+  const railItems = items.filter((i) => SMALL_TOOLS.includes(i.key));
+  const [cur, setCur] = useState<ToolKey>(() => takePendingTool() || railItems[0]?.key || "clipboard");
+  const active = locked && items.some((i) => i.key === locked)
+    ? locked
+    : railItems.some((i) => i.key === cur) ? cur : railItems[0]?.key;
   const meta = items.find((i) => i.key === active);
   const HeadIcon = meta?.icon;
 
-  if (!items.length) {
+  if (!meta) {
     return (
       <div className="h-full flex items-center justify-center text-[13px] text-muted">{t("common.desktopOnly")}</div>
     );
@@ -73,15 +90,18 @@ export function Tools() {
 
   return (
     <div className="h-full flex min-h-0">
-      {/* 二级目录：常驻左侧。底色用 --rail 比主内容区略沉一点，和深色的一级侧边栏区分开 */}
+      {/* 二级目录**只在「小工具」这一项下出现**（稿 5934 的 showToolRail）。
+          工作流 / 保险箱 / 运行时是各自独立的一级导航项，进去直接铺满 ——
+          之前这条侧栏是常驻的，导致保险箱页在主窗口里有两条 50px 顶栏叠着。 */}
+      {locked ? null : (
       <nav className="w-[190px] shrink-0 border-r border-border bg-rail flex flex-col min-h-0">
         <div className="flex items-center justify-between gap-2 p-[14px_14px_10px]">
           <span className="flex-none whitespace-nowrap text-[14px] font-semibold">{t("nav.tools")}</span>
-          <span className="flex-none whitespace-nowrap text-[11px] text-faint">{t("tools.count", { n: items.length })}</span>
+          <span className="flex-none whitespace-nowrap text-[11px] text-faint">{t("tools.count", { n: railItems.length })}</span>
         </div>
         <div className="flex-1 overflow-y-auto p-[0_8px_12px]">
           {GROUPS.map((g) => {
-            const rows = items.filter((i) => i.group === g.key);
+            const rows = railItems.filter((i) => i.group === g.key);
             if (!rows.length) return null;
             return (
               <div key={g.key} className="mb-[12px]">
@@ -110,6 +130,7 @@ export function Tools() {
           })}
         </div>
       </nav>
+      )}
 
       {/* 铺满型的二级页（工作流编辑器、密码保险箱）自己管布局：不加内边距、不加标题头，直接给满整块 */}
       {meta?.full ? (

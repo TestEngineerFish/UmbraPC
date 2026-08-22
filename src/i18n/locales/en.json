@@ -6,10 +6,13 @@
     "inspiration": "Ideas",
     "abilities": "Abilities",
     "realtime": "Realtime",
-    "tools": "Tools",
+    "tools": "Utilities",
     "logs": "Logs",
     "settings": "Settings",
-    "notify": "Reminders"
+    "notify": "Reminders",
+    "flow": "Workflows",
+    "vault": "Vault",
+    "runtime": "Runtimes"
   },
   "tools": {
     "clipboardDesc": "Everything you copy stays here — text, images and files, one shortcut away.",
