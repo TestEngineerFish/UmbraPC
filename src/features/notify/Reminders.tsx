@@ -7,7 +7,7 @@
 // 提前提醒的五个档位、「再等 10 分钟」。两端选项不一样会让人以为数据丢了。
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ConfirmDialog, Modal, Pill, RefreshButton, btnGhost, btnPrimary, inputFlex, selectBox } from "../../components/ui";
+import { ConfirmDialog, ErrorCard, Modal, Pill, RefreshButton, btnGhost, btnPrimary, inputFlex, selectBox } from "../../components/ui";
 import { showToast } from "../../components/overlay";
 import {
   AHEAD_OPTIONS, FREQ_LABELS, GROUP_ORDER, RULE_LABELS,
@@ -42,6 +42,13 @@ export function Reminders() {
   const [items, setItems] = useState<Reminder[]>([]);
   const [state, setState] = useState<NotifySyncState | null>(null);
   const [editing, setEditing] = useState<Reminder | null>(null);
+  // 弹窗是「新建」还是「编辑」。以前是拿 value.text 有没有内容判断的，
+  // 于是新建时打下第一个字，标题当场从「新建提醒」跳成「编辑提醒」——
+  // 内容有没有字和这条记录存不存在是两回事。
+  const [creating, setCreating] = useState(false);
+  // 保存失败的原因；空串 = 没失败。挂在这里而不是 Editor 内部，
+  // 是因为真正知道成败的是 doSave，而 doSave 在这一层。
+  const [saveErr, setSaveErr] = useState("");
   const [removing, setRemoving] = useState<Reminder | null>(null);
   const [syncing, setSyncing] = useState(false);
 
@@ -98,8 +105,13 @@ export function Reminders() {
     if (!r.text.trim()) return;                 // 空内容不存，与 iOS 一致
     // save() 是有返回的：{ ok, error }。之前这里整个丢掉了 —— 服务端连不上也照样关窗、
     // 照样刷新，用户以为存成功了，其实什么都没存。存不上就把窗留着，内容不丢。
+    //
+    // 失败提示从吐司改成了**弹窗顶边的错误横幅**（稿 296-298）。吐司几秒就没了，
+    // 而这条消息要一直挂着 —— 窗还开着、内容还在、等着你再点一次保存，
+    // 提示消失了用户就只剩一个「不知道为什么没关」的窗口。
+    setSaveErr("");
     const r2 = await notifyApi().save({ ...r, text: r.text.trim() });
-    if (!r2.ok) { showToast(`没存上：${r2.error || "服务端没有响应"}。内容都还在，联网后再点一次保存。`, { tone: "fail" }); return; }
+    if (!r2.ok) { setSaveErr(r2.error || "服务端没有响应"); return; }
     setEditing(null);
     await refresh();
     showToast("已保存", { tone: "ok" });
@@ -119,7 +131,7 @@ export function Reminders() {
         </div>
         <div className="flex-1" />
         <RefreshButton onClick={doSync} spinning={syncing} title="立即同步" />
-        <button className={btnPrimary} onClick={() => setEditing(blank())}>新建提醒</button>
+        <button className={btnPrimary} onClick={() => { setCreating(true); setSaveErr(""); setEditing(blank()); }}>新建提醒</button>
       </div>
 
       {/* 列表 */}
@@ -180,7 +192,7 @@ export function Reminders() {
                     >
                       再等 10 分钟
                     </button>
-                    <button className={btnGhost} onClick={() => setEditing({ ...r })}>编辑</button>
+                    <button className={btnGhost} onClick={() => { setCreating(false); setSaveErr(""); setEditing({ ...r }); }}>编辑</button>
                     <button className={btnGhost} onClick={() => setRemoving(r)}>删除</button>
                   </div>
                 ))}
@@ -190,7 +202,10 @@ export function Reminders() {
         )}
       </div>
 
-      {editing ? <Editor value={editing} onChange={setEditing} onSave={doSave} onClose={() => setEditing(null)} /> : null}
+      {editing ? (
+        <Editor value={editing} creating={creating} saveErr={saveErr} onRetry={() => setSaveErr("")}
+          onChange={setEditing} onSave={doSave} onClose={() => { setSaveErr(""); setEditing(null); }} />
+      ) : null}
 
       {removing ? (
         <ConfirmDialog
@@ -212,8 +227,14 @@ export function Reminders() {
 }
 
 // 新建 / 编辑弹窗。字段与 iOS 详情页一一对应，少一个都会让两端看起来像两个功能。
-function Editor({ value, onChange, onSave, onClose }: {
+function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onClose }: {
   value: Reminder;
+  /** 这次是新建还是编辑。**不要**改回拿 value.text 判断 —— 那会让新建时打下第一个字
+   *  标题就跳成「编辑提醒」。内容有没有字和这条记录存不存在是两回事。 */
+  creating: boolean;
+  /** 上一次保存失败的原因；空串 = 没失败。 */
+  saveErr: string;
+  onRetry: () => void;
   onChange: (r: Reminder) => void;
   onSave: (r: Reminder) => void;
   onClose: () => void;
@@ -222,7 +243,7 @@ function Editor({ value, onChange, onSave, onClose }: {
   return (
     <Modal
       width={520}
-      title={value.text ? "编辑提醒" : "新建提醒"}
+      title={creating ? "新建提醒" : "编辑提醒"}
       onClose={onClose}
       footer={
         <>
@@ -231,6 +252,17 @@ function Editor({ value, onChange, onSave, onClose }: {
         </>
       }
     >
+      {/* 保存失败的横幅贴在弹窗顶边（稿 296-298）。三段式：
+          发生了什么（没存上）→ 为什么（具体错误）→ 现在能做什么（再存一次）。
+          留在这儿不自动消失 —— 窗还开着、内容还在，用户随时可以再点一次。 */}
+      {saveErr ? (
+        <ErrorCard
+          variant="banner"
+          title="没存上，内容都还留着"
+          reason={`${saveErr}。联网之后再点一次保存就行。`}
+          actions={[{ label: "再存一次", kind: "primary", onClick: () => { onRetry(); onSave(value); } }]}
+        />
+      ) : null}
       <div className="flex flex-col gap-[10px]">
         <Row label="内容">
           <input

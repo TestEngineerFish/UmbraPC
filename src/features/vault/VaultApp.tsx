@@ -7,6 +7,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComponentType, CSSProperties, ReactNode, SVGProps } from "react";
 import { Pill, btnGhost, btnPrimary, selectBox, fieldFlex, EmptyState } from "../../components/ui";
+// 附件删除走全局的确认弹窗与吐司：保险箱自己那套 setConfirm / flash 挂在 Main 上，
+// 而附件在组件树很深的 Gallery 里，够不着。overlay 是模块级单例，独立窗口也已经挂了 OverlayHost。
+import { askConfirm, showToast } from "../../components/overlay";
 import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
 import { displayAccel } from "../../components/hotkey";
 import { useHotkeyConflict, OWNER_LABEL } from "../tools/hotkeys";
@@ -82,7 +85,11 @@ const rid = (p = "") => p + Math.random().toString(36).slice(2, 10);
 function newBlock(type: string): Block {
   const data: Record<string, unknown> = type === "account" ? { username: "", password: "", url: "", otp: false }
     : type === "images" || type === "files" ? { atts: [] } : { value: "" };
-  return { id: rid("b"), type, label: TAG[type], data };
+  // label 起手是**空的**，不是 TAG[type]。
+  // 控件卡头上已经有一颗写着类型的胶囊（「账号」「密文」…），label 是**用户自己起的名字**
+  // （「公司邮箱」「NAS 后台」这种）。初始化成和胶囊一样的字，查看态就并排出现两个「账号」。
+  // 空着的话胶囊自己就够用了，用户想区分同类控件时再填。
+  return { id: rid("b"), type, label: "", data };
 }
 
 // 只留关键帧与选区色：悬停/聚焦这些状态类已经全部由 Tailwind 的 hover: / focus: 变体接管。
@@ -1142,6 +1149,7 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
               onDel={() => delBlock(b.id)}
               onMove={(dir) => moveBlock(i, dir)}
               onAttAdded={(att) => setData(b.id, "atts", [...((b.data.atts as string[]) || []), att.id])}
+              onAttRemoved={(aid) => setData(b.id, "atts", ((b.data.atts as string[]) || []).filter((x) => x !== aid))}
             />
           </div>
         ))}
@@ -1184,10 +1192,10 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
 }
 
 // 单个控件卡：卡头（类型胶囊 + 名称 + 编辑态的调序 / 删除）+ 卡身（按类型渲染）。
-function BlockCard({ block, idx, count, edit, vid, itemId, attMeta, flash, onData, onLabel, onDel, onMove, onAttAdded }: {
+function BlockCard({ block, idx, count, edit, vid, itemId, attMeta, flash, onData, onLabel, onDel, onMove, onAttAdded, onAttRemoved }: {
   block: Block; idx: number; count: number; edit: boolean; vid: string; itemId: string; attMeta: Att[];
   flash: (m: string) => void; onData: (k: string, v: unknown) => void; onLabel: (v: string) => void;
-  onDel: () => void; onMove: (dir: number) => void; onAttAdded: (att: Att) => void;
+  onDel: () => void; onMove: (dir: number) => void; onAttAdded: (att: Att) => void; onAttRemoved: (aid: string) => void;
 }) {
   const [reveal, setReveal] = useState(false);
   const [genFor, setGenFor] = useState<string | null>(null);
@@ -1228,10 +1236,17 @@ function BlockCard({ block, idx, count, edit, vid, itemId, attMeta, flash, onDat
           <input
             className="flex-1 min-w-0 border border-border bg-card text-text rounded-[8px] px-[9px] py-[4px] text-[12.5px] outline-none focus:border-orange"
             value={block.label || ""}
-            placeholder="控件名称"
+            placeholder={`控件名称（选填，比如「公司${TAG[block.type] || ""}」）`}
             onChange={(e) => onLabel(e.target.value)}
           />
-        ) : <span className="flex-1 min-w-0 truncate text-[12.5px] font-semibold">{block.label}</span>}
+        ) : (
+          // label 和左边那颗类型胶囊一字不差时不显示 —— 否则查看态是并排两个「账号」。
+          // 这个判断不能只靠 newBlock 起手留空来解决：已经存在库里的记录，
+          // label 早就被写成了 TAG[type]，那些数据还在。
+          <span className="flex-1 min-w-0 truncate text-[12.5px] font-semibold">
+            {block.label === (TAG[block.type] || "") ? "" : block.label}
+          </span>
+        )}
         {edit ? (
           <>
             <button className={vIconBtn} title="上移" disabled={idx === 0} onClick={() => onMove(-1)}><IconUp size={13} /></button>
@@ -1314,6 +1329,7 @@ function BlockCard({ block, idx, count, edit, vid, itemId, attMeta, flash, onDat
               itemId={itemId}
               edit={edit}
               onAttAdded={onAttAdded}
+              onAttRemoved={onAttRemoved}
             />
           </div>
         ) : null}
@@ -1378,9 +1394,9 @@ function PwGen({ onClose, onPick }: { onClose: () => void; onPick: (p: string) =
 }
 
 // 图片 / 文件附件。图片走缩略网格，文件走列表行；附件本体解密后是 data URL。
-function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded }: {
+function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded, onAttRemoved }: {
   kind: "image" | "file"; atts: string[]; attMeta: Att[]; vid: string; itemId: string; edit: boolean;
-  onAttAdded: (att: Att) => void;
+  onAttAdded: (att: Att) => void; onAttRemoved: (aid: string) => void;
 }) {
   const [urls, setUrls] = useState<Record<string, string>>({});
   const fileRef = useRef<HTMLInputElement>(null);
@@ -1390,6 +1406,30 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded }: {
     });
   }, [atts, kind, vid, urls]);
   const nameOf = (aid: string) => attMeta.find((a) => a.id === aid)?.name || "文件";
+
+  // 删附件。主进程 vault:deleteAttachment 一直存在、preload 也一直暴露着，
+  // **但整个界面上一个调用点都没有** —— 也就是说加错一个附件之后就再也删不掉了。
+  // 附件是加密存进保险箱的，删不掉意味着一份不该留的东西永远躺在里面。
+  //
+  // 走确认弹窗（决策 D24：不可撤销的破坏性操作要问一句）。这一下确实没有撤销：
+  // 主进程是真的把密文从库里删掉，不进任何回收站。
+  const delAtt = async (aid: string) => {
+    const ok = await askConfirm({
+      message: `删除附件「${nameOf(aid)}」？删除后无法恢复。`,
+      confirmText: "删除",
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await api.deleteAttachment(vid, itemId, aid);
+    } catch (e) {
+      // 删失败**不能**从界面上抹掉它 —— 抹掉了用户以为删干净了，其实还在库里。
+      showToast(`删不掉：${String(e).replace("Error: ", "").slice(0, 80)}`, { tone: "fail" });
+      return;
+    }
+    onAttRemoved(aid);
+    showToast("已删除附件", { tone: "ok" });
+  };
   const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     for (const f of Array.from(e.target.files || [])) {
       const buf = await f.arrayBuffer();
@@ -1407,12 +1447,22 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded }: {
       {kind === "image" ? (
         <div className="flex flex-wrap gap-[9px]">
           {atts.map((aid) => (
-            <div
-              key={aid}
-              className="w-[120px] h-[80px] rounded-[10px] overflow-hidden flex-none border border-border"
-              style={urls[aid] ? { backgroundImage: `url(${urls[aid]})`, backgroundSize: "cover", backgroundPosition: "center" } : { background: "linear-gradient(135deg,#c7b8a3,#9a8b73)" }}
-              title={nameOf(aid)}
-            />
+            // 编辑态时右上角浮一颗删除钮。只在编辑态出现 —— 查看态是「看」，
+            // 一颗常驻的删除钮贴在缩略图上，划过去就容易点错。
+            <div key={aid} className="relative w-[120px] h-[80px] flex-none group">
+              <div
+                className="w-full h-full rounded-[10px] overflow-hidden border border-border"
+                style={urls[aid] ? { backgroundImage: `url(${urls[aid]})`, backgroundSize: "cover", backgroundPosition: "center" } : { background: "linear-gradient(135deg,#c7b8a3,#9a8b73)" }}
+                title={nameOf(aid)}
+              />
+              {edit ? (
+                <button
+                  className="absolute top-[4px] right-[4px] w-[22px] h-[22px] rounded-[6px] flex items-center justify-center border-none cursor-pointer bg-[rgba(21,17,14,.72)] text-white opacity-0 group-hover:opacity-100 transition-opacity duration-[130ms]"
+                  title={`删除「${nameOf(aid)}」`}
+                  onClick={() => void delAtt(aid)}
+                ><IconTrash size={12} /></button>
+              ) : null}
+            </div>
           ))}
         </div>
       ) : (
@@ -1426,6 +1476,11 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded }: {
                 title="导出"
                 onClick={async () => { const u = await api.readAttachment(vid, aid); window.open(u); }}
               ><IconDownload size={14} /></button>
+              {edit ? (
+                <button className={vIconBtn} title={`删除「${nameOf(aid)}」`} onClick={() => void delAtt(aid)}>
+                  <IconTrash size={14} />
+                </button>
+              ) : null}
             </div>
           ))}
         </div>
