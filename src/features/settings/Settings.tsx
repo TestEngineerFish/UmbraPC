@@ -272,7 +272,7 @@ export function Settings() {
                 <SettingRow label={t("settings.recentLogs")}>
                   {/* 日志行给一块 --track 底的等宽区，和周围的表单行区分开。 */}
                   <div className="flex-1 min-w-0 font-mono text-[11.5px] text-muted bg-track rounded-[7px] px-[10px] py-[7px] truncate">
-                    {desktop.getDeviceLogs()[0] || t("settings.noLogs")}
+                    {(() => { const l = desktop.getDeviceLogs()[0]; return l ? `${l.time}  ${l.msg}` : t("settings.noLogs"); })()}
                   </div>
                 </SettingRow>
               </RowsCard>

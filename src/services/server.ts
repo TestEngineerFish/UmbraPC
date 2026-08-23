@@ -112,7 +112,9 @@ export async function clearHistory(conversation = "assistant"): Promise<number> 
     const r = await fetch(`${getServerUrl()}/history/clear`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation }),
+      // 带上本端 id：服务端会把它原样放进 history_cleared 广播的 by 字段，
+      // 让各端能认出「这条是我自己发起的」（见 app.py 的 /history/clear 注释）。
+      body: JSON.stringify({ conversation, client_id: getClientId() }),
     });
     if (!r.ok) return 0;
     const data = await r.json();

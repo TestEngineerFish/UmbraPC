@@ -91,7 +91,7 @@ let customProviders: CustomProviderCfg[] = [];
 
 export const isDesktop = (): boolean => !!window.umbra?.isDesktop;
 export const getDeviceState = (): DeviceState | null => (isDesktop() ? transport.getState() : null);
-export const getDeviceLogs = (): string[] => transport.getLogs();
+export const getDeviceLogs = (): transport.LogLine[] => transport.getLogs();
 export const getDesktopConfig = (): PublicConfig | null => config;
 export const getCustomProviders = (): CustomProviderCfg[] => customProviders;
 export const isProviderDisabled = (name: string): boolean => !!config?.disabledProviders?.includes(name);

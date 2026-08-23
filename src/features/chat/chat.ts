@@ -17,6 +17,7 @@ import {
   clearHistory,
   retryJob,
   getServerUrl,
+  getClientId,
   getAutoApproveOperate,
   setAutoApproveOperate,
   type KnownDevice,
@@ -97,10 +98,6 @@ type ChatMode = "auto" | "chat" | "execution";
 let chatMode: ChatMode = "auto";
 // 正在清空历史：清空期间禁发消息，避免新消息被服务端的会话重置一起删掉。
 let clearing = false;
-// 本端最近一次主动清空各会话的时刻。用来在收到服务端广播时认出「这是我自己干的」。
-// 见 history_cleared 分支里的说明：服务端广播不带发起方，只能靠时间窗口猜。
-const selfCleared: Record<string, number> = {};
-const SELF_CLEAR_WINDOW_MS = 8000;
 
 function newConvState(): ConvState {
   return {
@@ -420,11 +417,10 @@ function onMessage(msg: any): void {
       // 清空是**别人**干的时才留一条系统提示行 —— 自己刚点过「清空聊天」的话，
       // 本地已经乐观清过一遍，再说一句「别的端清空了」是自己骗自己。
       //
-      // ⚠️ 这是个时间窗口的权宜之计，不是严谨判断：服务端 /history/clear 的广播里
-      // 没带发起方是谁（app.py:824 只广播 {type, conversation}），所有在线端收到的
-      // 是同一条消息，本端无从分辨。真正的修法是广播里带上发起端的 client_id，
-      // 本端比对 getClientId() 即可 —— 那要动服务端，留到下次一起改。
-      if (Date.now() - (selfCleared[target] || 0) > SELF_CLEAR_WINDOW_MS) {
+      // 靠广播里的 by 认发起方（服务端 /history/clear 原样回填 client_id）。
+      // by 为空 = 老版本客户端发起的，认不出来就当别人清的 —— 宁可多一条提示，
+      // 也别让某一端的聊天窗毫无征兆地整个变空。
+      if (msg.by !== getClientId()) {
         s.blocks.push({ kind: "system", text: t("chat.clearedElsewhere"), ts: Date.now() });
       }
       if (target === activeConv) renderMessages();
@@ -1228,7 +1224,6 @@ async function clearActiveHistory(): Promise<void> {
   const confirmMsg = conv === MAIN ? t("chat.clearConfirm") : t("chat.clearConfirmDevice", { name: convLabel(conv) });
   if (!await askConfirm({ message: confirmMsg, confirmText: t("chat.clearHistory"), danger: true })) return;
   clearing = true;
-  selfCleared[conv] = Date.now(); // 必须在发请求**之前**盖章：广播是服务端删完就发，可能比 REST 响应先到
   resetConv(conv);
   renderMessages();
   renderContacts();

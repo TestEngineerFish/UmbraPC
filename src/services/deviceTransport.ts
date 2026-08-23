@@ -20,6 +20,25 @@ export interface TaskLog {
   message: string;
   ts: number;
 }
+// ── 日志条目 ────────────────────────────────────────────────────────────────
+// 原来这里是 `string[]`，每条已经把时间拼死在字符串里了。日志页因此只能整行平铺，
+// 既没法按来源筛，也没法给不同性质的行上色 —— 一屏几百行全是同一个灰，
+// 找一条「哪儿断的」得靠肉眼扫。稿（1982-1996、5032-5042）要的是三列：时间 / 标签 / 正文。
+//
+// 两个维度是**分开**的，别合并：
+//   src = 筛选分组，只有三档（conn 连接 / jobs 任务 / cap 能力执行），对应稿上四颗胶囊里的后三颗；
+//   tag = 这一行本身是什么性质（conn/job/cap/warn/info/error），决定颜色。
+// 一条「能力执行时等用户确认」是 src=cap（属于能力执行这一组）但 tag=warn（黄的），
+// 合成一个维度就表达不了 —— 它要么被归进错误组，要么就没有颜色。
+export type LogSrc = "conn" | "jobs" | "cap";
+export type LogTag = "conn" | "job" | "cap" | "warn" | "info" | "error";
+export interface LogLine {
+  time: string;
+  tag: LogTag;
+  src: LogSrc;
+  msg: string;
+}
+
 export interface DeviceState {
   status: "connecting" | "online" | "offline";
   deviceId: string;
@@ -37,7 +56,7 @@ let ws: WebSocket | null = null;
 let status: DeviceState["status"] = "offline";
 let providers: ProviderManifest[] = [];
 let recentTasks: TaskLog[] = [];
-let logs: string[] = [];
+let logs: LogLine[] = [];
 let deviceId = "";
 let deviceName = "";
 let started = false;
@@ -57,12 +76,14 @@ let notify: (kind: string) => void = () => {};
 
 const wsUrl = () => getServerUrl().replace(/^http/, "ws") + "/ws/device";
 
-function log(line: string): void {
-  logs.unshift(`${new Date().toLocaleTimeString()}  ${line}`);
+function log(msg: string, tag: LogTag = "info", src: LogSrc = "conn"): void {
+  logs.unshift({ time: new Date().toLocaleTimeString(), tag, src, msg });
   logs = logs.slice(0, 200); // 内存里只留最近 200 条给界面看
   // 同时落盘（userData/logs/umbra-YYYY-MM-DD.log）：应用一关内存日志就没了，
   // 而排查问题往往是事后才想起来要看日志。
-  window.umbra?.appendLog(line);
+  // 落盘的仍然是**纯文本**：日志文件是给人拿文本编辑器看的，塞 tag/src 只会碍事；
+  // 分组是界面的事，文件里那一行本身就带着足够的语义。
+  window.umbra?.appendLog(msg);
   notify("log");
 }
 function setStatus(s: DeviceState["status"]): void {
@@ -77,7 +98,7 @@ export function getState(): DeviceState {
     registeredAt, lastHeartbeatAt, latencyMs,
   };
 }
-export function getLogs(): string[] {
+export function getLogs(): LogLine[] {
   return logs;
 }
 
@@ -90,11 +111,11 @@ export function start(onUpdate: (kind: string) => void): void {
   u.onTaskProgress((p) => {
     sendJson({ type: "task_progress", task_id: p.taskId, message: p.message, ...(p.extra || {}) });
     recordTask(p.taskId, "running", p.message);
-    log(`执行：${p.message}`); // 同时进 PC 日志，便于调试
+    log(`执行：${p.message}`, "cap", "cap"); // 同时进 PC 日志，便于调试
   });
   u.onConfirmRequest((c) => {
     sendJson({ type: "task_confirm_request", task_id: c.taskId, summary: c.summary, detail: c.detail });
-    log(`请求授权 [${short(c.taskId)}]：${c.summary}`);
+    log(`请求授权 [${short(c.taskId)}]：${c.summary}`, "warn", "cap");
   });
   connect();
 }
@@ -121,12 +142,12 @@ function connect(): void {
   lastHeartbeatAt = 0;
   latencyMs = 0;
   heartbeatSentAt = 0;
-  log(`连接服务端 ${wsUrl()} …`);
+  log(`连接服务端 ${wsUrl()} …`, "conn", "conn");
   let sock: WebSocket;
   try {
     sock = new WebSocket(wsUrl());
   } catch (e) {
-    log(`连接失败：${String(e)}`);
+    log(`连接失败：${String(e)}`, "error", "conn");
     scheduleReconnect();
     return;
   }
@@ -151,7 +172,7 @@ function connect(): void {
         locale: info.locale,
       });
     } catch (e) {
-      log(`获取注册信息失败：${String(e)}`);
+      log(`获取注册信息失败：${String(e)}`, "error", "conn");
     }
   };
   sock.onmessage = (ev) => {
@@ -200,20 +221,20 @@ function onMessage(raw: string): void {
       registeredThisSession = true;
       registeredAt = Date.now();
       backoff = 2000;
-      log(`✓ 已注册为 ${deviceName}（${deviceId}）`);
+      log(`✓ 已注册为 ${deviceName}（${deviceId}）`, "conn", "conn");
       setStatus("online");
       startHeartbeat();
       flushPending();
       break;
     case "task":
-      handleTask(msg).catch((e) => log(`任务处理异常：${String(e)}`));
+      handleTask(msg).catch((e) => log(`任务处理异常：${String(e)}`, "error", "jobs"));
       break;
     case "task_confirm_response":
       window.umbra!.confirmResponse(msg.task_id || "", Boolean(msg.approved));
       break;
     case "task_cancel":
       // 服务端 cancel_task：杀掉正在跑这个任务的引擎进程（项目会话保留给同项目的下个任务）。
-      window.umbra!.cancelTask(msg.task_id || "").catch((e) => log(`取消任务异常：${String(e)}`));
+      window.umbra!.cancelTask(msg.task_id || "").catch((e) => log(`取消任务异常：${String(e)}`, "error", "jobs"));
       break;
     case "heartbeat_ack":
       // 一来一回算延迟。heartbeatSentAt 为 0 说明这条 ack 没有对应的发送记录（重连边界），跳过统计。
@@ -223,7 +244,7 @@ function onMessage(raw: string): void {
       notify("state");
       break;
     case "error":
-      log(`服务端错误：${msg.message}`);
+      log(`服务端错误：${msg.message}`, "error", "conn");
       break;
     default:
       break;
@@ -261,7 +282,7 @@ async function handleTask(msg: any): Promise<void> {
   const params: Record<string, unknown> = msg.params || {};
   const t0 = Date.now();
   // 日志要能还原「谁让我干什么、参数是什么、干了多久、结果如何」——出问题时这就是全部线索。
-  log(`收到任务 [${short(taskId)}] ${provider}.${skill} 参数=${brief(params)}`);
+  log(`收到任务 [${short(taskId)}] ${provider}.${skill} 参数=${brief(params)}`, "job", "jobs");
   recordTask(taskId, "running", "执行中…", provider, skill);
   // 立刻回一条 ACK：让服务端时间线上**一定**有「设备已收到」这一条。
   // 否则「服务端没发到」和「设备收到但卡住」在时间线上长得一模一样，只能靠猜。
@@ -271,21 +292,21 @@ async function handleTask(msg: any): Promise<void> {
     const sec = ((Date.now() - t0) / 1000).toFixed(1);
     recordTask(taskId, "ok", "完成", provider, skill);
     const sent = sendOrQueue(taskId, { type: "task_result", task_id: taskId, status: "ok", result });
-    log(`任务完成 [${short(taskId)}] ${provider}.${skill} 用时 ${sec}s${sent ? "" : "（结果上报失败，已入队待重发）"}`);
-    log(`　└ 结果：${brief(result, 240)}`);
+    log(`任务完成 [${short(taskId)}] ${provider}.${skill} 用时 ${sec}s${sent ? "" : "（结果上报失败，已入队待重发）"}`, "job", "jobs");
+    log(`　└ 结果：${brief(result, 240)}`, "info", "jobs");
   } catch (e) {
     const err = e instanceof Error ? e.message : String(e);
     const sec = ((Date.now() - t0) / 1000).toFixed(1);
     recordTask(taskId, "error", err, provider, skill);
     const sent = sendOrQueue(taskId, { type: "task_result", task_id: taskId, status: "error", error: err });
-    log(`任务失败 [${short(taskId)}] ${provider}.${skill} 用时 ${sec}s：${err}${sent ? "" : "（上报失败，已入队）"}`);
+    log(`任务失败 [${short(taskId)}] ${provider}.${skill} 用时 ${sec}s：${err}${sent ? "" : "（上报失败，已入队）"}`, "error", "jobs");
   }
 }
 
 function sendOrQueue(taskId: string, payload: unknown): boolean {
   if (!sendJson(payload)) {
     pendingResults.set(taskId, payload);
-    log(`结果上报失败（连接已断），已入队 ${short(taskId)}，将在下次心跳重发`);
+    log(`结果上报失败（连接已断），已入队 ${short(taskId)}，将在下次心跳重发`, "warn", "jobs");
     return false;
   }
   return true;

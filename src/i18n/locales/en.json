@@ -384,7 +384,14 @@
   "logs": {
     "title": "Logs",
     "openFolder": "Open logs folder",
-    "empty": "No device engine logs yet (waiting for connection)…"
+    "empty": "No device engine logs yet",
+    "filterAll": "All",
+    "filterJobs": "Tasks",
+    "filterConn": "Connection",
+    "filterCap": "Capabilities",
+    "noneInFilter": "No logs in this group yet",
+    "emptyBody": "Once the device connects and registers, connection events, dispatched tasks and capability runs all show up here.",
+    "showAll": "Show all"
   },
   "tasks": {
     "countLine": "{{n}} total · {{running}} running",
