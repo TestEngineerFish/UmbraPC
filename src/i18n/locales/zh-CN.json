@@ -417,7 +417,6 @@
     "stepCount": "{{n}} 步",
     "expandDesc": "展开描述",
     "collapseDesc": "收起描述",
-    "stepNote": "说明",
     "shotOpen": "点击放大",
     "title": "任务",
     "loading": "加载任务中…",

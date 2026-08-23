@@ -260,6 +260,13 @@ export interface Subtask {
   provider?: string | null;
   skill?: string | null;
   status: string; // pending/dispatched/running/done/failed
+  /** 这一步实际干了什么，引擎自己写的一句人话（tasks_engine 的 update_step_status(detail=...)）。
+   *
+   *  服务端一直在写、`_step_as_subtask` 一直在回，但这个字段以前**根本没声明**，
+   *  于是 PC 端整层「每步在干什么」的信息凭空消失了 —— 步骤列表只剩一行标题，
+   *  「设备不在线，挂起等待」「检查点直过：未注入执行轮」这种关键说明全看不到。
+   *  和 error.detail 不是一回事：那个是失败时的原始错误文本，这个是正常流程的说明。 */
+  detail?: string | null;
   result_json?: string | null;
   // 新任务的里程碑回结构化对象；旧 Job 的 subtask 回的是一串自由文本。两种都要认。
   error?: string | StepError | null;

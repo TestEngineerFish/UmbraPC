@@ -25,6 +25,17 @@ function stepShot(s: Subtask): string | null {
   return null;
 }
 
+// 从截图 URL 里抠出文件名给脚注用。带查询串的先切掉 ?，解码失败就用原样 ——
+// 一个文件名而已，不值得为它抛异常把整个详情页拖垮。
+function shotName(url: string): string {
+  try {
+    const path = url.split("?")[0];
+    return decodeURIComponent(path.slice(path.lastIndexOf("/") + 1)) || path;
+  } catch {
+    return url.split("/").pop() || url;
+  }
+}
+
 // ── 状态语义（徽章配色 + 图标 + 进度条颜色的唯一来源）──
 // 绿=已完成，橙=执行中，黄=待确认/已挂起，红=失败，灰=待执行/已取消。
 type Tone = "success" | "orange" | "warning" | "danger" | "neutral";
@@ -328,9 +339,11 @@ function detailToText(d: JobDetail): string {
   lines.push(`状态：${d.job.status}`);
   if (d.job.result_summary) lines.push(`结果：${d.job.result_summary}`);
   lines.push("", "步骤：");
-  subs.forEach((s) =>
-    lines.push(`  ${s.seq + 1}. [${s.status}] ${s.title || `${s.provider || ""}.${s.skill || ""}`}${s.error ? ` — 错误：${s.error}` : ""}`),
-  );
+  subs.forEach((s) => {
+    lines.push(`  ${s.seq + 1}. [${s.status}] ${s.title || `${s.provider || ""}.${s.skill || ""}`}${s.error ? ` — 错误：${s.error}` : ""}`);
+    // 说明单起一行缩进：它是这一步真正干了什么，复制出去排查时最有用的往往就是这句。
+    if (s.detail) lines.push(`      ${s.detail}`);
+  });
   lines.push("", "事件时间线：");
   d.events.forEach((e) => lines.push(`  [${(e.created_at || "").replace("T", " ").slice(0, 19)}] ${e.message || e.type}`));
   return lines.join("\n");
@@ -588,6 +601,13 @@ function Step({ s, last }: { s: Subtask; last: boolean }) {
           {/* 本步耗时：只在真开始过之后才显示（elapsed_ms 为 null 时整块不出现，不摆破折号） */}
           {s.elapsed_ms != null ? <span className="flex-none whitespace-nowrap text-[10.5px] text-faint font-mono">{fmtMs(s.elapsed_ms)}</span> : null}
         </div>
+        {/* 这一步实际干了什么（稿 2155-2157 的 st.note）。服务端一直在回 detail，
+            以前 Subtask 类型里压根没声明这个字段，于是整层说明信息在界面上凭空消失 ——
+            步骤列表只剩四行光秃秃的标题，「设备不在线，挂起等待」这种话一句看不见。
+            失败步骤不重复显示：下面的错误块已经把话说得更具体了。 */}
+        {s.detail && !err ? (
+          <div className="text-[11.5px] text-muted mt-[3px] leading-[1.6] whitespace-pre-wrap break-words">{s.detail}</div>
+        ) : null}
         {/* 执行设备：server 步没有设备，这一行就不出现 */}
         {s.device_id ? (
           <div className="text-[10.5px] text-faint mt-[2px] whitespace-nowrap">
@@ -613,9 +633,16 @@ function Step({ s, last }: { s: Subtask; last: boolean }) {
         ) : null}
         {shot ? (
           // 该步「完成后」状态截图：内联显示，点击打开预览器（放大/缩小/下载）。
+          // 底下那条脚注是稿 2162-2166 的：文件名 + 「打开」。
+          // 光有图的话，图里是什么截图、存到哪儿去了都无从得知——排查时经常要的正是文件名。
           <div className="mt-[8px] max-w-[330px] border border-border rounded-[9px] overflow-hidden">
             <img src={shot} alt={title} title={`${title} · ${t("tasks.shotOpen")}`} onClick={() => openPreview(shot, title)}
               className="block w-full cursor-zoom-in" />
+            <div className="flex items-center gap-[6px] px-[9px] py-[5px] bg-card border-t border-border">
+              <span className="flex-1 min-w-0 text-[10.5px] text-faint truncate" title={shotName(shot)}>{shotName(shot)}</span>
+              <button onClick={() => openPreview(shot, title)}
+                className="flex-none whitespace-nowrap text-[10.5px] text-orange-text bg-transparent border-none cursor-pointer p-0">{t("tasks.shotOpen")}</button>
+            </div>
           </div>
         ) : null}
       </div>

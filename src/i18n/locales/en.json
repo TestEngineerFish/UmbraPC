@@ -417,7 +417,6 @@
     "stepCount": "{{n}}",
     "expandDesc": "Expand",
     "collapseDesc": "Collapse",
-    "stepNote": "Note",
     "shotOpen": "click to zoom",
     "title": "Tasks",
     "loading": "Loading tasks…",
