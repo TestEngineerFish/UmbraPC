@@ -44,6 +44,21 @@ type Block =
   // 系统提示行（稿 1412-1413）：居中的一颗小灰胶囊，说明「不是你干的、但这里变了」。
   // 目前只有一个来源：别的端清空了这段历史。没有它的话，聊天窗会毫无征兆地整个变空。
   | { kind: "system"; text: string; ts?: string | number }
+  // 「找位置」卡（稿 1645-1670）：电脑操作时模型反复定位不准，停下来请你指一下。
+  // 服务端一直支持（operate.py `_locate_with_user`），iOS 也早就做了（LocateCard.swift），
+  // **只有 PC 端一直没接** —— 后果是 operate 卡住时 PC 上什么都不显示，
+  // 用户看着任务停在那儿，直到服务端 LOCATE_TIMEOUT 到点自己放弃。
+  | {
+      kind: "locate";
+      taskId: string;
+      jobId: string;
+      imageUrl: string;
+      target: string;
+      hint: string;
+      nx?: number; ny?: number;          // 已选中的点，归一化 0-1000
+      fbOpen?: boolean; fbText?: string; // 文字纠偏输入框
+      resolved?: "located" | "feedback" | "paused" | "resumed";
+    }
   | { kind: "error"; text: string };
 
 interface QCard {
@@ -395,6 +410,20 @@ function onMessage(msg: any): void {
       }
       break;
     }
+    case "operate_locate_request": {
+      // 电脑操作定位不准 → 停下来请人指位。服务端广播给所有端，谁先答谁作数
+      // （operate.py 的 future 只 set_result 一次，晚到的 has_pending_locate 已经是 false）。
+      const s = cs(target);
+      if (msg.task_id && msg.image_url && !s.blocks.some((b) => b.kind === "locate" && b.taskId === msg.task_id)) {
+        s.blocks.push({
+          kind: "locate", taskId: msg.task_id, jobId: msg.job_id || "",
+          imageUrl: msg.image_url, target: msg.target || "", hint: msg.hint || t("chat.locateHint"),
+        });
+        s.lastText = t("chat.locateTitle");
+        s.lastAt = Date.now();
+      }
+      break;
+    }
     case "question_resolved": {
       // 别的端已经答过了 → 本端把卡片标成已完成，别重复作答。
       for (const id of Object.keys(convs)) {
@@ -497,6 +526,14 @@ function handleJob(msg: any): string {
 }
 
 // ── 渲染 ────────────────────────────────────────────────────────────────────
+// 服务端给的图片地址多是相对路径（/files/<id>），拼上当前服务端地址才能加载。
+// 已经是绝对地址（http/https）或 data: 的原样返回 —— 别粗暴地无脑拼前缀。
+function absUrl(u: string): string {
+  const s = u || "";
+  if (/^(https?:|data:|blob:)/i.test(s)) return s;
+  return getServerUrl().replace(/\/+$/, "") + (s.startsWith("/") ? s : `/${s}`);
+}
+
 function imageHtml(url: string): string {
   return `<img data-img="${esc(url)}" src="${esc(url)}" alt="${esc(t("chat.imageAlt"))}" style="display:block;margin-top:8px;max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:zoom-in;" onerror="this.remove()">`;
 }
@@ -697,6 +734,8 @@ function blockHtml(b: Block, i: number): string {
       </div>`;
   }
 
+  if (b.kind === "locate") return locateCardHtml(b, i);
+
   if (b.kind === "system") {
     // 稿 1412-1413：居中一颗小灰胶囊。刻意做得比任何消息都弱 —— 它不是谁说的话。
     return `<div style="align-self:center;padding:3px 11px;border-radius:999px;background:var(--chip);color:var(--faint);font-size:11px;white-space:nowrap;">${esc(b.text)}</div>`;
@@ -744,6 +783,63 @@ function blockHtml(b: Block, i: number): string {
 // 问答卡：一次一题（可回上一题改），全部答完统一提交。
 // 为什么要这个：歧义必须在派活**之前**消除——「写个棋牌小程序」是微信还是支付宝？
 // 带着歧义开工，返工的代价远大于问一句。
+// ── 「找位置」卡 ────────────────────────────────────────────────────────────
+// 稿 1645-1670 画了这张卡，但只画了两条出路：清掉 / 发回去。
+// 服务端（operate.py on_locate_response）实际认**四**种回应，iOS 也四种都做了：
+//   ① 指位 nx,ny  ② 文字纠偏 feedback  ③ 暂停我来 paused  ④ 取消 cancelled
+// 只做前两条等于把②③砍掉 —— 而②③恰恰是「截图根本不对」「这事我自己两秒就点了」
+// 这两种最常见的卡住场景的出路。所以这里按服务端的能力做全，稿的缺口记进回流台账。
+//
+// 与 iOS 的一处**故意**不同：iOS 是拖箭头（箭尾→尖端），PC 这里是点一下。
+// 箭头在 iOS 上是为了解决「手指挡住要点的位置」，鼠标指针不遮挡，桌面端不需要，
+// 稿也画的是点选。回传给服务端的都只有尖端那一个点，协议是一样的。
+function locateCardHtml(b: Extract<Block, { kind: "locate" }>, i: number): string {
+  const head = `<div style="display:flex;align-items:center;gap:8px;">
+      <span style="flex:none;width:22px;height:22px;border-radius:7px;background:var(--orange-soft);color:var(--orange-text);display:flex;align-items:center;justify-content:center;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M19 5h-7M19 5v7"></path></svg></span>
+      <span style="flex:1;min-width:0;font-size:12.5px;font-weight:600;">${esc(t("chat.locateTitle"))}</span>
+    </div>`;
+  const body = `<span style="font-size:12px;color:var(--muted);line-height:1.7;white-space:pre-wrap;">${esc(b.hint)}</span>`;
+  const shell = (inner: string) =>
+    `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;display:flex;flex-direction:column;gap:9px;">${head}${body}${inner}</div>`;
+
+  // 已经答过（本端答的，或别的端抢先答了）→ 只剩一行状态。
+  // 「暂停我来」是唯一还留着动作的：你处理完了得有地方点「继续」，否则任务就吊在那里。
+  if (b.resolved) {
+    const done = `<span style="font-size:11.5px;color:var(--faint);">${esc(t(`chat.locate_${b.resolved}`))}</span>`;
+    if (b.resolved !== "paused") return shell(done);
+    return shell(`<div style="display:flex;align-items:center;gap:8px;">${done}<span style="flex:1;"></span>`
+      + `<button data-locresume="${i}" class="${btn("primary", "sm")}">${esc(t("chat.locateResume"))}</button></div>`);
+  }
+
+  const src = absUrl(b.imageUrl);
+  // 图片外面这层容器**必须贴着图片本身**（inline-block + line-height:0），不能是个更大的框：
+  // 点击坐标是拿 offsetX / clientWidth 算的，容器比图大出来的那圈会让换算整体偏移。
+  const dot = b.nx !== undefined && b.ny !== undefined
+    ? `<span style="position:absolute;left:${b.nx / 10}%;top:${b.ny / 10}%;width:13px;height:13px;margin:-6.5px 0 0 -6.5px;border-radius:999px;background:var(--orange);border:2px solid #fff;box-shadow:0 0 0 1px var(--orange);pointer-events:none;"></span>`
+    : "";
+  // 描边挂在容器上、图片贴着容器内沿，所以那颗点的百分比定位比图片实际位置差 1px 的边框宽度 ——
+  // 肉眼看不出来，但换算坐标时不能这么将就，见 onMsgsClick 里量的是 <img> 而不是这一层。
+  const shot = `<span data-locshot="${i}" style="position:relative;display:inline-block;line-height:0;max-width:100%;align-self:flex-start;border-radius:9px;border:1px solid var(--border);background:var(--track);cursor:crosshair;overflow:hidden;">`
+    + `<img src="${esc(src)}" alt="${esc(t("chat.locateShotAlt"))}" style="display:block;max-width:100%;max-height:280px;" draggable="false">${dot}</span>`;
+
+  // 文字纠偏的输入框默认收着 —— 展开着会喧宾夺主，让人以为「必须写点什么」，
+  // 而大多数时候点一下就完事了。
+  const fb = b.fbOpen
+    ? `<div style="display:flex;gap:8px;align-items:center;">
+        <input data-locfb="${i}" value="${esc(b.fbText || "")}" placeholder="${esc(t("chat.locateFbPlaceholder"))}" style="flex:1;min-width:0;border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:7px;padding:6px 9px;font-size:12px;font-family:inherit;outline:none;">
+        <button data-locfbsend="${i}" class="${btn("primary", "sm")}"${(b.fbText || "").trim() ? "" : " disabled"}>${esc(t("chat.locateFbSend"))}</button>
+      </div>`
+    : "";
+  const foot = `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <span style="flex:1;min-width:80px;font-size:11px;color:var(--faint);line-height:1.65;">${esc(t("chat.locateFootHint"))}</span>
+      ${b.nx !== undefined ? `<button data-locclear="${i}" class="${btn("ghost", "sm")}">${esc(t("chat.locateClear"))}</button>` : ""}
+      <button data-locfbtoggle="${i}" class="${btn("ghost", "sm")}">${esc(t(b.fbOpen ? "chat.locateFbClose" : "chat.locateFbOpen"))}</button>
+      <button data-locpause="${i}" class="${btn("ghost", "sm")}">${esc(t("chat.locatePause"))}</button>
+      <button data-locsend="${i}" class="${btn("primary", "sm")}"${b.nx === undefined ? " disabled" : ""}>${esc(t("chat.locateSend"))}</button>
+    </div>`;
+  return shell(shot + fb + foot);
+}
+
 function questionCardHtml(b: Extract<Block, { kind: "question" }>, i: number): string {
   const total = b.questions.length;
   if (b.done) {
@@ -1198,6 +1294,8 @@ function conversationToText(convId: string): string {
       lines.push(`[问答卡] ${b.title}${b.done ? "（已提交）" : "（待回答）"}`, "");
     } else if (b.kind === "system") {
       lines.push(`[系统] ${b.text}`, "");
+    } else if (b.kind === "locate") {
+      lines.push(`[找位置] ${b.target || b.hint}${b.resolved ? `（${b.resolved}）` : "（待处理）"}`, "");
     }
   }
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -1320,6 +1418,17 @@ export function mount(el: HTMLElement): void {
         }
       }
     }
+    // 「找位置」卡的文字纠偏：同样随敲随存 + 只翻按钮的 disabled，不重渲染。
+    // 重渲染会把 <input> 整个换掉，光标就跑了 —— 问答卡那边踩过，这里照抄它的做法。
+    if (t2 && t2.dataset && t2.dataset.locfb !== undefined) {
+      const i = Number(t2.dataset.locfb);
+      const b = cs(activeConv).blocks[i];
+      if (b && b.kind === "locate") {
+        b.fbText = t2.value;
+        const sendBtn = msgsEl.querySelector(`[data-locfbsend="${i}"]`) as HTMLButtonElement | null;
+        if (sendBtn) sendBtn.disabled = !t2.value.trim();
+      }
+    }
   });
   // 跟踪是否贴底：上滑超过阈值即停止自动跟随，回到底部附近恢复跟随。
   msgsEl.addEventListener("scroll", () => {
@@ -1334,7 +1443,10 @@ export function mount(el: HTMLElement): void {
 }
 
 function onMsgsClick(e: Event): void {
-  const el = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit],[data-reconnect],[data-jobact]") as HTMLElement | null;
+  const el = (e.target as HTMLElement).closest(
+    "[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit],[data-reconnect],[data-jobact],"
+    + "[data-locshot],[data-locclear],[data-locfbtoggle],[data-locfbsend],[data-locpause],[data-locsend],[data-locresume]",
+  ) as HTMLElement | null;
   if (!el) return;
   // ── 错误块的「重新连接」──
   // 用 data-* 而不是 id：一屏里可能有多条错误块，id 会重复。
@@ -1384,6 +1496,53 @@ function onMsgsClick(e: Event): void {
       }
       chatConn.sendAnswers(b.cardId, answers);
       b.done = true;
+    }
+    renderMessages();
+    return;
+  }
+  // ── 「找位置」卡 ──
+  const li = el.dataset.locshot ?? el.dataset.locclear ?? el.dataset.locfbtoggle
+    ?? el.dataset.locfbsend ?? el.dataset.locpause ?? el.dataset.locsend ?? el.dataset.locresume;
+  if (li !== undefined) {
+    const b = cs(activeConv).blocks[Number(li)];
+    if (!b || b.kind !== "locate") return;
+    if (el.dataset.locshot !== undefined) {
+      // 点在截图上 → 换算成归一化 0-1000。两个坑：
+      //  1. 不能用 offsetX：它是相对**事件目标**算的，目标可能是 <img> 也可能是外层容器
+      //     （点在边框/圆角上时），两者原点差一圈，混用会让某几次点击整体偏一截。
+      //  2. 要量 <img> 自己的矩形，不是容器的 —— 容器带 1px 描边，拿它当基准整张图会偏。
+      const img = (el as HTMLElement).querySelector("img");
+      const r = (img || (el as HTMLElement)).getBoundingClientRect();
+      if (r.width > 0 && r.height > 0) {
+        const e2 = e as MouseEvent;
+        b.nx = Math.max(0, Math.min(1000, Math.round(((e2.clientX - r.left) / r.width) * 1000)));
+        b.ny = Math.max(0, Math.min(1000, Math.round(((e2.clientY - r.top) / r.height) * 1000)));
+      }
+    } else if (el.dataset.locclear !== undefined) {
+      b.nx = undefined; b.ny = undefined;
+    } else if (el.dataset.locfbtoggle !== undefined) {
+      b.fbOpen = !b.fbOpen;
+    } else if (el.dataset.locfbsend !== undefined) {
+      const txt = (b.fbText || "").trim();
+      if (!txt) return;
+      chatConn.sendLocate(b.taskId, { feedback: txt });
+      b.resolved = "feedback";
+      showToast(t("chat.locateFbSentToast"), { tone: "ok" });
+    } else if (el.dataset.locpause !== undefined) {
+      chatConn.sendLocate(b.taskId, { paused: true });
+      b.resolved = "paused";
+    } else if (el.dataset.locsend !== undefined) {
+      if (b.nx === undefined || b.ny === undefined) return;
+      chatConn.sendLocate(b.taskId, { nx: b.nx, ny: b.ny });
+      b.resolved = "located";
+      showToast(t("chat.locateSentToast"), { tone: "ok" });
+    } else if (el.dataset.locresume !== undefined) {
+      // 「继续」按 job_id 走，不是 task_id：一个任务可能求助过好几次，
+      // 服务端等的是「这个 job 能接着跑了」。jobId 为空说明这条求助是旧协议来的，
+      // 唤不醒就别把卡片标成已继续，不然按钮消失了、任务还吊着。
+      if (!b.jobId) { showToast(t("chat.locateResumeNoJob"), { tone: "fail" }); return; }
+      chatConn.sendOperateResume(b.jobId);
+      b.resolved = "resumed";
     }
     renderMessages();
     return;

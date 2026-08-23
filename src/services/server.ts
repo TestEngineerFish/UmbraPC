@@ -734,6 +734,22 @@ class ChatConnection {
   sendOperateStop(): boolean {
     return this.rawSend({ type: "operate_stop" });
   }
+
+  // 电脑操作「人工求助」的回传。服务端（operate.py on_locate_response）认四种，
+  // 按优先级依次判断：paused > feedback > cancelled > 坐标。所以这里只传其中一种，
+  // 别一次带两个字段 —— 服务端不会合并，只会按它的顺序取第一个命中的。
+  //
+  // nx/ny 是**归一化到 0-1000** 的整数，不是像素：截图分辨率因设备而异，
+  // 传像素的话服务端还得知道原图尺寸才能还原。
+  sendLocate(taskId: string, body: { nx?: number; ny?: number; feedback?: string; paused?: boolean; cancelled?: boolean }): boolean {
+    return this.rawSend({ type: "operate_locate_response", task_id: taskId, ...body });
+  }
+
+  // 用户「暂停我来」自己处理完，点「继续」→ 唤醒挂起的任务，AI 重新看屏接着干。
+  // 注意它按 job_id 走，不是 task_id（一个 job 可能求助过好几次）。
+  sendOperateResume(jobId: string): boolean {
+    return this.rawSend({ type: "operate_resume", job_id: jobId });
+  }
 }
 
 export const chatConn = new ChatConnection();
