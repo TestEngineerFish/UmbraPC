@@ -112,7 +112,8 @@
     "purgeHint": "Unchecked: only remove from the list, files kept on disk. Checked: delete the directory's files too (irreversible).",
     "confirmRemove": "Remove",
     "confirmRemovePurge": "Remove & delete files",
-    "purgeFailed": "Record removed, but files not deleted: {{reason}}"
+    "purgeFailed": "Record removed, but files not deleted: {{reason}}",
+    "clearFilter": "Clear filters"
   },
   "conn": {
     "online": "Connected",

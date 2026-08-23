@@ -561,7 +561,7 @@ function labeled(who: "assistant" | "device", bubbleHtml: string): string {
 
 function blockHtml(b: Block, i: number): string {
   if (b.kind === "user")
-    return `<div style="align-self:flex-end;max-width:78%;background:var(--user-bubble);padding:11px 14px;border-radius:14px 14px 4px 14px;line-height:1.55;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
+    return `<div style="align-self:flex-end;max-width:76%;background:var(--user-bubble);padding:10px 13px;border-radius:12px 12px 4px 12px;line-height:1.65;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
 
   if (b.kind === "device") {
     // 设备发出的消息**靠左**。
@@ -570,23 +570,22 @@ function blockHtml(b: Block, i: number): string {
     // 但那个口径下，同一条流水里「谁是自己」会随着你在哪台设备上看而变，两端的左右
     // 正好相反。现在统一成一条规则（决策 D12）：**只有用户自己发的消息靠右，其余一律靠左**。
     // 稿 1424-1427 画的也是靠左的 --card 实线气泡。
-    // 取值先跟同页的秘书气泡保持一致（80% / 圆角 14 / 内距 11-14 / 行高 1.6）。
-    // 稿给设备会话的气泡是 78% / 圆角 12 / 内距 10-13 / 行高 1.65 —— 那一档要连秘书
-    // 气泡一起改，属于「逐页取值对齐」那一趟活，不在这次范围里。这里先保证两种气泡长一样。
-    return labeled("device", `<div style="align-self:flex-start;max-width:80%;background:var(--card);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.6;white-space:pre-wrap;">${esc(b.text)}</div>`)
+    // 取值和同页的秘书气泡同档（82% / 圆角 12-12-12-4 / 内距 11-13 / 行高 1.65，稿 1424-1427、1472）。
+    // 缺角在左下 —— 指向说话人的那一侧。
+    return labeled("device", `<div style="align-self:flex-start;max-width:82%;background:var(--card);border:1px solid var(--border);padding:11px 13px;border-radius:12px 12px 12px 4px;line-height:1.65;white-space:pre-wrap;">${esc(b.text)}</div>`)
       + timeLine(b.ts, "flex-start");
   }
 
   if (b.kind === "assistant") {
     const trace = b.trace.length
-      ? `<div style="align-self:flex-start;max-width:80%;width:100%;">
-          <div data-trace="${i}" style="display:flex;align-items:center;gap:7px;cursor:pointer;color:var(--muted);font-size:12px;margin-bottom:6px;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .15s;transform:rotate(${b.traceOpen ? 90 : 0}deg);"><path d="M9 6l6 6-6 6"></path></svg>${esc(t("chat.toolTrace", { count: b.trace.length }))}</div>
-          ${b.traceOpen ? `<div style="background:var(--track);border:1px solid var(--border);border-radius:8px;padding:9px 11px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.85;color:var(--muted);">${b.trace.map((t) => `<div>${esc(t)}</div>`).join("")}</div>` : ""}
+      ? `<div style="align-self:flex-start;max-width:82%;width:100%;">
+          <div data-trace="${i}" style="display:flex;align-items:center;gap:7px;cursor:pointer;color:var(--muted);font-size:11.5px;margin-bottom:6px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" style="transition:transform .15s;transform:rotate(${b.traceOpen ? 90 : 0}deg);"><path d="M9 6l6 6-6 6"></path></svg>${esc(t("chat.toolTrace", { count: b.trace.length }))}</div>
+          ${b.traceOpen ? `<div style="display:flex;flex-direction:column;gap:5px;background:var(--track);border:1px solid var(--border);border-radius:9px;padding:9px 11px;font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:11.5px;line-height:1.7;color:var(--muted);">${b.trace.map((t) => `<div>${esc(t)}</div>`).join("")}</div>` : ""}
         </div>`
       : "";
     // 注意：这里不能用 white-space:pre-wrap —— Markdown 渲染已把换行转成块/段落/<br>，
     // 再 pre-wrap 会把 md 源码里的换行重复显示成大片空白。
-    const bubble = `<div style="align-self:flex-start;max-width:80%;background:var(--card);border:1px solid var(--border);padding:11px 14px;border-radius:14px 14px 14px 4px;line-height:1.6;min-height:20px;overflow-wrap:break-word;">${b.thinking ? dots : ""}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
+    const bubble = `<div style="align-self:flex-start;max-width:82%;background:var(--card);border:1px solid var(--border);padding:11px 13px;border-radius:12px 12px 12px 4px;line-height:1.65;min-height:20px;overflow-wrap:break-word;">${b.thinking ? dots : ""}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
     return trace + labeled("assistant", bubble) + (b.streaming ? "" : timeLine(b.ts, "flex-start"));
   }
 
@@ -599,7 +598,7 @@ function blockHtml(b: Block, i: number): string {
       ? `<span style="font-size:11.5px;color:var(--orange-text);font-weight:600;background:var(--orange-soft);border:1px solid var(--orange);border-radius:999px;padding:1px 8px;">${esc(t("chat.awaitingReview"))}</span>`
       : `<span style="font-size:12px;color:var(--orange-text);font-weight:600;">${b.pct}%</span>`;
     // 长摘要（agent 的输出动辄几百字）限高可滚，别撑破卡片。
-    return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-left:3px solid ${color};border-radius:10px;padding:13px 15px;">
+    return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-left:3px solid ${color};border-radius:11px;padding:12px 14px;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px;"><span style="font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(b.goal)}</span>${tag}</div>
         <div style="height:6px;border-radius:999px;background:var(--track);overflow:hidden;margin-bottom:8px;"><div style="height:100%;width:${b.pct}%;background:${color};border-radius:999px;"></div></div>
         <div style="font-size:12.5px;color:var(--muted);display:flex;align-items:flex-start;gap:6px;max-height:150px;overflow-y:auto;"><span style="flex:none;width:6px;height:6px;border-radius:999px;background:${color};margin-top:6px;"></span><span style="flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;">${esc(b.message)}</span></div>
@@ -614,7 +613,7 @@ function blockHtml(b: Block, i: number): string {
         return `${img}<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg><a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--orange-text);text-decoration:none;font-weight:500;">${esc(r.title)}</a></div>`;
       })
       .join("");
-    return `<div style="align-self:flex-start;max-width:80%;background:var(--success-soft);border:1px solid var(--success);border-left:3px solid var(--success);border-radius:10px;padding:13px 15px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;display:flex;align-items:center;gap:7px;">${svgIcon(ICON_CHECK, 14, 2.2)}<span style="min-width:0;">${esc(t("chat.done"))}：${esc(b.goal)}</span></div>${links}</div>`;
+    return `<div style="align-self:flex-start;max-width:82%;background:var(--success-soft);border:1px solid var(--success);border-left:3px solid var(--success);border-radius:11px;padding:12px 14px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;display:flex;align-items:center;gap:7px;">${svgIcon(ICON_CHECK, 14, 2.2)}<span style="min-width:0;">${esc(t("chat.done"))}：${esc(b.goal)}</span></div>${links}</div>`;
   }
 
   if (b.kind === "confirm") {
@@ -625,7 +624,7 @@ function blockHtml(b: Block, i: number): string {
             ? `${svgIcon(ICON_AUTH_APPROVED, 12, 1.9)}${esc(t("chat.approved"))}`
             : `${svgIcon(ICON_AUTH_DENIED, 12, 1.9)}${esc(t("chat.denied"))}`}</div>`
       : confirmButtons(b.taskId, b.scope);
-    return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--orange-soft);border:1px solid var(--orange);border-radius:10px;padding:13px 15px;">
+    return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;">
         <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>${esc(t("chat.needConfirm"))}</div>
         <div style="font-size:13px;line-height:1.55;color:var(--text);">${esc(b.summary)}</div>
         ${detail ? `<div style="font-size:11.5px;color:var(--muted);margin-top:6px;font-family:ui-monospace,Menlo,monospace;word-break:break-all;">${esc(detail)}</div>` : ""}
@@ -639,7 +638,7 @@ function blockHtml(b: Block, i: number): string {
   //   ① 描边写死了 `rgba(180,35,24,.3)` —— 撞「颜色一律走 CSS 变量」，深色下也不跟着变
   //   ② 只有一行字，没有动作 —— 撞「失败态三段式，第三段必须是可点按钮」
   // 稿给的动作是「重新连接」（7323）。这里接 chatConn.connect()，它内部对已连接是幂等的。
-  return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--danger-soft);border:1px solid var(--danger);border-radius:11px;padding:11px 13px;display:flex;align-items:center;gap:9px;">
+  return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--danger-soft);border:1px solid var(--danger);border-radius:11px;padding:11px 13px;display:flex;align-items:center;gap:9px;">
       <span style="flex:none;color:var(--danger);display:flex;">${svgIcon(ICON_ALERT, 15, 2.1)}</span>
       <span style="flex:1;min-width:0;font-size:12.5px;font-weight:600;color:var(--danger);line-height:1.65;">${esc(b.text)}</span>
       <button data-reconnect="1" class="${btn("danger", "sm")}">${esc(t("chat.reconnect"))}</button>
@@ -652,7 +651,7 @@ function blockHtml(b: Block, i: number): string {
 function questionCardHtml(b: Extract<Block, { kind: "question" }>, i: number): string {
   const total = b.questions.length;
   if (b.done) {
-    return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:10px;padding:13px 15px;">
+    return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;">
       <div style="font-weight:600;margin-bottom:6px;">${esc(b.title)}</div>
       <div style="font-size:12.5px;color:var(--success);display:flex;align-items:center;gap:6px;">${svgIcon(ICON_CHECK, 13, 2.2)}${esc(t("chat.questionSubmitted"))}</div>
     </div>`;
@@ -664,7 +663,7 @@ function questionCardHtml(b: Extract<Block, { kind: "question" }>, i: number): s
     .map((o) => {
       const on = sel.includes(o);
       return `<button data-qopt="${i}" data-val="${esc(o)}" style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:9px 12px;margin-bottom:6px;border-radius:9px;cursor:pointer;font-size:13px;border:1px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange-soft)" : "var(--bg)"};color:${on ? "var(--orange-text)" : "var(--text)"};">
-        <span style="flex:none;width:14px;height:14px;border-radius:${q.multi ? "4px" : "999px"};border:1.5px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange)" : "transparent"};"></span>${esc(o)}
+        <span style="flex:none;width:15px;height:15px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border-radius:${q.multi ? "4px" : "999px"};border:1.6px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange)" : "transparent"};">${on ? `<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4 4 10-10"></path></svg>` : ""}</span>${esc(o)}
       </button>`;
     })
     .join("");
@@ -679,16 +678,16 @@ function questionCardHtml(b: Extract<Block, { kind: "question" }>, i: number): s
     : "";
   const last = b.at >= total - 1;
   const answered = sel.length > 0 || (b.custom[q.id] || "").trim().length > 0;
-  return `<div style="align-self:flex-start;max-width:80%;width:100%;background:var(--card);border:1px solid var(--orange);border-radius:10px;padding:13px 15px;">
+  return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">
         <span style="font-weight:600;">${esc(b.title)}</span>
-        <span style="flex:none;font-size:11.5px;color:var(--muted);">${b.at + 1} / ${total}</span>
+        <span style="flex:none;font-size:11px;color:var(--faint);font-family:ui-monospace,Menlo,monospace;">${b.at + 1} / ${total}</span>
       </div>
-      <div style="font-size:13.5px;margin:10px 0 9px;">${esc(q.text)}${q.multi ? `<span style="font-size:11px;color:var(--muted);margin-left:6px;">${esc(t("chat.questionMulti"))}</span>` : ""}</div>
+      <div style="font-size:13.5px;margin:10px 0 9px;">${esc(q.text)}${q.multi ? `<span style="display:inline-flex;align-items:center;padding:1px 7px;margin-left:6px;border-radius:999px;background:var(--orange-soft);color:var(--orange-text);font-size:11px;font-weight:600;white-space:nowrap;vertical-align:1px;">${esc(t("chat.questionMulti"))}</span>` : ""}</div>
       ${opts}
       ${custom}
       <div style="display:flex;gap:8px;margin-top:11px;">
-        ${b.at > 0 ? `<button data-qprev="${i}" style="padding:7px 14px;border:1px solid var(--border);background:transparent;color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;">${esc(t("chat.questionPrev"))}</button>` : ""}
+        ${b.at > 0 ? `<button data-qprev="${i}" class="${btn("ghost", "sm")}">${esc(t("chat.questionPrev"))}</button>` : ""}
         <span style="flex:1;"></span>
         <button data-${last ? "qsubmit" : "qnext"}="${i}" ${answered ? "" : "disabled"} class="${btn("primary", "sm")}">${esc(last ? t("chat.questionSubmit") : t("chat.questionNext"))}</button>
       </div>
@@ -706,12 +705,27 @@ function avatarHtml(conv: string, size = 40): string {
   return `<span style="flex:none;width:${size}px;height:${size}px;border-radius:10px;background:var(--track);border:1px solid var(--border);font-size:${fs}px;display:flex;align-items:center;justify-content:center;${dim}">${platformIcon(d?.platform)}</span>`;
 }
 
+// 在线状态：**圆点 + 文字**，摆在联系人行的第二行（稿 1347-1350、7165-7169）。
+//
+// 之前是在头像右下角压一个 8px 的点，没有文字 —— 撞了「状态必须『图标 + 文字』」这条硬规则。
+// 光靠一个绿/灰点表意，对色觉障碍用户等于没有状态；点又小又压在头像上，正常视力也得凑近看。
+//
+// 两态的形状也不同，不是只换颜色：在线是 6px **实心**，离线是 7px **空心描边**。
+// 这样即使完全不看颜色，形状也能分辨。
 function presenceDot(conv: string): string {
   if (conv === MAIN) return "";
-  const d = deviceOf(conv);
-  const on = !!d?.online;
-  const color = on ? "var(--success)" : "var(--muted)";
-  return `<span title="${esc(on ? t("chat.online") : t("chat.offline"))}" style="flex:none;width:8px;height:8px;border-radius:999px;background:${color};box-shadow:0 0 0 2px var(--card);"></span>`;
+  const on = !!deviceOf(conv)?.online;
+  return on
+    ? `<span style="width:6px;height:6px;flex:none;border-radius:999px;background:var(--success);"></span>`
+    : `<span style="width:7px;height:7px;flex:none;border-radius:999px;border:1.5px solid var(--faint);box-sizing:border-box;"></span>`;
+}
+
+// 圆点 + 文字。会话头和详情栏那两处本来就在旁边写了文字，只取上面的点即可。
+function presenceRow(conv: string): string {
+  const dot = presenceDot(conv);
+  if (!dot) return "";
+  const on = !!deviceOf(conv)?.online;
+  return dot + `<span style="flex:none;font-size:10.5px;color:${on ? "var(--success)" : "var(--faint)"};white-space:nowrap;">${esc(on ? t("chat.online") : t("chat.offline"))}</span>`;
 }
 
 function renderContacts(): void {
@@ -726,13 +740,14 @@ function renderContacts(): void {
       const time = s?.lastAt ? fmtMsgTime(s.lastAt) : "";
       const unread = s?.unread && !on ? `<span style="flex:none;width:8px;height:8px;border-radius:999px;background:var(--orange);"></span>` : "";
       return `<button data-conv="${esc(id)}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:9px 12px;border:none;border-radius:9px;cursor:pointer;background:${on ? "var(--orange-soft)" : "transparent"};color:var(--text);">
-        <span style="position:relative;display:flex;">${avatarHtml(id)}<span style="position:absolute;right:-2px;bottom:-2px;">${presenceDot(id)}</span></span>
+        ${avatarHtml(id)}
         <span style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">
           <span style="display:flex;align-items:center;gap:6px;">
             <span style="flex:1;min-width:0;font-size:13.5px;font-weight:${on ? 600 : 500};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(convLabel(id))}</span>
             <span style="flex:none;font-size:10.5px;color:var(--muted);">${esc(time)}</span>
           </span>
           <span style="display:flex;align-items:center;gap:6px;">
+            ${presenceRow(id)}
             <span style="flex:1;min-width:0;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(preview || (id === MAIN ? t("chat.secretaryDesc") : t("chat.devicePreviewEmpty")))}</span>
             ${unread}
           </span>
@@ -898,7 +913,7 @@ function refreshComposer(): void {
   if (!wrap.querySelector("#draft")) {
     wrap.innerHTML = `
       <div id="uoffline"></div>
-      <div id="umodebar" style="display:flex;gap:6px;align-items:center;padding:8px 16px 0;"></div>
+      <div id="umodebar" style="display:flex;gap:8px;align-items:center;padding:8px 16px 0;"></div>
       <div style="display:flex;gap:10px;align-items:flex-end;padding:10px 16px 12px;">
         <textarea id="draft" rows="2" class="flex-1 resize-none border border-border bg-bg text-text rounded-[10px] px-[12px] py-[9px] text-[13.5px] leading-[1.5] font-[inherit] max-h-[120px] outline-none transition-[border-color,box-shadow] duration-[130ms] ease-out hover:border-orange focus:border-orange focus:shadow-[var(--focus-ring)]"></textarea>
         <button id="sendbtn" class="${btn("primary")} gap-[6px] self-center" ${clearing ? "disabled" : ""}>${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
@@ -938,12 +953,24 @@ function renderModeBar(wrap: HTMLElement): void {
   const items: Array<[ChatMode, string]> = [
     ["auto", t("chat.modeAuto")], ["chat", t("chat.modeChat")], ["execution", t("chat.modeExec")],
   ];
+  // 稿 1693 / 7205-7208：这是一个**分段控件**（--chip 底槽 + 内距 3 + gap 3 + 圆角 999），
+  // 不是三颗各自带描边的裸胶囊。差别不只是好看 —— 有底槽才看得出「三选一」，
+  // 三颗平铺的描边胶囊看起来像三个可以各自开关的筛选器。
+  //
+  // 另一处：「执行」选中时是**实心橙 + 白字**，不跟另外两个共用橙软底。
+  // 执行模式会真的去建任务做事，它选中与否比另外两个都要紧，值得单独一档。
+  const seg = items.map(([m, label]) => {
+    const on = chatMode === m;
+    const skin = !on
+      ? "border:1px solid transparent;background:transparent;color:var(--muted);"
+      : m === "execution"
+        ? "border:1px solid var(--orange);background:var(--orange);color:#fff;font-weight:560;"
+        : "border:1px solid var(--orange);background:var(--orange-soft);color:var(--orange-text);font-weight:560;";
+    return `<button data-mode="${m}" style="display:flex;align-items:center;height:23px;padding:0 11px;border-radius:999px;font-size:11.5px;font-family:inherit;white-space:nowrap;cursor:pointer;transition:background .13s ease,color .13s ease;${skin}">${esc(label)}</button>`;
+  }).join("");
   bar.innerHTML =
-    `<span style="font-size:11px;color:var(--muted);margin-right:2px;">${esc(t("chat.modeLabel"))}</span>` +
-    items.map(([m, label]) => {
-      const on = chatMode === m;
-      return `<button data-mode="${m}" style="padding:3px 10px;border-radius:999px;font-size:11.5px;cursor:pointer;border:1px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange-soft,rgba(255,140,0,.12))" : "transparent"};color:${on ? "var(--orange-text,var(--orange))" : "var(--muted)"};">${esc(label)}</button>`;
-    }).join("");
+    `<span style="font-size:11px;color:var(--muted);flex:none;">${esc(t("chat.modeLabel"))}</span>`
+    + `<span style="display:flex;gap:3px;padding:3px;border-radius:999px;background:var(--chip);flex:none;">${seg}</span>`;
 }
 
 function send(): void {
@@ -967,7 +994,12 @@ function sendTo(conv: string, text: string): void {
   const s = cs(conv);
   const now = Date.now();
   s.blocks.push({ kind: "user", text: t2, ts: now });
-  s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
+  // traceOpen 默认 **false**（稿 7240）。这里原先写死 true —— 新回复的工具轨迹自动展开，
+  // 只有历史消息是折叠的。改成跟稿一致之后，轨迹要点一下才展开。
+  // ⚠️ 这条是行为改动不是纯样式：以前能眼看着工具一条条跑出来，现在默认看不到。
+  // 稿是静态图，没有「流式」这个概念，所以它的默认值未必考虑过这一点 —— 如果实际用着别扭，
+  // 把这里改回 true 即可（一个词的事）。
+  s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: false, ts: now });
   s.assistantIdx = s.blocks.length - 1;
   s.lastText = t2;
   s.lastAt = now;
@@ -1101,19 +1133,23 @@ export function mount(el: HTMLElement): void {
     return;
   }
   chatShellEl = el;
+  // 三栏底色照稿：联系人栏与设备详情栏是 --rail（1324、1714），会话头是 --card（1365），
+  // 中间消息区留给 --bg。之前联系人栏和详情栏都写成了 --card、会话头没设底色继承了 --bg ——
+  // 结果是「两侧比中间浅」，稿要的是「两侧比中间沉」，层次整个反了。
+  // kit README 特意为详情栏标过一句「不是 --card」，就是因为这处容易写错。
   el.innerHTML = `
     <div style="display:flex;height:100%;min-height:0;">
-      <aside style="flex:none;width:236px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;background:var(--card);">
+      <aside style="flex:none;width:236px;border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0;background:var(--rail);">
         <div style="padding:14px 16px 10px;font-size:12px;font-weight:600;color:var(--muted);flex:none;">${esc(t("chat.contacts"))}</div>
         <div id="ucontacts" style="flex:1;overflow-y:auto;padding:0 8px 10px;display:flex;flex-direction:column;gap:2px;min-height:0;"></div>
       </aside>
       <section style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;">
-        <div id="uchathead" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 18px;border-bottom:1px solid var(--border);flex:none;"></div>
-        <div id="umsgs" style="flex:1;overflow-y:auto;padding:22px;display:flex;flex-direction:column;gap:16px;min-height:0;"></div>
+        <div id="uchathead" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 18px;border-bottom:1px solid var(--border);flex:none;background:var(--card);"></div>
+        <div id="umsgs" style="flex:1;overflow-y:auto;padding:18px 20px 22px;display:flex;flex-direction:column;gap:14px;min-height:0;"></div>
         <div id="ucomposer" style="flex:none;border-top:1px solid var(--border);background:var(--card);"></div>
         <div id="ulightbox"></div>
       </section>
-      <aside id="udetail" style="display:none;flex:none;width:272px;border-left:1px solid var(--border);overflow-y:auto;background:var(--card);"></aside>
+      <aside id="udetail" style="display:none;flex:none;width:272px;border-left:1px solid var(--border);overflow-y:auto;background:var(--rail);"></aside>
     </div>`;
 
   const contactsEl = el.querySelector("#ucontacts") as HTMLElement;

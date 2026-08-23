@@ -11,7 +11,7 @@ import { getState } from "../../services/deviceTransport";
 import * as desktop from "../../services/desktop";
 import type { DirEntry } from "../../services/desktop";
 import * as legacy from "../../app/shell";
-import { btnGhost, btnPrimary, btnIcon, inputFlex, Modal, RefreshButton, filterChip, filterChipCount } from "../../components/ui";
+import { btnGhost, btnPrimary, btnIcon, inputFlex, Modal, RefreshButton, filterChip, filterChipCount, EmptyState } from "../../components/ui";
 import { IconSearch, IconPlus, IconCopy, IconCheck, IconFolder, IconTrash, IconX, IconAlert, IconPencil } from "../../components/icons";
 
 // 名字首字母（或首个汉字）做 monogram 方块 —— 设计规范里分类与记录一律用字母方块，不用彩色 emoji。
@@ -204,9 +204,18 @@ export function Workspaces() {
               </div>
             );
           })}
+          {/* 空态走通用空态件。三种情形给的动作不一样：
+              搜/筛没结果 → 清空筛选；一个工作区都没有 → 新增；加载中 → 不给动作。 */}
           {!shown.length ? (
-            <div className="py-10 text-center text-[12.5px] text-muted">
-              {loading ? t("common.loading") : kw ? t("workspaces.noMatch", { q: kw }) : filter !== "all" ? t("workspaces.noneInFilter") : t("workspaces.empty")}
+            <div className="py-6">
+              <EmptyState
+                compact
+                title={loading ? t("common.loading") : kw ? t("workspaces.noMatch", { q: kw }) : filter !== "all" ? t("workspaces.noneInFilter") : t("workspaces.empty")}
+                actionLabel={loading ? undefined : kw || filter !== "all" ? t("workspaces.clearFilter") : t("workspaces.add")}
+                onAction={loading ? undefined : kw || filter !== "all"
+                  ? () => { setQ(""); setFilter("all"); }
+                  : () => setAdding(true)}
+              />
             </div>
           ) : null}
           <div className="mt-[4px] px-[12px] py-[11px] border border-dashed border-border rounded-[11px]">
@@ -218,7 +227,7 @@ export function Workspaces() {
       {/* ── 详情列 ── */}
       <main className="flex-1 min-w-0 flex flex-col min-h-0 bg-bg">
         {sel ? <Detail w={sel} onRemove={() => { setRemoving(sel); setPurge(false); }} onSaved={() => void load()} />
-          : <div className="flex-1 flex items-center justify-center text-[12.5px] text-muted">{t("workspaces.pickOne")}</div>}
+          : <div className="flex-1 flex items-center justify-center"><EmptyState title={t("workspaces.pickOne")} /></div>}
       </main>
 
       {/* ── 新增弹框 ── */}

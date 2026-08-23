@@ -112,7 +112,8 @@
     "purgeHint": "不勾选：仅从列表移除，磁盘文件保留。勾选：连同目录里的文件一起删除（不可恢复）。",
     "confirmRemove": "移除",
     "confirmRemovePurge": "移除并删除文件",
-    "purgeFailed": "记录已移除，但文件未删除：{{reason}}"
+    "purgeFailed": "记录已移除，但文件未删除：{{reason}}",
+    "clearFilter": "清空筛选"
   },
   "conn": {
     "online": "已连接",
