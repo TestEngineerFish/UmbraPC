@@ -1030,8 +1030,15 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     const nn: WFNode = { id: uid(), type, x: n.x + NODE_W + 60, y: n.y, config: defaultConfig(type) };
     updateCur((w) => ({ ...w, nodes: [...w.nodes, nn], connections: [...w.connections, { from: n.id, to: nn.id, mod: "" }] }));
   };
+  // ⚠️ 画布上删节点**故意不弹二次确认**（决策 D24，sam 拍板）。
+  // 别看见别处都有确认框就以为这里是漏了 —— 理由有三条：
+  //   1. 有 ⌘Z 兜底。delNode / delNodes 都走 updateCur，进撤销栈，误删一步就回来了；
+  //      而下面 askDelPrefab 之所以要确认，正是因为预制件 **不**进撤销栈。
+  //   2. 删节点是编排过程中的高频动作（连错线、试错、重排都要删），每次弹框会把画布用废。
+  //   3. 节点本身没有独立数据，配置随工作流一起存；删掉不会带走别处引用的东西。
+  // 如果哪天撤销栈被去掉或者节点开始持有独立数据，这条理由就不成立了，届时要补确认。
   const delNode = (id: string) => { updateCur((w) => ({ ...w, nodes: w.nodes.filter((n) => n.id !== id), connections: w.connections.filter((c) => c.from !== id && c.to !== id) })); setSelNode(null); setSelSet([]); };
-  // 批量删除选区（E4）：组内组外只要沾边的连线一并清掉，不留半截线。
+  // 批量删除选区（E4）：组内组外只要沾边的连线一并清掉，不留半截线。同样不弹确认，理由见上。
   const delNodes = (ids: string[]) => {
     const s = new Set(ids);
     updateCur((w) => ({ ...w, nodes: w.nodes.filter((n) => !s.has(n.id)), connections: w.connections.filter((c) => !s.has(c.from) && !s.has(c.to)) }));

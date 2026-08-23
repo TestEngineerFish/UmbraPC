@@ -15,6 +15,7 @@ import {
   fetchAllDevices,
   forgetDevice,
   clearHistory,
+  retryJob,
   getServerUrl,
   getAutoApproveOperate,
   setAutoApproveOperate,
@@ -39,6 +40,9 @@ type Block =
   | { kind: "confirm"; taskId: string; summary: string; detail?: unknown; scope?: string; resolved?: "approved" | "denied" }
   // 问答卡：秘书在派活前把歧义问清楚（多题、单选/多选、可自定义、逐题推进、统一提交）。
   | { kind: "question"; cardId: string; title: string; questions: QCard[]; at: number; picked: Record<string, string[]>; custom: Record<string, string>; done?: boolean }
+  // 系统提示行（稿 1412-1413）：居中的一颗小灰胶囊，说明「不是你干的、但这里变了」。
+  // 目前只有一个来源：别的端清空了这段历史。没有它的话，聊天窗会毫无征兆地整个变空。
+  | { kind: "system"; text: string; ts?: string | number }
   | { kind: "error"; text: string };
 
 interface QCard {
@@ -72,6 +76,12 @@ let activeConv = MAIN;
 // 已知设备（含离线），联系人列表的数据源。
 let devices: KnownDevice[] = [];
 let detailOpen = false;
+// 标题栏 ⋯ 溢出菜单是否展开。挂在模块上而不是 DOM 里，是因为 renderHeader 每次都重画
+// innerHTML —— 存在 DOM 上会被自己擦掉。
+let headMenuOpen = false;
+// 点空白关菜单的 document 监听。存下引用是为了 unmount 时摘干净（聊天页会被反复挂载卸载，
+// 不摘就会一次一个地攒在 document 上）。
+let docClickHandler: (() => void) | null = null;
 
 let container: HTMLElement | null = null;
 let started = false;
@@ -87,6 +97,10 @@ type ChatMode = "auto" | "chat" | "execution";
 let chatMode: ChatMode = "auto";
 // 正在清空历史：清空期间禁发消息，避免新消息被服务端的会话重置一起删掉。
 let clearing = false;
+// 本端最近一次主动清空各会话的时刻。用来在收到服务端广播时认出「这是我自己干的」。
+// 见 history_cleared 分支里的说明：服务端广播不带发起方，只能靠时间窗口猜。
+const selfCleared: Record<string, number> = {};
+const SELF_CLEAR_WINDOW_MS = 8000;
 
 function newConvState(): ConvState {
   return {
@@ -155,6 +169,14 @@ function fmtMsgTime(ts?: string | number): string {
 
 export function setAppRerender(cb: () => void): void {
   appRerender = cb;
+}
+
+// 任务卡「查看结果」要跳到任务页并展开那条任务，而那个能力在 shell.ts（openTaskFrom）。
+// 这里不直接 import shell —— shell 已经 import 了 chat（sendText / setAppRerender），
+// 反向再 import 就成了循环依赖。沿用 setAppRerender 同一套注入写法由 shell 回填。
+let openTaskCb: ((jobId: string) => void) | null = null;
+export function setOpenTask(cb: (jobId: string) => void): void {
+  openTaskCb = cb;
 }
 
 const esc = (s: string) =>
@@ -395,6 +417,16 @@ function onMessage(msg: any): void {
       const s = cs(target);
       s.blocks = []; s.assistantIdx = null; s.jobMap = {}; s.doneJobs.clear();
       s.oldestId = null; s.hasMore = false; s.lastText = "";
+      // 清空是**别人**干的时才留一条系统提示行 —— 自己刚点过「清空聊天」的话，
+      // 本地已经乐观清过一遍，再说一句「别的端清空了」是自己骗自己。
+      //
+      // ⚠️ 这是个时间窗口的权宜之计，不是严谨判断：服务端 /history/clear 的广播里
+      // 没带发起方是谁（app.py:824 只广播 {type, conversation}），所有在线端收到的
+      // 是同一条消息，本端无从分辨。真正的修法是广播里带上发起端的 client_id，
+      // 本端比对 getClientId() 即可 —— 那要动服务端，留到下次一起改。
+      if (Date.now() - (selfCleared[target] || 0) > SELF_CLEAR_WINDOW_MS) {
+        s.blocks.push({ kind: "system", text: t("chat.clearedElsewhere"), ts: Date.now() });
+      }
       if (target === activeConv) renderMessages();
       renderContacts();
       return;
@@ -490,7 +522,33 @@ const timeLine = (ts: string | number | undefined, align: "flex-start" | "flex-e
 };
 
 // 授权卡按钮：批准 / 总是允许 / 拒绝。「总是允许」= 打开自动批准 + 批准本次。
-function confirmButtons(taskId: string, scope?: string): string {
+// ── 任务卡的状态徽章 ────────────────────────────────────────────────────────
+// 稿给了六个状态（running/idle/done/failed/stopped/auth），但那是设计稿自己编的一套。
+// 服务端**也**是六个，只是不完全重合（task_tools.py:79 _STATUS_CN）：
+//   pending 待执行 · running 执行中 · suspended 已挂起 · done 已完成 · failed 失败 · cancelled 已取消
+// 加上一个纯前端的 awaiting（agent_state=idle，跑完一轮等你拍板），一共七档。
+// 这里按**服务端的真实状态**建表，色调借稿的：
+//   - 在动的（running）用橙 —— 橙是「Umbra 正在为你做事」，全站一致
+//   - 等外部条件的（suspended 等设备、awaiting 等你）用琥珀 —— 卡住了，需要人或设备介入
+//   - 还没开始 / 被中止的（pending、cancelled）用中性 chip —— 它们不是错误，别用红
+//   - done 绿、failed 红
+type JobState = "pending" | "running" | "suspended" | "awaiting" | "done" | "failed" | "cancelled";
+const JOB_TONE: Record<JobState, { bg: string; fg: string; key: string }> = {
+  pending:   { bg: "var(--chip)",         fg: "var(--muted)",       key: "chat.jobPending" },
+  running:   { bg: "var(--orange-soft)",  fg: "var(--orange-text)", key: "chat.jobRunning" },
+  suspended: { bg: "var(--warning-soft)", fg: "var(--warning)",     key: "chat.jobSuspended" },
+  awaiting:  { bg: "var(--warning-soft)", fg: "var(--warning)",     key: "chat.awaitingReview" },
+  done:      { bg: "var(--success-soft)", fg: "var(--success)",     key: "chat.jobDone" },
+  failed:    { bg: "var(--danger-soft)",  fg: "var(--danger)",      key: "chat.jobFailed" },
+  cancelled: { bg: "var(--chip)",         fg: "var(--muted)",       key: "chat.jobCancelled" },
+};
+// awaiting 优先于服务端状态：服务端那会儿还是 running，但对人来说它已经停下来等你了。
+function jobState(status: string, awaiting: boolean): JobState {
+  if (awaiting) return "awaiting";
+  return (status in JOB_TONE && status !== "awaiting" ? status : "running") as JobState;
+}
+
+function confirmButtons(taskId: string, scope?: string, tight = false): string {
   const tid = esc(taskId);
   // scope=agent：授权只在这个任务内有效（端侧只问一次），因此不提供「总是允许(全局)」。
   //
@@ -501,7 +559,10 @@ function confirmButtons(taskId: string, scope?: string): string {
     : `<button data-approve-always="${tid}" class="${btn("ghost", "sm")}">${esc(t("chat.approveAlways"))}</button>`;
   // 稿 1539-1549 的排布：批准（实心橙）+ 总是允许（描边）+ **spacer** + 拒绝右对齐。
   // 拒绝被推到最右不是排版偏好 —— 它和另外两个是相反方向的动作，挨着放很容易点错。
-  return `<div style="display:flex;align-items:center;gap:9px;margin-top:11px;flex-wrap:wrap;">`
+  //
+  // tight：嵌在任务卡的琥珀子卡里时用。那个容器自己是 flex-column + gap 8，
+  // 再带 margin-top 就成了 8+11 的双份间距。独立的确认卡没有 gap，仍然要这条 margin。
+  return `<div style="display:flex;align-items:center;gap:9px;${tight ? "" : "margin-top:11px;"}flex-wrap:wrap;">`
     + `<button data-approve="${tid}" class="${btn("primary", "sm")}">${esc(t("chat.approve"))}</button>`
     + always
     + `<span style="flex:1;"></span>`
@@ -592,18 +653,57 @@ function blockHtml(b: Block, i: number): string {
   if (b.kind === "job") {
     // 代理任务干完一轮会停在 idle —— 那不是「90%」，那是**待确认**（等你说改还是收工）。
     const awaiting = b.agentState === "idle" && b.status !== "done" && b.status !== "failed";
-    const color = b.status === "done" ? "var(--success)" : b.status === "failed" ? "var(--danger)" : "var(--orange)";
-    const confirm = b.confirmTaskId ? confirmButtons(b.confirmTaskId, b.confirmScope) : "";
-    const tag = awaiting
-      ? `<span style="font-size:11.5px;color:var(--orange-text);font-weight:600;background:var(--orange-soft);border:1px solid var(--orange);border-radius:999px;padding:1px 8px;">${esc(t("chat.awaitingReview"))}</span>`
-      : `<span style="font-size:12px;color:var(--orange-text);font-weight:600;">${b.pct}%</span>`;
+    const st = jobState(b.status, awaiting);
+    const tone = JOB_TONE[st];
+    // 稿 1487-1524。相对原来这张卡的四处改动：
+    //   1. 左侧那条 3px 的彩色竖边去掉了，状态改由右上角的**胶囊徽章**承载。
+    //      竖边只有一个颜色维度，同一个橙既是「运行中」也是「待确认」，看不出差别。
+    //   2. 运行中标题前加一枚转圈图标 —— 卡片是静态的，进度条几十秒才动一格，
+    //      没有任何东西告诉你它还活着。（稿把这条 keyframes 叫 umspin，本工程里
+    //      早就有一条一模一样的 umbspin，用现成的，不为改名再加一条重复的。）
+    //   3. 百分比从标题栏挪到进度条右侧，mono 600 11.5px，跟条同色。
+    //   4. 底部补一颗动作按钮：失败给「重试任务」，其余给「查看结果」（跳任务页详情）。
+    //      这张卡以前是**纯展示**的死胡同——任务失败了只能自己去侧栏找任务页。
+    const spin = st === "running"
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--orange)" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" style="flex:none;animation:umbspin 1s linear infinite;"><path d="M20 11a8 8 0 0 0-13.7-5.7L3 8"></path><path d="M3 4v4h4"></path></svg>`
+      : "";
+    // 待确认时不画进度条（稿 taskShowBar: task !== 'idle'）：那个百分比停在哪儿都是误导，
+    // 它不代表「还差多少」，只代表「上一轮跑到哪儿停下来等你」。
+    const bar = awaiting
+      ? ""
+      : `<div style="display:flex;align-items:center;gap:9px;">
+          <span style="flex:1;min-width:0;height:6px;border-radius:999px;background:var(--track);overflow:hidden;display:block;"><span style="display:block;height:100%;width:${b.pct}%;background:${tone.fg};border-radius:999px;"></span></span>
+          <span style="flex:none;font:600 11.5px ui-monospace,Menlo,monospace;color:${tone.fg};">${b.pct}%</span>
+        </div>`;
+    // 稿 1505-1519：待确认的授权嵌在任务卡里时是一块琥珀底的子卡，不是一排裸按钮 ——
+    // 它要求你停下来做决定，得和卡片其余部分在视觉上分开。
+    const confirm = b.confirmTaskId
+      ? `<div style="padding:10px 11px;background:var(--warning-soft);border:1px solid var(--warning);border-radius:9px;display:flex;flex-direction:column;gap:8px;">
+          <div style="display:flex;align-items:center;gap:7px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M12 3 4 6v6c0 5 3.5 7.5 8 9 4.5-1.5 8-4 8-9V6z"></path></svg><span style="flex:1;min-width:0;font-size:12px;font-weight:600;color:var(--warning);">${esc(t("chat.needConfirm"))}</span></div>
+          ${confirmButtons(b.confirmTaskId, b.confirmScope, true)}
+        </div>`
+      : "";
+    const actLabel = st === "failed" ? t("chat.retryTask") : t("chat.viewResult");
     // 长摘要（agent 的输出动辄几百字）限高可滚，别撑破卡片。
-    return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-left:3px solid ${color};border-radius:11px;padding:12px 14px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:9px;"><span style="font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(b.goal)}</span>${tag}</div>
-        <div style="height:6px;border-radius:999px;background:var(--track);overflow:hidden;margin-bottom:8px;"><div style="height:100%;width:${b.pct}%;background:${color};border-radius:999px;"></div></div>
-        <div style="font-size:12.5px;color:var(--muted);display:flex;align-items:flex-start;gap:6px;max-height:150px;overflow-y:auto;"><span style="flex:none;width:6px;height:6px;border-radius:999px;background:${color};margin-top:6px;"></span><span style="flex:1;min-width:0;white-space:pre-wrap;word-break:break-word;">${esc(b.message)}</span></div>
+    return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;display:flex;flex-direction:column;gap:9px;">
+        <div style="display:flex;align-items:center;gap:9px;">
+          ${spin}
+          <span style="flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(b.goal)}</span>
+          <span style="flex:none;display:inline-flex;align-items:center;padding:1px 9px;border-radius:999px;font-size:11px;white-space:nowrap;background:${tone.bg};color:${tone.fg};">${esc(t(tone.key))}</span>
+        </div>
+        ${bar}
+        <span style="font-size:12px;color:var(--muted);line-height:1.7;max-height:150px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${esc(b.message)}</span>
         ${confirm}
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="flex:1;"></span>
+          <button data-jobact="${esc(b.jobId)}" data-jobfail="${st === "failed" ? "1" : ""}" class="${btn("ghost", "sm")}">${esc(actLabel)}</button>
+        </div>
       </div>`;
+  }
+
+  if (b.kind === "system") {
+    // 稿 1412-1413：居中一颗小灰胶囊。刻意做得比任何消息都弱 —— 它不是谁说的话。
+    return `<div style="align-self:center;padding:3px 11px;border-radius:999px;background:var(--chip);color:var(--faint);font-size:11px;white-space:nowrap;">${esc(b.text)}</div>`;
   }
 
   if (b.kind === "done") {
@@ -773,30 +873,59 @@ function renderHeader(): void {
             ? t("chat.lastSeenAt", { time: fmtMsgTime(d.last_seen) })
             : t("chat.offline")
         : t("chat.offline");
+  // 稿 1370-1379：标题栏是**一行**（头像 26 + 名字 14/600 + 副标题 11.5 faint），
+  // 右侧只有两颗 26px 的图标按钮：⋯ 溢出菜单、ⓘ 设备详情。
+  // 原先这里是「头像 32 + 两行堆叠」，外加两颗常驻的文字按钮（复制聊天 / 清空聊天）——
+  // 那两颗一直占着标题栏，而它们都是低频动作，尤其「清空聊天」是破坏性的，
+  // 常驻反而增加误点面积。收进溢出菜单后标题栏干净了，危险动作也多隔了一层。
+  const iconBtn = (id: string, title: string, path: string, on: boolean) =>
+    `<button id="${id}" title="${esc(title)}" style="flex:none;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange-soft)" : "transparent"};color:${on ? "var(--orange-text)" : "var(--muted)"};border-radius:7px;cursor:pointer;transition:border-color .13s ease,color .13s ease;">`
+    + `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${path}</svg></button>`;
   const info =
     activeConv === MAIN
       ? ""
-      : `<button id="udetailbtn" title="${esc(t("chat.deviceDetail"))}" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;border:1px solid ${detailOpen ? "var(--orange)" : "var(--border)"};background:${detailOpen ? "var(--orange-soft)" : "var(--card)"};color:${detailOpen ? "var(--orange-text)" : "var(--text)"};border-radius:8px;cursor:pointer;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 16v-4M12 8h.01"></path></svg></button>`;
+      : iconBtn("udetailbtn", t("chat.deviceDetail"), `<circle cx="12" cy="12" r="9"></circle><path d="M12 16v-4M12 8h.01"></path>`, detailOpen);
   el.innerHTML = `
-    <div style="display:flex;align-items:center;gap:10px;min-width:0;">
-      ${avatarHtml(activeConv, 32)}
-      <div style="min-width:0;">
-        <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(convLabel(activeConv))}</div>
-        <div style="font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:5px;">${presenceDot(activeConv)}${esc(sub)}</div>
-      </div>
-    </div>
-    <div style="display:flex;align-items:center;gap:8px;flex:none;">
-      ${info}
-      <button id="copychat" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:${chatCopied ? "var(--success)" : "var(--text)"};border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>${esc(chatCopied ? t("chat.copiedHistory") : t("chat.copyHistory"))}</button>
-      <button id="clearhist" style="display:flex;align-items:center;gap:6px;padding:6px 13px;border:1px solid var(--border);background:var(--card);color:var(--text);border-radius:8px;font-size:13px;cursor:pointer;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path></svg>${esc(t("chat.clearHistory"))}</button>
-    </div>`;
-  el.querySelector("#copychat")?.addEventListener("click", copyActiveHistory);
-  el.querySelector("#clearhist")?.addEventListener("click", clearActiveHistory);
+    ${avatarHtml(activeConv, 26)}
+    <span style="flex:none;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%;">${esc(convLabel(activeConv))}</span>
+    <span style="flex:none;font-size:11.5px;color:var(--faint);white-space:nowrap;display:flex;align-items:center;gap:5px;min-width:0;overflow:hidden;">${presenceDot(activeConv)}${esc(sub)}</span>
+    <span style="flex:1;min-width:8px;"></span>
+    ${iconBtn("uheadmore", t("chat.more"), `<path d="M6 12h.01M12 12h.01M18 12h.01"></path>`, headMenuOpen)}
+    ${info}
+    ${headMenuOpen ? headMenuHtml() : ""}`;
+  el.querySelector("#uheadmore")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    headMenuOpen = !headMenuOpen;
+    renderHeader();
+  });
+  el.querySelector("#uheadmenu")?.addEventListener("click", (e) => e.stopPropagation());
+  el.querySelector("#uhm-copy")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); void copyActiveHistory(); });
+  el.querySelector("#uhm-clear")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); void clearActiveHistory(); });
   el.querySelector("#udetailbtn")?.addEventListener("click", () => {
     detailOpen = !detailOpen;
     renderHeader();
     renderDetail();
   });
+}
+
+// 标题栏 ⋯ 的溢出菜单。取值照「PC 浮层菜单」组件（宽 142 / 圆角 9 / 内距 4 /
+// 行 6-10 12.5px / 分隔线 --border-soft 上下留 4 边距 6 / 阴影 0 8 24 rgba(0,0,0,.13)）。
+//
+// 稿的菜单是三项：新会话 / 复制聊天 / ── / 清空聊天。这里**只做后两项**：
+// 「新会话」服务端没有对应能力 —— 会话 id 是固定的 'assistant' 与 'device:<id>'，
+// /conversations 只能列举、不能新建，也没有「一个设备下多条会话」的数据结构。
+// 加个按钮点了只能弹个假吐司，或者退化成「清空聊天」的同义词，两种都更糟。
+// 等服务端真支持多会话了再补，那时它还要连带影响左侧联系人列表的结构。
+function headMenuHtml(): string {
+  const row = (id: string, label: string, path: string, danger = false) =>
+    `<div id="${id}" style="display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:6px;font-size:12.5px;color:${danger ? "var(--danger)" : "var(--text)"};white-space:nowrap;cursor:pointer;">`
+    + `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;">${path}</svg>`
+    + `<span style="flex:1;min-width:0;">${esc(label)}</span></div>`;
+  return `<div id="uheadmenu" style="position:absolute;right:14px;top:40px;z-index:40;width:142px;background:var(--card);border:1px solid var(--border);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.13);padding:4px;">`
+    + row("uhm-copy", t("chat.copyHistory"), `<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>`)
+    + `<div style="height:1px;background:var(--border-soft);margin:4px 6px;"></div>`
+    + row("uhm-clear", t("chat.clearHistory"), `<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path>`, true)
+    + `</div>`;
 }
 
 // ── 右栏：设备详情（能力目录）────────────────────────────────────────────────
@@ -968,9 +1097,15 @@ function renderModeBar(wrap: HTMLElement): void {
         : "border:1px solid var(--orange);background:var(--orange-soft);color:var(--orange-text);font-weight:560;";
     return `<button data-mode="${m}" style="display:flex;align-items:center;height:23px;padding:0 11px;border-radius:999px;font-size:11.5px;font-family:inherit;white-space:nowrap;cursor:pointer;transition:background .13s ease,color .13s ease;${skin}">${esc(label)}</button>`;
   }).join("");
+  // 稿 1697-1700：非 auto 时，分段控件右边跟一句灰字，直说这条消息会被怎么处理。
+  // auto 不给提示是对的 —— 「模型自己判断」没有可预告的行为，硬写一句反而像承诺。
+  const hint = chatMode === "auto"
+    ? ""
+    : `<span style="flex:1;min-width:0;font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t(chatMode === "execution" ? "chat.modeHintExec" : "chat.modeHintChat"))}</span>`;
   bar.innerHTML =
     `<span style="font-size:11px;color:var(--muted);flex:none;">${esc(t("chat.modeLabel"))}</span>`
-    + `<span style="display:flex;gap:3px;padding:3px;border-radius:999px;background:var(--chip);flex:none;">${seg}</span>`;
+    + `<span style="display:flex;gap:3px;padding:3px;border-radius:999px;background:var(--chip);flex:none;">${seg}</span>`
+    + hint;
 }
 
 function send(): void {
@@ -994,12 +1129,11 @@ function sendTo(conv: string, text: string): void {
   const s = cs(conv);
   const now = Date.now();
   s.blocks.push({ kind: "user", text: t2, ts: now });
-  // traceOpen 默认 **false**（稿 7240）。这里原先写死 true —— 新回复的工具轨迹自动展开，
-  // 只有历史消息是折叠的。改成跟稿一致之后，轨迹要点一下才展开。
-  // ⚠️ 这条是行为改动不是纯样式：以前能眼看着工具一条条跑出来，现在默认看不到。
-  // 稿是静态图，没有「流式」这个概念，所以它的默认值未必考虑过这一点 —— 如果实际用着别扭，
-  // 把这里改回 true 即可（一个词的事）。
-  s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: false, ts: now });
+  // ⚠️ 这里**故意**和稿不一致：稿 7240 画的轨迹是收起态，但稿是静态图，没有「流式」这个概念。
+  // 正在生成的回复要能眼看着工具一条条跑出来，收起了就等于把过程藏了，所以新回复保持展开。
+  // 注意只有这一处是 true —— 从历史里读出来的回复（loadHistory / 增量同步那三处）仍然收起，
+  // 那些已经跑完了，展开只是噪音。真觉得展开吵，把这一个词改回 false 即可。
+  s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
   s.assistantIdx = s.blocks.length - 1;
   s.lastText = t2;
   s.lastAt = now;
@@ -1038,15 +1172,13 @@ function switchConv(id: string): void {
   stick = true;
   forceScroll = true;
   detailOpen = false;
+  headMenuOpen = false; // 菜单里的动作都是「对当前会话」的，换了会话还开着就有歧义
   renderContacts();
   renderHeader();
   renderDetail();
   renderMessages();
   if (!s.loaded) loadConvHistory(id);
 }
-
-// 「复制聊天」按钮的短暂反馈状态（复制成功后 1.5s 内显示「已复制」）。
-let chatCopied = false;
 
 // 把当前会话序列化成纯文本（消息 + 各类卡片状态），一键复制——方便整段发出去排查问题。
 function conversationToText(convId: string): string {
@@ -1068,23 +1200,24 @@ function conversationToText(convId: string): string {
       lines.push(`[确认卡] ${b.summary}${b.resolved ? `（${b.resolved === "approved" ? "已批准" : "已拒绝"}）` : "（待确认）"}`, "");
     } else if (b.kind === "question") {
       lines.push(`[问答卡] ${b.title}${b.done ? "（已提交）" : "（待回答）"}`, "");
+    } else if (b.kind === "system") {
+      lines.push(`[系统] ${b.text}`, "");
     }
   }
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
-// 复制当前会话历史到剪贴板，按钮短暂变「已复制」。
+// 复制当前会话历史到剪贴板。
+// 反馈从「按钮文字短暂变成已复制」改成了吐司 —— 动作已经收进溢出菜单里，
+// 点完菜单就关了，原来那个会变字的按钮根本不在屏幕上，反馈就丢了。
 async function copyActiveHistory(): Promise<void> {
   try {
     await navigator.clipboard.writeText(conversationToText(activeConv));
-    chatCopied = true;
-    renderHeader();
-    setTimeout(() => {
-      chatCopied = false;
-      renderHeader();
-    }, 1500);
+    showToast(t("chat.copiedHistory"), { tone: "ok" });
   } catch {
-    /* 剪贴板不可用（权限/环境）就算了，别打断使用 */
+    // 剪贴板不可用（权限/环境）时要说一声：这个动作没有别的可见结果，
+    // 静默失败等于用户以为复制成功了，去粘贴才发现是空的。
+    showToast(t("chat.copyFailed"), { tone: "fail" });
   }
 }
 
@@ -1095,6 +1228,7 @@ async function clearActiveHistory(): Promise<void> {
   const confirmMsg = conv === MAIN ? t("chat.clearConfirm") : t("chat.clearConfirmDevice", { name: convLabel(conv) });
   if (!await askConfirm({ message: confirmMsg, confirmText: t("chat.clearHistory"), danger: true })) return;
   clearing = true;
+  selfCleared[conv] = Date.now(); // 必须在发请求**之前**盖章：广播是服务端删完就发，可能比 REST 响应先到
   resetConv(conv);
   renderMessages();
   renderContacts();
@@ -1144,13 +1278,24 @@ export function mount(el: HTMLElement): void {
         <div id="ucontacts" style="flex:1;overflow-y:auto;padding:0 8px 10px;display:flex;flex-direction:column;gap:2px;min-height:0;"></div>
       </aside>
       <section style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;">
-        <div id="uchathead" style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 18px;border-bottom:1px solid var(--border);flex:none;background:var(--card);"></div>
+        <div id="uchathead" style="position:relative;display:flex;align-items:center;gap:9px;padding:10px 16px;border-bottom:1px solid var(--border);flex:none;background:var(--card);"></div>
         <div id="umsgs" style="flex:1;overflow-y:auto;padding:18px 20px 22px;display:flex;flex-direction:column;gap:14px;min-height:0;"></div>
         <div id="ucomposer" style="flex:none;border-top:1px solid var(--border);background:var(--card);"></div>
         <div id="ulightbox"></div>
       </section>
       <aside id="udetail" style="display:none;flex:none;width:272px;border-left:1px solid var(--border);overflow-y:auto;background:var(--rail);"></aside>
     </div>`;
+
+  // 点空白处关掉标题栏的溢出菜单。挂在 document 上（捕获阶段之外即可）而不是壳上 ——
+  // 菜单要能被「点消息区」「点联系人」「点右侧详情」任意一处关掉，壳内冒泡覆盖不全。
+  // 菜单自身与 ⋯ 按钮的 click 都 stopPropagation 了，不会自己把自己关掉。
+  if (docClickHandler) document.removeEventListener("click", docClickHandler);
+  docClickHandler = () => {
+    if (!headMenuOpen) return;
+    headMenuOpen = false;
+    renderHeader();
+  };
+  document.addEventListener("click", docClickHandler);
 
   const contactsEl = el.querySelector("#ucontacts") as HTMLElement;
   contactsEl.addEventListener("click", (e) => {
@@ -1194,12 +1339,29 @@ export function mount(el: HTMLElement): void {
 }
 
 function onMsgsClick(e: Event): void {
-  const el = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit],[data-reconnect]") as HTMLElement | null;
+  const el = (e.target as HTMLElement).closest("[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit],[data-reconnect],[data-jobact]") as HTMLElement | null;
   if (!el) return;
   // ── 错误块的「重新连接」──
   // 用 data-* 而不是 id：一屏里可能有多条错误块，id 会重复。
   if (el.dataset.reconnect !== undefined) {
     chatConn.connect();
+    return;
+  }
+  // ── 任务卡底部的动作按钮 ──
+  if (el.dataset.jobact !== undefined) {
+    const jobId = el.dataset.jobact;
+    if (!jobId) return;
+    if (el.dataset.jobfail) {
+      // 失败 → 重试。retryJob 会保留已完成的步骤，只重跑断掉的那些，所以文案是「重试」不是「重来」。
+      void retryJob(jobId).then((r) => {
+        if (r.ok) showToast(t("chat.retryStarted"), { tone: "ok" });
+        else showToast(r.error || t("chat.retryFailed"), { tone: "fail" });
+      });
+      return;
+    }
+    // 其余 → 跳到任务页并展开这条任务。回调没接上（理论上不会发生）就什么也不做，
+    // 总比抛异常把整个点击代理打断强。
+    openTaskCb?.(jobId);
     return;
   }
   // ── 问答卡 ──
@@ -1280,6 +1442,8 @@ function openLightbox(src: string): void {
 export function unmount(): void {
   container = null;
   chatShellEl = null;
+  headMenuOpen = false;
+  if (docClickHandler) { document.removeEventListener("click", docClickHandler); docClickHandler = null; }
 }
 
 export function serverLabel(): string {

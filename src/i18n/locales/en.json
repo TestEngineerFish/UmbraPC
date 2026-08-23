@@ -639,7 +639,22 @@
     "clearedToast": "Chat cleared",
     "approvedToast": "Approved, running…",
     "deniedToast": "Denied",
-    "alwaysAllowed": "Won't ask again for this kind of action"
+    "alwaysAllowed": "Won't ask again for this kind of action",
+    "more": "More",
+    "copyFailed": "Copy failed — clipboard unavailable",
+    "clearedElsewhere": "Another device cleared this chat history",
+    "jobPending": "Queued",
+    "jobRunning": "Running",
+    "jobSuspended": "Suspended",
+    "jobDone": "Done",
+    "jobFailed": "Failed",
+    "jobCancelled": "Cancelled",
+    "retryTask": "Retry task",
+    "viewResult": "View result",
+    "retryStarted": "Retry started",
+    "retryFailed": "Could not start the retry",
+    "modeHintExec": "This message will create a task and act on it",
+    "modeHintChat": "This message is chat only — no task will be created"
   },
   "clipboard": {
     "searchPh": "Search clipboard…",

@@ -656,6 +656,9 @@ function onKeydown(e: KeyboardEvent): void {
 // 由 React 根（main.tsx）在挂载后调用：接管点击委托、键盘、设备事件订阅。
 export function initLegacy(): void {
   chat.setAppRerender(render);
+  // 聊天里的任务卡「查看结果」→ 跳任务页展开那条。回填而不是让 chat 直接 import 本文件，
+  // 因为本文件已经 import 了 chat（sendText / setAppRerender），反向再引就是循环依赖。
+  chat.setOpenTask(openTaskFrom);
   document.addEventListener("click", onClick); // 委托：处理各页面/弹窗内的 data-act（含侧边栏 nav / 标题栏 theme）
   window.addEventListener("keydown", onKeydown);
   // 快捷入口「发给秘书」：跳到聊天页并把这条消息发给秘书。

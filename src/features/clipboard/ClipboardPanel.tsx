@@ -391,6 +391,18 @@ function Preview({ item, appIcon }: { item?: ClipItem; appIcon?: string }) {
   );
 }
 
+// 右键菜单。
+//
+// ⚠️ 这里的「删除」**故意不弹二次确认**（决策 D24，sam 拍板）。别处删东西都要确认一句，
+// 唯独这里不要，不是漏了：
+//   1. 剪贴板历史本来就是个会过期的缓冲 —— 每类都有「保留时长」，到点自己就没了
+//      （见 ClipboardTool 的分类保留时长设置），用户对「它会消失」本来就有预期；
+//      不像保险箱条目或工作流那样是主动创建、期望长期留存的东西。
+//   2. 删一条是清理噪音时的高频动作（连着删七八条很常见），每条弹一次框会让清理变成折磨。
+//   3. 剪贴板面板是**独立窗口**，够不到主窗口那个 OverlayHost（overlay.tsx 是模块级单例，
+//      每个 React root 各挂一份）。要在这里弹确认得先在本窗口再挂一个 host —— 为一个
+//      本来就不该确认的动作加一套基础设施，不划算。
+//   （清空整个历史是另一回事，那个动作有确认，在主窗口的剪贴板设置里。）
 function Menu({ menu, onClose }: { menu: { x: number; y: number; item: ClipItem }; onClose: () => void }) {
   const { t } = useTranslation();
   const it = menu.item;

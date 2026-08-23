@@ -639,7 +639,22 @@
     "clearedToast": "已清空这段聊天",
     "approvedToast": "已批准，执行中…",
     "deniedToast": "已拒绝",
-    "alwaysAllowed": "以后同类操作不再问"
+    "alwaysAllowed": "以后同类操作不再问",
+    "more": "更多",
+    "copyFailed": "复制失败，剪贴板不可用",
+    "clearedElsewhere": "其它端清空了这段聊天历史",
+    "jobPending": "待执行",
+    "jobRunning": "执行中",
+    "jobSuspended": "已挂起",
+    "jobDone": "已完成",
+    "jobFailed": "失败",
+    "jobCancelled": "已取消",
+    "retryTask": "重试任务",
+    "viewResult": "查看结果",
+    "retryStarted": "已重新开始",
+    "retryFailed": "重试没能启动",
+    "modeHintExec": "这条消息会直接建任务去做事",
+    "modeHintChat": "这条消息只当闲聊，不会建任务"
   },
   "clipboard": {
     "searchPh": "搜索剪贴板…",
