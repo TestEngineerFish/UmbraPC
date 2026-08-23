@@ -7,11 +7,19 @@
 //      定宽是关键，正文左边缘对齐了才扫得动；标签跟着正文流走的话每行起点都不一样。
 //   3. 空态走 EmptyState —— 而且要分清「一条都没有」和「筛掉了」，
 //      后者给一颗「看全部」，不然用户会以为日志坏了。
+//   4. 行首前缀（✓ / └）单独占第三列，底栏说明内存只留 200 条。
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as desktop from "../../services/desktop";
-import type { LogSrc, LogTag } from "../../services/deviceTransport";
+import type { LogMark, LogSrc, LogTag } from "../../services/deviceTransport";
 import { filterChip, filterChipCount, EmptyState } from "../../components/ui";
+
+// 行首前缀（稿 6059-6067、9716-9719）。这是全系统唯一允许用字符代替 SVG 图标的地方——
+// 日志是引擎原样打出来的文本，行首字符属于**内容**而不是图标，复制出去要能和终端对上。
+// ✓ 用成功绿；└ 用 --faint，并且把它那行的正文也降到 --muted ——
+// 续行是上一行的附属信息（结果 / 参数 / 原始返回），和主事件同样重会让人分不清主次。
+const MARK_CHAR: Record<LogMark, string> = { ok: "✓", cont: "└" };
+const MARK_COLOR: Record<LogMark, string> = { ok: "text-success", cont: "text-faint" };
 
 // 标签配色（稿 5033-5041）。info 是 --muted 而不是某种彩色 —— 它是「说明性的补充行」，
 // 上色会跟真正需要注意的行抢视线。
@@ -23,6 +31,10 @@ const TAG_COLOR: Record<LogTag, string> = {
   info: "text-muted",
   error: "text-danger",
 };
+
+// 内存缓冲上限，和 deviceTransport 里 logs.slice(0, 200) 是同一个数。
+// 写成常量是为了底栏那句说明和真实行为对得上——两处各写一个数字，早晚会对不上。
+const LOG_CAP = 200;
 
 type Filter = "all" | LogSrc;
 const FILTERS: { key: Filter; i18n: string }[] = [
@@ -61,7 +73,9 @@ export function Logs() {
             <div key={i} className="flex gap-[11px]">
               <span className="text-muted flex-none">{l.time}</span>
               <span className={`flex-none w-[62px] font-semibold ${TAG_COLOR[l.tag]}`}>{l.tag}</span>
-              <span className="text-text break-all min-w-0">{l.msg}</span>
+              {/* 前缀单独占一列（12px 居中），不挤正文——挤进正文的话每行起点就不齐了，扫不动 */}
+              {l.mark ? <span className={`flex-none w-[12px] text-center ${MARK_COLOR[l.mark]}`}>{MARK_CHAR[l.mark]}</span> : null}
+              <span className={`break-all min-w-0 ${l.mark === "cont" ? "text-muted" : "text-text"}`}>{l.msg}</span>
             </div>
           ))
         ) : (
@@ -75,6 +89,15 @@ export function Logs() {
           />
         )}
       </div>
+      {/* 底栏（稿 2435-2438）。这句「只留 200 条」很要紧：不写的话，用户翻到底发现
+          日志断在某个时间点，会以为是日志坏了或者丢了——其实是内存缓冲的容量到头了。
+          真正的完整记录在日志文件夹里，所以这句话和上面那颗「打开日志文件夹」是一对。 */}
+      {all.length ? (
+        <div className="flex-none flex items-center gap-[9px] px-[22px] py-[8px] border-t border-border bg-rail">
+          <span className="flex-1 min-w-0 text-[11px] text-faint truncate">{t("logs.capNote", { cap: LOG_CAP })}</span>
+          <span className="flex-none whitespace-nowrap font-mono text-[11px] text-faint">{t("logs.capCount", { n: lines.length, cap: LOG_CAP })}</span>
+        </div>
+      ) : null}
     </div>
   );
 }

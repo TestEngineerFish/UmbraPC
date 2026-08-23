@@ -391,7 +391,9 @@
     "filterCap": "Capabilities",
     "noneInFilter": "No logs in this group yet",
     "emptyBody": "Once the device connects and registers, connection events, dispatched tasks and capability runs all show up here.",
-    "showAll": "Show all"
+    "showAll": "Show all",
+    "capNote": "Only the latest {{cap}} lines are kept in memory — no paging. Older entries live in the logs folder, one file per day.",
+    "capCount": "{{n}} / {{cap}} lines"
   },
   "tasks": {
     "countLine": "{{n}} total · {{running}} running",

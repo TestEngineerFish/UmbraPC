@@ -32,10 +32,18 @@ export interface TaskLog {
 // 合成一个维度就表达不了 —— 它要么被归进错误组，要么就没有颜色。
 export type LogSrc = "conn" | "jobs" | "cap";
 export type LogTag = "conn" | "job" | "cap" | "warn" | "info" | "error";
+/** 行首字符前缀。`ok` → ✓（成功事件，绿）；`cont` → └（上一行的续行：结果/参数/原始返回，灰）。
+ *
+ *  设计规范禁止用 Unicode 符号代替图标，**日志是唯一的例外**，稿里写明了理由：
+ *  日志是引擎原样打出来的文本，行首字符属于内容而不是图标 —— 复制出去要能和终端对上。
+ *  所以它单独占一列（12px 居中），不跟正文挤，也不换成 SVG。 */
+export type LogMark = "ok" | "cont";
 export interface LogLine {
   time: string;
   tag: LogTag;
   src: LogSrc;
+  /** 见 LogMark。没有前缀时是 undefined。 */
+  mark?: LogMark;
   msg: string;
 }
 
@@ -76,14 +84,16 @@ let notify: (kind: string) => void = () => {};
 
 const wsUrl = () => getServerUrl().replace(/^http/, "ws") + "/ws/device";
 
-function log(msg: string, tag: LogTag = "info", src: LogSrc = "conn"): void {
-  logs.unshift({ time: new Date().toLocaleTimeString(), tag, src, msg });
+function log(msg: string, tag: LogTag = "info", src: LogSrc = "conn", mark?: LogMark): void {
+  logs.unshift({ time: new Date().toLocaleTimeString(), tag, src, mark, msg });
   logs = logs.slice(0, 200); // 内存里只留最近 200 条给界面看
   // 同时落盘（userData/logs/umbra-YYYY-MM-DD.log）：应用一关内存日志就没了，
   // 而排查问题往往是事后才想起来要看日志。
   // 落盘的仍然是**纯文本**：日志文件是给人拿文本编辑器看的，塞 tag/src 只会碍事；
   // 分组是界面的事，文件里那一行本身就带着足够的语义。
-  window.umbra?.appendLog(msg);
+  // 落盘时把前缀**拼回正文**：日志文件没有"列"，`└ 结果：…` 那条不带前缀就成了
+  // 一句无主的话，看不出它是上一行的续行。界面上前缀单独成列，文件里它就得在句首。
+  window.umbra?.appendLog(mark === "ok" ? `✓ ${msg}` : mark === "cont" ? `　└ ${msg}` : msg);
   notify("log");
 }
 function setStatus(s: DeviceState["status"]): void {
@@ -221,7 +231,7 @@ function onMessage(raw: string): void {
       registeredThisSession = true;
       registeredAt = Date.now();
       backoff = 2000;
-      log(`✓ 已注册为 ${deviceName}（${deviceId}）`, "conn", "conn");
+      log(`已注册为 ${deviceName}（${deviceId}）`, "conn", "conn", "ok");
       setStatus("online");
       startHeartbeat();
       flushPending();
@@ -293,7 +303,7 @@ async function handleTask(msg: any): Promise<void> {
     recordTask(taskId, "ok", "完成", provider, skill);
     const sent = sendOrQueue(taskId, { type: "task_result", task_id: taskId, status: "ok", result });
     log(`任务完成 [${short(taskId)}] ${provider}.${skill} 用时 ${sec}s${sent ? "" : "（结果上报失败，已入队待重发）"}`, "job", "jobs");
-    log(`　└ 结果：${brief(result, 240)}`, "info", "jobs");
+    log(`结果：${brief(result, 240)}`, "info", "jobs", "cont");
   } catch (e) {
     const err = e instanceof Error ? e.message : String(e);
     const sec = ((Date.now() - t0) / 1000).toFixed(1);

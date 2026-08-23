@@ -391,7 +391,9 @@
     "filterCap": "能力执行",
     "noneInFilter": "这一组暂时没有日志",
     "emptyBody": "连上服务端并注册成功后，连接、任务下发与能力执行都会记在这里。",
-    "showAll": "看全部"
+    "showAll": "看全部",
+    "capNote": "内存里只留最近 {{cap}} 条，不翻页。更早的在日志文件夹里，按天分文件。",
+    "capCount": "{{n}} / {{cap}} 条"
   },
   "tasks": {
     "countLine": "共 {{n}} 个 · {{running}} 个执行中",
