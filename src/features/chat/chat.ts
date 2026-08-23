@@ -751,7 +751,10 @@ function blockHtml(b: Block, i: number): string {
         return `${img}<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg><a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--orange-text);text-decoration:none;font-weight:500;">${esc(r.title)}</a></div>`;
       })
       .join("");
-    return `<div style="align-self:flex-start;max-width:82%;background:var(--success-soft);border:1px solid var(--success);border-left:3px solid var(--success);border-radius:11px;padding:12px 14px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;display:flex;align-items:center;gap:7px;">${svgIcon(ICON_CHECK, 14, 2.2)}<span style="min-width:0;">${esc(t("chat.done"))}：${esc(b.goal)}</span></div>${links}</div>`;
+    // 左边那条 3px 竖条去掉了：这张卡已经有 --success-soft 底 + --success 描边 + 对勾图标
+    // 三处在表状态，第四处纯属重复。分层只用「1px 描边 + 底色差」——
+    // 同一批把任务卡的竖条也去掉了，两张卡保持一套语言。
+    return `<div style="align-self:flex-start;max-width:82%;background:var(--success-soft);border:1px solid var(--success);border-radius:11px;padding:12px 14px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;display:flex;align-items:center;gap:7px;">${svgIcon(ICON_CHECK, 14, 2.2)}<span style="min-width:0;">${esc(t("chat.done"))}：${esc(b.goal)}</span></div>${links}</div>`;
   }
 
   if (b.kind === "confirm") {
