@@ -15,10 +15,14 @@ import {
   IconVolume, IconWindow, IconX,
 } from "../../components/icons";
 import {
-  Blank, BTN_SEC, CardList, CELL, CELL_MONO, CheckRow, Code, CodeRow, Dlg, FLD, FLD_MONO, Fold, Hint,
+  Blank, BTN_SEC, CardList, CELL, CELL_MONO, CheckRow, Code, CodeRow, Dlg, DLG_CANCEL, dlgOk, FLD, FLD_MONO, Fold, Hint,
   HotkeyField, Note, PickField, Pill, Row, RowTable, Sec, sameConfig,
 } from "./nodeform";
 import type { DlgWidth } from "./nodeform";
+// 对象库那三颗 26px 图标钮以前是手写的，hover 写成了 bg-hover ——
+// 违反硬规则「次要按钮 hover 只转描边与文字色，不改底色」，还漏了 cursor 和过渡。
+// 换成全局工厂的 icon(26)，那三样它都带着。
+import { icon } from "../../components/kit";
 import { displayAccel } from "../../components/hotkey";
 import { ContextMenu } from "./menu";
 import type { MenuItem } from "./menu";
@@ -593,9 +597,9 @@ function ObjectLibrary({ prefabs, canAdd, onDragItem, onPrefab, onDelPrefab, onC
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索对象"
               className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
           </div>
-          <button className="w-[26px] h-[26px] flex-none flex items-center justify-center bg-transparent border border-border rounded-[7px] text-muted hover:bg-hover" title="全部展开" onClick={() => setAll(false)}><IconChevronDown size={13} /></button>
-          <button className="w-[26px] h-[26px] flex-none flex items-center justify-center bg-transparent border border-border rounded-[7px] text-muted hover:bg-hover" title="全部折叠" onClick={() => setAll(true)}><IconChevronRight size={13} /></button>
-          <button className="w-[26px] h-[26px] flex-none flex items-center justify-center bg-transparent border border-border rounded-[7px] text-muted hover:bg-hover" title="收起对象库" onClick={onClose}><IconX size={13} /></button>
+          <button className={icon(26)} title="全部展开" onClick={() => setAll(false)}><IconChevronDown size={13} /></button>
+          <button className={icon(26)} title="全部折叠" onClick={() => setAll(true)}><IconChevronRight size={13} /></button>
+          <button className={icon(26)} title="收起对象库" onClick={onClose}><IconX size={13} /></button>
         </div>
         <div className="text-[11px] text-faint leading-[1.5]">拖到画布上放置 · 点一下看它做什么</div>
       </div>
@@ -2655,12 +2659,10 @@ function WfDialog({ init, taken, onOk, onClose }: {
 
         <div className="flex items-center gap-[8px] px-[15px] py-[11px] border-t border-border bg-rail flex-none">
           <span className="flex-1 min-w-0 text-[11.5px] text-faint truncate">{problem}</span>
-          <button onClick={onClose}
-            className="flex-none whitespace-nowrap px-[14px] py-[6px] border border-border rounded-[8px] text-[12.5px] bg-transparent hover:bg-hover">取消</button>
+          <button onClick={onClose} className={DLG_CANCEL}>取消</button>
           <button disabled={!!problem}
             onClick={() => onOk({ name: trimmed, desc: desc.trim(), ic, icon })}
-            className={`flex-none whitespace-nowrap px-[16px] py-[6px] rounded-[8px] text-[12.5px] font-semibold ${
-              problem ? "bg-chip text-faint cursor-not-allowed" : "bg-orange text-white cursor-pointer hover:bg-orange-deep"}`}>
+            className={dlgOk(!!problem)}>
             {init ? "保存" : "新建"}
           </button>
         </div>
@@ -2694,8 +2696,7 @@ function WfDelConfirm({ name, onOk, onClose }: { name: string; onOk: () => void;
           </div>
         </div>
         <div className="flex justify-end gap-[8px] mt-[16px]">
-          <button onClick={onClose}
-            className="flex-none whitespace-nowrap px-[14px] py-[6px] border border-border rounded-[8px] text-[12.5px] bg-transparent hover:bg-hover">取消</button>
+          <button onClick={onClose} className={DLG_CANCEL}>取消</button>
           <button onClick={onOk}
             className="flex-none whitespace-nowrap px-[16px] py-[6px] rounded-[8px] text-[12.5px] font-semibold bg-danger text-white">删除</button>
         </div>

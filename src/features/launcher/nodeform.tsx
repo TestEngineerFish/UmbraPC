@@ -27,6 +27,19 @@ export const FLD_MONO = "w-full px-[9px] py-[6px] border border-border rounded-[
 // 次要按钮（「选择」「选目录」这类挂在输入框右边的）
 export const BTN_SEC = "flex-none whitespace-nowrap flex items-center gap-[5px] px-[11px] py-[6px] border border-border rounded-[8px] text-[12px] bg-transparent hover:border-orange hover:text-orange-text";
 
+// 弹窗底栏那对「取消 / 保存」。三处弹窗（新建工作流、编辑工作流、节点配置）各手写了一份
+// 近似但不相同的版本，其中「取消」的 hover 写成了 `hover:bg-hover` ——
+// 违反硬规则「次要按钮 hover 只转描边与文字色，不改底色」。收成两个常量，改一处等于改三处。
+//
+// 刻意**不用**全局的 btn() 工厂：它是圆角 7，而这一层弹窗自己的规矩是
+// 「圆角只有三档：12（弹窗）/ 8（控件、内嵌容器）/ 999（药丸）」（见本文件头部）。
+// 用全局工厂会当场破掉这条局部规矩，得不偿失。
+export const DLG_CANCEL = "flex-none whitespace-nowrap px-[14px] py-[6px] border border-border rounded-[8px] text-[12.5px] bg-transparent cursor-pointer transition-colors duration-[130ms] ease-out hover:border-orange hover:text-orange-text";
+/** 弹窗主操作。禁用态按硬规则走 --chip 底 + --faint 字 + not-allowed，**不降透明度**。 */
+export const dlgOk = (disabled = false) =>
+  "flex-none whitespace-nowrap px-[16px] py-[6px] rounded-[8px] text-[12.5px] font-semibold border-none transition-colors duration-[130ms] ease-out "
+  + (disabled ? "bg-chip text-faint cursor-not-allowed" : "bg-orange text-white cursor-pointer hover:bg-orange-deep");
+
 // 弹窗宽度三档。键就是档位名，值必须是**字面量**——Tailwind 只扫源码里出现过的类名，
 // 拼出来的 `w-[${n}px]` 不会被生成。
 const W: Record<string, string> = {
@@ -108,10 +121,8 @@ export function Dlg({ width = "sm", icon: Icon, title, sub, dirty, onClose, onSa
                 className="flex-none whitespace-nowrap flex items-center gap-[6px] px-[12px] py-[6px] border border-danger rounded-[8px] text-danger text-[12.5px] bg-transparent hover:bg-danger hover:text-white"><IconTrash size={13} />删除节点</button>
             ) : null}
             <span className="flex-1" />
-            <button onClick={tryClose}
-              className="flex-none whitespace-nowrap px-[14px] py-[6px] border border-border rounded-[8px] text-[12.5px] bg-transparent hover:bg-hover">取消</button>
-            <button onClick={onSave}
-              className="flex-none whitespace-nowrap px-[16px] py-[6px] border-none bg-orange text-white rounded-[8px] text-[12.5px] font-semibold hover:bg-orange-deep">保存</button>
+            <button onClick={tryClose} className={DLG_CANCEL}>取消</button>
+            <button onClick={onSave} className={dlgOk()}>保存</button>
           </div>
         )}
       </div>
