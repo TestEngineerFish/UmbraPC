@@ -7,8 +7,9 @@
 // 布局要点：**一个语言一张卡、各自一个刷新按钮、各自的 loading**。
 // Java 扫得快（一条 java_home 就够），Python 慢得多（要跑 pyenv / uv 好几个命令），
 // 合成一个刷新按钮就是让快的等慢的。
-import { useCallback, useEffect, useState } from "react";
-import { Panel, Pill, RefreshButton, ErrorCard } from "../../components/ui";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Panel, Pill, RefreshButton, ErrorCard, Modal, btn } from "../../components/ui";
+import { showToast } from "../../components/overlay";
 import { IconCheck, IconAlert, IconInfo, IconCopy, IconCpu, IconCode } from "../../components/icons";
 import { RUNTIME_SOURCE, hasRuntime, runtimeApi, type RuntimeIssue, type RuntimeScan } from "./bridges";
 
@@ -75,6 +76,7 @@ function RuntimeCard({ kind, label, hint }: { kind: "java" | "python"; label: st
   const [scan, setScan] = useState<RuntimeScan | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [pathOpen, setPathOpen] = useState(false);
 
   const load = useCallback(async () => {
     setBusy(true); setErr("");
@@ -92,6 +94,14 @@ function RuntimeCard({ kind, label, hint }: { kind: "java" | "python"; label: st
 
   const worst = scan?.issues.find((i) => i.level === "error") ? "error"
     : scan?.issues.find((i) => i.level === "warn") ? "warn" : "";
+
+  // 只在终端 PATH 里、Umbra 进程看不到的目录。比较时抹掉结尾斜杠 ——
+  // `/usr/bin` 和 `/usr/bin/` 是同一个目录，不归一化会凭空多出「差异」。
+  const shellOnly = useMemo(() => {
+    if (!scan) return [];
+    const own = new Set(scan.appPathDirs.map((d) => d.replace(/\/+$/, "")));
+    return scan.shellPathDirs.filter((d) => !own.has(d.replace(/\/+$/, "")));
+  }, [scan]);
 
   return (
     <Panel stack>
@@ -229,6 +239,20 @@ function RuntimeCard({ kind, label, hint }: { kind: "java" | "python"; label: st
           </div>
         ) : null}
 
+        {/* PATH 面板入口（稿 2997 那颗「PATH…」+ 3348-3383 的弹窗）。
+            扫描结果里一直带着 pathDirs，但界面上一处引用都没有 —— 而「终端里明明能跑、
+            Umbra 说找不到」几乎全是 PATH 差异造成的，把它藏起来等于把最有用的线索藏起来。 */}
+        {scan.appPathDirs.length ? (
+          <div className="flex items-center gap-[8px]">
+            <span className="text-[11.5px] text-muted flex-none">PATH</span>
+            <span className="text-[11.5px] text-faint flex-1 min-w-0 truncate">
+              Umbra 看到 {scan.appPathDirs.length} 个目录
+              {shellOnly.length ? `，终端里还多 ${shellOnly.length} 个` : ""}
+            </span>
+            <button className={btn("ghost", "sm")} onClick={() => setPathOpen(true)}>PATH…</button>
+          </div>
+        ) : null}
+
         {/* 诊断。坏的排最上面（sortIssues 已经排好，这里不再动顺序）。 */}
         {scan.issues.length ? (
           <div>
@@ -248,7 +272,71 @@ function RuntimeCard({ kind, label, hint }: { kind: "java" | "python"; label: st
           </div>
         )}
       </>) : null}
+
+      {pathOpen && scan ? (
+        <PathModal scan={scan} shellOnly={shellOnly} onClose={() => setPathOpen(false)} />
+      ) : null}
     </Panel>
+  );
+}
+
+// 「Umbra 看到的 PATH」弹窗（稿 3348-3383）。
+//
+// 与稿的一处偏离：「复制」放在了底栏而不是标题右侧。弹窗壳自己的注释写着
+// 「标题右侧只放动作图标，不放第二个动作（设计稿硬规则）」—— 两处稿打架时按硬规则走。
+function PathModal({ scan, shellOnly, onClose }: { scan: RuntimeScan; shellOnly: string[]; onClose: () => void }) {
+  const dirs = scan.appPathDirs;
+  // 「谁在这个目录里」：拿 installs 的 bin 反查。同一个目录可能装了好几个版本，
+  // 全列出来会把行撑爆，所以只标第一个 —— 这一栏是线索不是清单，点进版本列表看全的。
+  const hitOf = (dir: string) => {
+    const d = dir.replace(/\/+$/, "");
+    const it = scan.installs.find((x) => (x.bin || "").replace(/\/+$/, "") === d);
+    return it ? `${scan.kind} ${it.version} 在这` : "";
+  };
+  // 重复目录：只标后出现的那一个，并指回第一次出现的序号 —— 两个都标的话
+  // 看不出「谁才是生效的那个」（PATH 里谁在前面谁生效）。
+  const firstAt = new Map<string, number>();
+  dirs.forEach((d, i) => { const k = d.replace(/\/+$/, ""); if (!firstAt.has(k)) firstAt.set(k, i); });
+  const pad = String(dirs.length).length;
+  return (
+    <Modal width={620} title={`Umbra 看到的 PATH`} sub={`${dirs.length} 个目录`} onClose={onClose}
+      footer={<>
+        <span className="flex-1" />
+        <button className={btn("ghost", "sm")}
+          onClick={() => { void navigator.clipboard.writeText(dirs.join("\n")); showToast("已复制 PATH", { tone: "ok" }); }}>复制</button>
+      </>}>
+      <div className="border border-border rounded-[9px] overflow-hidden bg-rail">
+        {dirs.map((dir, i) => {
+          const hit = hitOf(dir);
+          const dupOf = firstAt.get(dir.replace(/\/+$/, ""));
+          const dup = dupOf !== undefined && dupOf !== i ? `重复（与 ${dupOf + 1}）` : "";
+          return (
+            <div key={i} className={`flex items-center gap-[10px] px-[11px] py-[7px] ${i ? "border-t border-border-soft" : ""}`}>
+              <span className="flex-none font-mono text-[11.5px] text-faint whitespace-pre">{String(i + 1).padStart(pad, " ")}</span>
+              <span className="flex-1 min-w-0 font-mono text-[11.5px] truncate select-text" title={dir}>{dir}</span>
+              {hit ? <span className="flex-none text-[11px] text-orange-text whitespace-nowrap">← {hit}</span> : null}
+              {dup ? (
+                <span className="flex-none flex items-center gap-[4px] text-[11px] text-warning whitespace-nowrap">
+                  <IconAlert size={11} />{dup}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      {shellOnly.length ? (
+        <div className="flex flex-col gap-[6px]">
+          <span className="text-[11px] font-semibold tracking-[.06em] text-faint">
+            只在终端 PATH 里、Umbra 看不到的（{shellOnly.length} 个）
+          </span>
+          {shellOnly.map((d) => <span key={d} className="font-mono text-[11.5px] text-muted select-text">{d}</span>)}
+          <span className="text-[11.5px] text-muted leading-[1.75] [text-wrap:pretty]">
+            macOS 的图形界面程序不继承登录 shell 的 PATH，这是系统行为。
+            所以「终端里明明能跑、Umbra 说找不到」多半就是这里的差异。
+          </span>
+        </div>
+      ) : null}
+    </Modal>
   );
 }
 

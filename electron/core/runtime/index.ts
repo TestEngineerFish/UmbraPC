@@ -16,10 +16,22 @@ export function registerRuntimeIpc(): void {
     try {
       return await scanRuntime(k);
     } catch (err) {
+      // ⚠️ 这里以前回的是 `issues: []`，而上面那句注释写着「UI 照样能显示原因」——
+      // 其实显示不了：界面只渲染 issues，partial 是通过 diagnoseEnv 转成 E3 才露面的，
+      // 而走到这个 catch 说明 diagnoseEnv 压根没跑到。结果就是整页扫描炸了之后
+      // 界面一片空白、一个字的原因都没有。所以这里自己把失败原因包成一条 issue。
+      const reason = `扫描失败：${String(err).replace("Error: ", "").slice(0, 200)}`;
       return {
-        kind: k, installs: [], actives: [], issues: [], managers: [], aliases: {}, pathDirs: [],
+        kind: k, installs: [], actives: [], managers: [], aliases: {},
+        pathDirs: [], appPathDirs: [], shellPathDirs: [],
+        issues: [{
+          code: "E0", level: "error" as const,
+          title: "运行时扫描没能完成",
+          detail: `${reason}\n下面的清单是空的，不代表你机器上没装 —— 是这次没扫成。`,
+          fix: "",
+        }],
         scannedAt: Date.now(), elapsedMs: 0,
-        partial: [`扫描失败：${String(err).replace("Error: ", "").slice(0, 200)}`],
+        partial: [reason],
       };
     }
   });

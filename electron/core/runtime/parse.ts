@@ -49,7 +49,14 @@ export interface RuntimeScan {
   issues: Issue[];
   managers: ManagerInfo[];
   aliases: Record<string, string>;
+  /** 探测实际用的 PATH：`appPathDirs` 与 `shellPathDirs` 的并集（Umbra 自己的在前）。 */
   pathDirs: string[];
+  /** Umbra 进程自己的 PATH。界面上「Umbra 看到的 PATH」列的就是这个。 */
+  appPathDirs: string[];
+  /** 登录 shell 的真实 PATH；读不到（或 Windows）时是空数组。
+   *  和 appPathDirs 的差集就是「只在终端里、Umbra 看不到的目录」——
+   *  macOS 图形界面程序不继承登录 shell 的 PATH，这是「终端里明明有、Umbra 说没有」的头号原因。 */
+  shellPathDirs: string[];
   scannedAt: number;
   elapsedMs: number;
   /** 哪些探测超时/失败了。**必须显示** —— 静默少一条比报错更坏。 */

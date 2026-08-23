@@ -387,7 +387,12 @@ export async function scanRuntime(kind: RuntimeKind): Promise<RuntimeScan> {
     issues: sortIssues([...r.issues, ...env]),
     managers: r.managers,
     aliases: shell.aliases,
+    // 三个都回：并集是「探测用了哪些目录」，另两个是界面要分开展示的两份原始清单。
+    // 以前只回并集，结果「Umbra 看到的」和「终端里有的」在界面上根本分不开 ——
+    // 而这两者的差异恰恰是运行时问题里最常见的那一类。
     pathDirs: probeDirs,
+    appPathDirs: ownDirs,
+    shellPathDirs: shell.pathDirs,
     scannedAt: Date.now(),
     elapsedMs: Date.now() - t0,
     partial: p.partial,

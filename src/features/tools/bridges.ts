@@ -92,7 +92,12 @@ export interface RuntimeScan {
   issues: RuntimeIssue[];
   managers: RuntimeManager[];
   aliases: Record<string, string>;
+  /** 探测实际用的 PATH：appPathDirs 与 shellPathDirs 的并集。 */
   pathDirs: string[];
+  /** Umbra 进程自己的 PATH。 */
+  appPathDirs: string[];
+  /** 登录 shell 的真实 PATH；读不到（或 Windows）时是空数组。 */
+  shellPathDirs: string[];
   scannedAt: number;
   elapsedMs: number;
   /** 哪些探测超时/失败了。**必须显示** —— 静默少一条比报错更坏。 */
