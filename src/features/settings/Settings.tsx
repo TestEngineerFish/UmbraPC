@@ -361,7 +361,19 @@ export function Settings() {
                 };
                 return (
                   <SettingRow key={key} label={label}>
-                    <RowHint />
+                    {/* 副文案是这一行对应的**真实技能名**（稿 6026-6034 也给每行配了副文案）。
+                        它不是装饰：执行前确认卡和日志里出现的都是这个 key，
+                        对不上的话用户被弹了一次授权，回到设置页也不知道该改哪一行。
+                        稿把 open_app 写成「open_app / activate」、click 写成「click / double_click」——
+                        activate 和 double_click 在服务端与主进程里都不存在，是稿自己编的，
+                        这里只写真实存在的那一个。
+                        「拖拽」额外带一句风险提示：它是唯一一个「一次误操作就能把文件拖进
+                        回收站/改掉窗口布局」的动作，而 settings.skillDragHint 这个 key
+                        定义了却一直零引用，那句提示从来没露过面。 */}
+                    <RowHint>
+                      <span className="font-mono text-[11.5px]">{key}</span>
+                      {key === "drag" ? <span className="text-warning"> — {t("settings.skillDragHint")}</span> : null}
+                    </RowHint>
                     <Segmented value={cur} onChange={set} options={[
                       { v: "ask" as const, label: t("settings.policy_ask"), tone: "neutral" },
                       { v: "allow" as const, label: t("settings.policy_allow"), tone: "accent" },

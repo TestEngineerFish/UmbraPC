@@ -217,6 +217,9 @@ async function loadDevices(): Promise<void> {
   devices = await fetchAllDevices();
   renderContacts();
   renderHeader();
+  // 设备上/下线是这条路进来的（device_presence 事件），消息区不重绘，
+  // 所以离线横幅要在这里单独刷一次 —— 不然设备刚掉线，横幅要等到你发条消息才出现。
+  refreshOfflineBar();
   if (detailOpen) renderDetail();
 }
 
@@ -1109,6 +1112,9 @@ function renderMessages(preserve = false): void {
       .join("");
   }
   refreshComposer();
+  // 离线横幅跟着消息区一起刷：设备上下线会走 device_presence → loadDevices → renderContacts，
+  // 但那条路不重绘消息区，所以下面 loadDevices 里也单独叫了一次。
+  refreshOfflineBar();
   if (preserve) return; // 上拉加载：由调用方手动恢复滚动位置
   if (stick || forceScroll) {
     el.scrollTop = el.scrollHeight;
@@ -1129,11 +1135,9 @@ function refreshComposer(): void {
     return;
   }
   wrap.style.display = "";
-  const d = deviceOf(activeConv);
   const ph = t("chat.placeholder");
   if (!wrap.querySelector("#draft")) {
     wrap.innerHTML = `
-      <div id="uoffline"></div>
       <div id="umodebar" style="display:flex;gap:8px;align-items:center;padding:8px 16px 0;"></div>
       <div style="display:flex;gap:10px;align-items:flex-end;padding:10px 16px 12px;">
         <textarea id="draft" rows="2" class="flex-1 resize-none border border-border bg-bg text-text rounded-[10px] px-[12px] py-[9px] text-[13.5px] leading-[1.5] font-[inherit] max-h-[120px] outline-none transition-[border-color,box-shadow] duration-[130ms] ease-out hover:border-orange focus:border-orange focus:shadow-[var(--focus-ring)]"></textarea>
@@ -1158,11 +1162,26 @@ function refreshComposer(): void {
   const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
   ta.placeholder = ph;
   if (ta.value !== (drafts[activeConv] || "")) ta.value = drafts[activeConv] || "";
-  const off = wrap.querySelector("#uoffline") as HTMLElement;
-  off.innerHTML =
-    d && !d.online
-      ? `<div style="display:flex;align-items:center;gap:7px;padding:8px 16px 0;font-size:11.5px;color:var(--muted);"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><circle cx="12" cy="12" r="9"></circle></svg><span>${esc(t("chat.deviceOfflineHint"))}</span></div>`
-      : "";
+}
+
+// 设备离线横幅（稿 1390-1395）：贴在会话头下面，横跨整个消息区顶部。
+//
+// ⚠️ 这块以前写在 composer 里（`#uoffline`），于是**永远不会渲染**：
+// composer 在 `activeConv !== MAIN` 时整个 display:none 并提前 return，
+// 而横幅要提示的恰恰是「你正在看的这台设备离线了」—— 只有设备会话才需要它。
+// 主会话对面是秘书，不是设备，deviceOf(MAIN) 永远是 undefined，那个判断从来没真过。
+// 稿把它画在会话头下面而不是输入框里，也是这个道理：它说的是整个会话的状态，
+// 不是「你这条消息发不出去」（设备会话本来就不能发消息）。
+function refreshOfflineBar(): void {
+  if (!container) return;
+  const bar = container.querySelector("#uofflinebar") as HTMLElement | null;
+  if (!bar) return;
+  const d = activeConv === MAIN ? undefined : deviceOf(activeConv);
+  bar.innerHTML = d && !d.online
+    ? `<div style="flex:none;display:flex;align-items:center;gap:8px;padding:8px 16px;background:var(--warning-soft);border-bottom:1px solid var(--warning);">`
+      + `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M12 4 2.5 20h19zM12 10v4M12 17v.01"></path></svg>`
+      + `<span style="flex:1;min-width:0;font-size:11.5px;color:var(--warning);">${esc(t("chat.deviceOfflineHint"))}</span></div>`
+    : "";
 }
 
 // 渲染「自动/聊天/执行」三态切换条（当前项高亮）。仅主会话显示（设备会话语义不同）。
@@ -1372,6 +1391,7 @@ export function mount(el: HTMLElement): void {
       </aside>
       <section style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;">
         <div id="uchathead" style="position:relative;display:flex;align-items:center;gap:9px;padding:10px 16px;border-bottom:1px solid var(--border);flex:none;background:var(--card);"></div>
+        <div id="uofflinebar"></div>
         <div id="umsgs" style="flex:1;overflow-y:auto;padding:18px 20px 22px;display:flex;flex-direction:column;gap:14px;min-height:0;"></div>
         <div id="ucomposer" style="flex:none;border-top:1px solid var(--border);background:var(--card);"></div>
         <div id="ulightbox"></div>
