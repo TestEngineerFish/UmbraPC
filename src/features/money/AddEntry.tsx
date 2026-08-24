@@ -1,6 +1,9 @@
 // 记一笔 / 编辑这一笔（520px 弹窗，对齐稿 1013–1108）。
 //
-// 金额框直接吃算式（258/3），求值在 money.ts 的 amountToCents，闸门也在那边。
+// 金额框直接吃算式（258/3），求值在 moneyKit.ts 的 amountToCents，闸门也在那边。
+// （moneyKit 原名 money.ts —— 和 Money.tsx 只差大小写，Mac 的文件系统不分大小写，
+// rollup 会把 `./Money` 解析到 money.ts 头上直接构建失败。同目录里**不要**再建
+// 与组件文件同名仅大小写不同的文件。）
 // 保存 = PUT /money/entries/{id}，id 客户端生成 —— 编辑与新建走同一条路，
 // 服务端按 updated_at_ms 逐条 last-write-wins。
 //
@@ -12,7 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { saveMoneyEntry, type MoneyCat, type MoneyEntry } from "../../services/server";
 import { Modal, ErrorCard, btn } from "../../components/ui";
-import { amountToCents, catIcon, catColor, isExpr, SUBS, tzOffsetMin, yuan } from "./money";
+import { amountToCents, catIcon, catColor, isExpr, SUBS, tzOffsetMin, yuan } from "./moneyKit";
 
 const BTN_GHOST = btn("ghost");
 const BTN_PRIMARY = btn("primary");

@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 import type { MoneyEntry } from "../../services/server";
 import { ContextMenu, EmptyState } from "../../components/ui";
 import { IconChevronDown, IconPencil, IconSearch, IconTrash } from "../../components/icons";
-import { catColor, catIcon, groupByDay, SRC_ICON, yuan } from "./money";
+import { catColor, catIcon, groupByDay, SRC_ICON, yuan } from "./moneyKit";
 
 interface Ctx { x: number; y: number; entry: MoneyEntry }
 

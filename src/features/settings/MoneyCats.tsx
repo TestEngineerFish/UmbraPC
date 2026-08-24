@@ -14,7 +14,7 @@ import { useTranslation } from "react-i18next";
 import { fetchMoneyCats, updateMoneyCat, type MoneyCat } from "../../services/server";
 import { showToast } from "../../components/overlay";
 import { Modal, EmptyState, btn } from "../../components/ui";
-import { catColor, catIcon, SUBS } from "../money/money";
+import { catColor, catIcon, SUBS } from "../money/moneyKit";
 
 const BTN_S = "flex-none whitespace-nowrap px-[9px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-orange hover:text-orange-text";
 const BTN_S_WARN = "flex-none whitespace-nowrap px-[9px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-warning hover:text-warning";

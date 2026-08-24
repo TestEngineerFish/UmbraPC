@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import {
   amountToCents, catIcon, catColor, groupByDay, isExpr, normalizeAmount, shiftYm, ymOf, yuan,
-} from "../src/features/money/money";
+} from "../src/features/money/moneyKit";
 
 describe("金额算式 · 正常路", () => {
   const ok: [string, number][] = [

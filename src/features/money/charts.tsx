@@ -6,7 +6,7 @@
 // 最多十来个点，整画一次远小于一帧的预算；换来的是「主题切换 → App 重渲染 →
 // 这里自动跟着重画」，不用自己去监听 data-theme。窗口拉伸靠 ResizeObserver。
 import { useEffect, useRef, useState } from "react";
-import { yuan } from "./money";
+import { yuan } from "./moneyKit";
 
 /** 读 CSS 变量的当前值（跟着主题走）。在容器元素上读，拿到的就是生效值。 */
 function cssVar(el: HTMLElement | null, name: string): string {

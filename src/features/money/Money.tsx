@@ -19,7 +19,7 @@ import { IconPlus } from "../../components/icons";
 import { AddEntry } from "./AddEntry";
 import { MoneyStatsView } from "./MoneyStats";
 import { MoneyListView } from "./MoneyList";
-import { ymOf, yuan } from "./money";
+import { ymOf, yuan } from "./moneyKit";
 
 type Phase = "loading" | "error" | "ready";
 

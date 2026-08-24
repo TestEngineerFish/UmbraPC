@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import type { MoneyEntry, MoneyStats as Stats } from "../../services/server";
 import { IconUp, IconDown, IconArrowRight } from "../../components/icons";
 import { DonutChart, TrendBars, type DonutSeg } from "./charts";
-import { catColor, catIcon, yuan } from "./money";
+import { catColor, catIcon, yuan } from "./moneyKit";
 
 /** 环形图只画金额前 5 的分类，其余合并为「其他分类」（稿明写的规则）。 */
 const RING_TOP = 5;
