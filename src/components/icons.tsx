@@ -840,3 +840,13 @@ export function IconStop(p: IconProps) {
     </svg>
   );
 }
+
+// 记账：钱包/账本轮廓 + 中缝线 + 两个记账位。取自稿一级导航 MODULES 的记账项。
+export function IconWallet(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" />
+      <path d="M4 10h16M9 15h2M15 15h.01" />
+    </svg>
+  );
+}

@@ -15,7 +15,7 @@ import { askConfirm, showToast } from "../components/overlay";
 // 一级导航。工作流 / 密码保险箱 / 运行时环境 / 小工具**四项并列**（稿 4884-4889），
 // 它们共用同一个 tools 视图，靠这里的取值决定进哪个子页 —— 不是四个独立页面。
 // 之前只有一个 "tools"，四个功能全塞在它的二级侧栏里，跟稿差了一整层。
-export type Nav = "chat" | "tasks" | "notify" | "workspaces" | "inspiration"
+export type Nav = "chat" | "tasks" | "notify" | "money" | "workspaces" | "inspiration"
   | "abilities" | "flow" | "realtime" | "vault" | "runtime" | "tools"
   | "logs" | "settings";
 
@@ -154,6 +154,7 @@ const SVG = {
   logs: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2.5" y="4" width="19" height="16" rx="2"></rect><path d="M6.5 9l3 2.5-3 2.5M12 15h5"></path></svg>`,
   settings: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"></path><circle cx="16" cy="7" r="2.4"></circle><circle cx="8" cy="17" r="2.4"></circle></svg>`,
   notify: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg>`,
+  money: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path><path d="M4 10h16M9 15h2M15 15h.01"></path></svg>`,
   tools: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5a4 4 0 0 0 5 5L9 19a3 3 0 1 1-4-4z"></path></svg>`,
   // 以下三项的 path 照抄稿里 MODULES 对应条目的 d。
   flow: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6v5H4zM14 14h6v5h-6zM10 7.5h4a2 2 0 0 1 2 2v4"></path></svg>`,
@@ -232,6 +233,7 @@ function sidebar(): string {
     ${navSep()}
     ${navItem("tasks", t("nav.tasks"), SVG.tasks)}
     ${navItem("notify", t("nav.notify"), SVG.notify)}
+    ${navItem("money", t("nav.money"), SVG.money)}
     ${navItem("workspaces", t("nav.workspaces"), SVG.workspaces)}
     ${navItem("inspiration", t("nav.inspiration"), SVG.inspiration)}
     ${navSep()}

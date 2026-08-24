@@ -18,11 +18,11 @@ import {
 import { hasVault, vaultApi, type VaultTrashRow } from "../tools/bridges";
 import { askConfirm, showToast } from "../../components/overlay";
 import { btn, EmptyState, RefreshButton } from "../../components/ui";
-import { IconBulb, IconList, IconBell, IconLock, IconTrash } from "../../components/icons";
+import { IconBulb, IconList, IconBell, IconLock, IconTrash, IconWallet } from "../../components/icons";
 
-// 三类来源的图标。保险箱那一区统一用锁。
+// 四类来源的图标。保险箱那一区统一用锁。
 const KIND_ICON: Record<TrashKind, ComponentType<{ size?: number }>> = {
-  idea: IconBulb, task: IconList, reminder: IconBell,
+  idea: IconBulb, task: IconList, reminder: IconBell, money: IconWallet,
 };
 
 // 行内的两个小按钮取 sm 档（稿里的 ghostS / dangerS）。写成常量而不是每行现算，
@@ -115,7 +115,7 @@ export function Trash({ onChanged }: { onChanged?: (n: number) => void }) {
     title: x.title, from: x.from, deletedAtMs: x.deletedAtMs, leftDays: x.leftDays,
   }));
 
-  const counts = data?.counts || { idea: 0, task: 0, reminder: 0 };
+  const counts = data?.counts || { idea: 0, task: 0, reminder: 0, money: 0 };
   const keepDays = data?.keep_days ?? 30;
   // 锁着时用 meta 里的明文数字，解锁后用真实条数。
   const vaultCount = vault.unlocked ? vaultRows.length : vault.count;
@@ -244,7 +244,7 @@ export function Trash({ onChanged }: { onChanged?: (n: number) => void }) {
 
   // 「通用」小标题后面那句：N 项 · 灵感 2、任务 2、提醒 1。
   // 只列条数不为 0 的那几类 —— 稿上是三类都有的示例，实际全写出来会有一串「提醒 0」。
-  const breakdown = (["idea", "task", "reminder"] as TrashKind[])
+  const breakdown = (["idea", "task", "reminder", "money"] as TrashKind[])
     .filter((k) => counts[k] > 0)
     .map((k) => t(`trash.kind_${k}`) + " " + counts[k])
     .join("、");

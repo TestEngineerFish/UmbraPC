@@ -412,8 +412,9 @@ export async function deleteJobs(ids: string[]): Promise<{ deleted: number; busy
 // 保险箱那一区端到端加密、条目只在本机，走 vault 的 IPC，不经过这里 ——
 // 服务端连它有几条都不知道。见 doc/回收站-实现方案.md §3。
 
-/** kind 对外只有三种。操控记录在服务端就并进了 task（任务列表里本来也是混着显示的）。 */
-export type TrashKind = "idea" | "task" | "reminder";
+/** kind 对外四种（操控记录在服务端就并进了 task）。money 是记账一期加的：
+ *  流水删除也走统一回收站 —— 同一个产品里「删除」不该有两种下场（2026-08-24 拍板保留）。 */
+export type TrashKind = "idea" | "task" | "reminder" | "money";
 
 export interface TrashItem {
   kind: TrashKind;
@@ -430,7 +431,7 @@ export interface TrashList {
 }
 
 const EMPTY_TRASH: TrashList = {
-  items: [], counts: { idea: 0, task: 0, reminder: 0 }, keep_days: 30,
+  items: [], counts: { idea: 0, task: 0, reminder: 0, money: 0 }, keep_days: 30,
 };
 
 export async function fetchTrash(): Promise<TrashList> {
@@ -480,6 +481,151 @@ export function purgeTrash(entries: TrashEntry[]): Promise<number> {
 /** 清空回收站。**只清通用区** —— 保险箱那一区服务端动不了，要解锁后单独清。 */
 export function purgeAllTrash(): Promise<number> {
   return trashAction("/trash/purge", { all: true });
+}
+
+// ── 记账 ─────────────────────────────────────────────────────────────────────
+// 字段名照抄服务端 JSON（拍板 D2：服务端定一份正本，两端照它落表与序列化，
+// 不做 CodingKeys / 重命名层 —— 改字段时少一处能漏）。
+//
+// 这一节的取数函数在网络失败时回 **null 而不是空值**，跟 fetchTrash 那套不一样：
+// 记账稿给「连不上服务端」画了独立的错误态（横幅 + 重试），空列表和连不上
+// 必须分得开 —— 回空数组的话，断网会被渲染成「这个月还没有记账」，那是在说假话。
+
+export interface MoneyCat {
+  slug: string;          // 稳定标识，永不变：流水里存的是它
+  name: string;          // 显示名，可改；改名不影响历史数据
+  direction: "expense" | "income";
+  slot: number;          // 0 = 无色槽（图表里中性灰），1–7 彩色
+  seq: number;
+  enabled: boolean;
+  locked: boolean;       // other / other_in：兜底分类，不可停用
+}
+
+export interface MoneyEntry {
+  id: string;            // 客户端生成（离线要能先记后同步）
+  cents: number;         // 整数分。展示时才 /100
+  direction: "expense" | "income";
+  cat: string;           // 分类 slug
+  sub: string;           // 二级，中文字符串不是 slug，可空
+  merchant: string;      // 商家/备注（拍板 D1：一个字段）
+  at_ms: number;
+  tz_offset_min: number;
+  ym: string;            // 服务端按 at_ms + tz_offset_min 算好的本地月
+  src: "manual" | "shot" | "import" | "chat" | "recur";
+  rule_id: string;
+  batch_id: string;
+  order_no: string;
+  updated_at_ms: number;
+  deleted: boolean;
+}
+
+/** 当前筛选下的合计（服务端按**整个筛选结果**算，不是按页）。 */
+export interface MoneyTotals { count: number; expense: number; income: number }
+
+export interface MoneyStats {
+  ym: string;
+  expense: number;
+  income: number;
+  balance: number;
+  by_cat: { cat: string; cents: number; count: number }[];   // 只含支出，金额降序
+  prev_ym: string;
+  /** null = 上月**没有记录**，无法对比（跟「上月花了 0」是两回事，别画箭头）。 */
+  prev_expense: number | null;
+  trend: { ym: string; cents: number }[];                    // 老→新，含当月
+}
+
+export async function fetchMoneyCats(includeDisabled = false): Promise<MoneyCat[] | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/categories${includeDisabled ? "?include_disabled=true" : ""}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return Array.isArray(d) ? (d as MoneyCat[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 改分类（改名 / 换色槽 / 停用启用）。slug 不可改 —— 它是流水指过来的稳定标识。 */
+export async function updateMoneyCat(
+  slug: string,
+  patch: { name?: string; slot?: number; enabled?: boolean },
+): Promise<MoneyCat | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/categories/${encodeURIComponent(slug)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!r.ok) return null;
+    return (await r.json()) as MoneyCat;
+  } catch {
+    return null;
+  }
+}
+
+/** 某个月的全部流水（一期界面只看本月，筛选在客户端做 —— 一个月几百条，
+ *  全量拉回来本地过滤，输入即响应；服务端的 direction/cat/keyword 参数留给
+ *  iOS 和将来分页用，见拍板 D4）。 */
+export async function fetchMoneyEntries(ym: string): Promise<{ items: MoneyEntry[]; totals: MoneyTotals } | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/entries?ym=${encodeURIComponent(ym)}&limit=1000`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d || !Array.isArray(d.items)) return null;
+    return d as { items: MoneyEntry[]; totals: MoneyTotals };
+  } catch {
+    return null;
+  }
+}
+
+/** 记一笔 / 改一笔。服务端逐条 last-write-wins，回 { entry, written }：
+ *  written=false 表示库里那份更新、这次没写进去，界面要用回传的 entry 对齐。 */
+export async function saveMoneyEntry(
+  entry: Omit<MoneyEntry, "ym" | "deleted">,
+): Promise<{ entry: MoneyEntry; written: boolean } | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/entries/${encodeURIComponent(entry.id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d || !d.entry) return null;
+    return { entry: d.entry as MoneyEntry, written: !!d.written };
+  } catch {
+    return null;
+  }
+}
+
+/** 删流水 = 移进回收站（保留 30 天，能在 设置→回收站 恢复）。返回删掉的条数。 */
+export async function deleteMoneyEntries(ids: string[]): Promise<number> {
+  if (!ids.length) return 0;
+  try {
+    const r = await fetch(`${getServerUrl()}/money/entries/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids }),
+    });
+    if (!r.ok) return 0;
+    const d = await r.json();
+    return typeof d?.deleted === "number" ? d.deleted : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** 某个月的统计。服务端全部从流水现算 —— 没有汇总表，不存在「大数和明细对不上」。 */
+export async function fetchMoneyStats(ym: string, trendMonths = 6): Promise<MoneyStats | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/stats?ym=${encodeURIComponent(ym)}&trend_months=${trendMonths}`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (!d || typeof d.expense !== "number") return null;
+    return d as MoneyStats;
+  } catch {
+    return null;
+  }
 }
 
 // ── 工作区（项目目录）─────────────────────────────────────────────────────────

@@ -9,6 +9,7 @@ import { Tasks } from "../features/tasks/Tasks";
 import { Workspaces } from "../features/workspaces/Workspaces";
 import { Inspirations } from "../features/inspiration/Inspirations";
 import { Reminders } from "../features/notify/Reminders";
+import { Money } from "../features/money/Money";
 import { Abilities } from "../features/abilities/Abilities";
 import { Tools } from "../features/tools/Tools";
 import { subscribeLocale } from "../i18n";
@@ -64,6 +65,8 @@ export function App() {
             <Inspirations />
           ) : nav === "notify" ? (
             <Reminders />
+          ) : nav === "money" ? (
+            <Money />
           ) : nav === "abilities" ? (
             <Abilities />
           ) : legacy.TOOLS_NAV.includes(nav) ? (

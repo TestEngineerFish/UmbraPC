@@ -20,12 +20,13 @@ import { displayAccel } from "../../components/hotkey";
 import { gotoTool } from "../tools/Tools";
 import {
   IconSliders, IconPlug, IconCpu, IconShield, IconKeyboard, IconMouse, IconChat, IconGrid, IconInfo,
-  IconCopy, IconCheck, IconAlert, IconTrash,
+  IconCopy, IconCheck, IconAlert, IconTrash, IconWallet,
 } from "../../components/icons";
 import { Trash, useTrashCount } from "./Trash";
+import { MoneyCats } from "./MoneyCats";
 
 // 分页的标识。顺序即二级目录里的渲染顺序。
-type SecKey = "general" | "conn" | "device" | "perm" | "keys" | "chat" | "ops" | "cap" | "trash" | "about";
+type SecKey = "general" | "conn" | "device" | "perm" | "keys" | "chat" | "ops" | "cap" | "moneycat" | "trash" | "about";
 type IconComp = ComponentType<{ size?: number }>;
 
 // 二级目录的分组与条目。labelKey / descKey 走 i18n，icon 是线性描边图标。
@@ -43,6 +44,11 @@ const SEC_GROUPS: { labelKey: string; items: { key: SecKey; labelKey: string; ic
   { labelKey: "settings.secGroupAssistant", items: [
     { key: "chat", labelKey: "settings.secChat", icon: IconChat },
     { key: "cap", labelKey: "settings.secCap", icon: IconGrid },
+  ] },
+  // 记账自成一组（稿 7513）：分类与色槽改的是记账的数据字典，跟「数据」组的
+  // 回收站（删掉的东西）不是一类事，混进去反而找不到。
+  { labelKey: "settings.secGroupMoney", items: [
+    { key: "moneycat", labelKey: "settings.secMoneycat", icon: IconWallet },
   ] },
   // 稿里这一组还有「密码保险箱」。它在 PC 上是独立窗口（vault.html，自己一个 React 根），
   // 搬进设置页是另一件事，不跟着回收站一起做。
@@ -421,6 +427,8 @@ export function Settings() {
               </SettingRow>
             </RowsCard>
           ) : null}
+
+          {sec === "moneycat" ? <MoneyCats /> : null}
 
           {sec === "trash" ? <Trash onChanged={setTrashCount} /> : null}
 
