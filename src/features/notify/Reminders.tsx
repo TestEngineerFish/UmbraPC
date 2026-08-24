@@ -210,14 +210,19 @@ export function Reminders() {
       {removing ? (
         <ConfirmDialog
           title={`删除「${removing.text}」？`}
-          message="删除后无法恢复，其它设备上的这条也会一并删掉。"
-          confirmText="删除"
+          // 文案改于 2026-08-23（回收站）：原来写的是「删除后无法恢复」，
+          // 而它现在**是可以恢复的** —— 进设置 → 数据 → 回收站，30 天内都在。
+          // 「其它设备上的这条也会一并删掉」保留：那句仍然是真的，
+          // 而且是这个删除跟本地删一条便签最不一样的地方，值得先说。
+          message="删除后移入回收站，保留 30 天。其它设备上的这条也会一并删掉。"
+          confirmText="移入回收站"
           danger
           onConfirm={async () => {
             const r = await notifyApi().remove(removing.id);
             setRemoving(null);
             await refresh();
-            showToast(r.ok ? "已删除" : `删除失败：${r.error || "服务端没有响应"}`, { tone: r.ok ? "ok" : "fail" });
+            showToast(r.ok ? "已移入回收站 · 保留 30 天" : `删除失败：${r.error || "服务端没有响应"}`,
+              { tone: r.ok ? "ok" : "fail" });
           }}
           onCancel={() => setRemoving(null)}
         />

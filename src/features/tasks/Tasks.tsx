@@ -10,6 +10,7 @@ import { deleteJobs, getServerUrl, retryJob, stopJob } from "../../services/serv
 import type { Job, JobDetail, StepError, Subtask } from "../../services/server";
 import { ImageViewer } from "../../components/ImageViewer";
 import { btnGhost, btnDanger, RefreshButton, filterChip, filterChipCount, ErrorCard, EmptyState } from "../../components/ui";
+import { showToast } from "../../components/overlay";
 import { IconSearch, IconRefresh, IconCheck, IconX, IconClock, IconAlert, IconFolder } from "../../components/icons";
 
 // 全局图片预览：任意 Step 图片点击后打开（避免逐层透传 onClick）。
@@ -165,10 +166,18 @@ export function Tasks() {
   const doDelete = async () => {
     if (!selected.size) return;
     setBusy(true);
-    await deleteJobs([...selected]);
+    const r = await deleteJobs([...selected]);
     setBusy(false);
     exitSelect();
     legacy.manualRefresh();
+    // 服务端只删得动终态的任务，还在跑的要先停止（回收站方案 D1）。
+    // **这句必须说出来**：删除数比请求的少而界面一声不吭，用户看到的是
+    // 「我点了删除，它没反应」—— 最难受也最难查的一种失败。
+    if (r.busy.length) {
+      showToast(t("tasks.deleteBusy", { count: r.busy.length }), { tone: "warn" });
+    } else if (r.deleted) {
+      showToast(t("tasks.deletedToTrash", { count: r.deleted }), { tone: "ok" });
+    }
   };
 
   return (

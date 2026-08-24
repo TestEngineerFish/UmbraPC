@@ -383,21 +383,103 @@ async function errText(r: Response): Promise<string> {
   return `HTTP ${r.status}`;
 }
 
-// 批量删除任务（全选/多选）。返回实际删除数量。
-export async function deleteJobs(ids: string[]): Promise<number> {
-  if (!ids.length) return 0;
+// 批量删除任务（全选/多选）= **移进回收站**，保留 30 天。
+//
+// 返回 { deleted, busy }。busy 是「还在跑、删不掉」的那几个 id ——
+// **调用方必须把它说出来**：服务端只删得动终态的任务（还在跑的要先停止），
+// 删除数量比请求的少而界面上一声不吭，用户看到的就是「我点了删除，它没反应」。
+export async function deleteJobs(ids: string[]): Promise<{ deleted: number; busy: string[] }> {
+  if (!ids.length) return { deleted: 0, busy: [] };
   try {
     const r = await fetch(`${getServerUrl()}/jobs/delete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
     });
-    if (!r.ok) return 0;
+    if (!r.ok) return { deleted: 0, busy: [] };
     const data = await r.json();
-    return typeof data?.deleted === "number" ? data.deleted : 0;
+    return {
+      deleted: typeof data?.deleted === "number" ? data.deleted : 0,
+      busy: Array.isArray(data?.busy) ? (data.busy as string[]) : [],
+    };
+  } catch {
+    return { deleted: 0, busy: [] };
+  }
+}
+
+// ── 回收站 ───────────────────────────────────────────────────────────────────
+// 这里只有**通用区**（灵感 / 任务 / 提醒，都存在服务端）。
+// 保险箱那一区端到端加密、条目只在本机，走 vault 的 IPC，不经过这里 ——
+// 服务端连它有几条都不知道。见 doc/回收站-实现方案.md §3。
+
+/** kind 对外只有三种。操控记录在服务端就并进了 task（任务列表里本来也是混着显示的）。 */
+export type TrashKind = "idea" | "task" | "reminder";
+
+export interface TrashItem {
+  kind: TrashKind;
+  id: string | number;   // 灵感是自增整数，任务/提醒是 uuid 字符串
+  title: string;
+  deleted_at_ms: number;
+  left_days: number;     // 服务端算好的，客户端不要自己再算一遍（两处算法迟早会差一天）
+}
+
+export interface TrashList {
+  items: TrashItem[];
+  counts: Record<TrashKind, number>;
+  keep_days: number;
+}
+
+const EMPTY_TRASH: TrashList = {
+  items: [], counts: { idea: 0, task: 0, reminder: 0 }, keep_days: 30,
+};
+
+export async function fetchTrash(): Promise<TrashList> {
+  try {
+    const r = await fetch(`${getServerUrl()}/trash`);
+    if (!r.ok) return EMPTY_TRASH;
+    const d = await r.json();
+    return {
+      items: Array.isArray(d?.items) ? (d.items as TrashItem[]) : [],
+      counts: d?.counts || EMPTY_TRASH.counts,
+      keep_days: typeof d?.keep_days === "number" ? d.keep_days : 30,
+    };
+  } catch {
+    return EMPTY_TRASH;
+  }
+}
+
+/** 回收站的操作都按 {kind,id} 走：三类数据的 id 类型不一样，光给 id 服务端不知道去哪张表找。 */
+export type TrashEntry = { kind: TrashKind; id: string | number };
+
+async function trashAction(path: string, body: unknown): Promise<number> {
+  try {
+    const r = await fetch(`${getServerUrl()}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) return 0;
+    const d = await r.json();
+    return typeof d?.restored === "number" ? d.restored
+      : typeof d?.purged === "number" ? d.purged : 0;
   } catch {
     return 0;
   }
+}
+
+/** 恢复：条目回到原来的位置，状态原样保留（不会被复位成「待办」）。 */
+export function restoreTrash(entries: TrashEntry[]): Promise<number> {
+  return entries.length ? trashAction("/trash/restore", { entries }) : Promise.resolve(0);
+}
+
+/** 彻底删除：不进任何地方，也没有恢复的路。 */
+export function purgeTrash(entries: TrashEntry[]): Promise<number> {
+  return entries.length ? trashAction("/trash/purge", { entries }) : Promise.resolve(0);
+}
+
+/** 清空回收站。**只清通用区** —— 保险箱那一区服务端动不了，要解锁后单独清。 */
+export function purgeAllTrash(): Promise<number> {
+  return trashAction("/trash/purge", { all: true });
 }
 
 // ── 工作区（项目目录）─────────────────────────────────────────────────────────

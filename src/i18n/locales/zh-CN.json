@@ -163,7 +163,8 @@
     "monthDay": "{{month}}月{{day}}日",
     "monthDayAt": "{{month}}月{{day}}日 {{time}}",
     "yearMonthDay": "{{year}}年{{month}}月{{day}}日",
-    "yearMonthDayAt": "{{year}}年{{month}}月{{day}}日 {{time}}"
+    "yearMonthDayAt": "{{year}}年{{month}}月{{day}}日 {{time}}",
+    "todayAt": "今天 {{time}}"
   },
   "settings": {
     "title": "设置",
@@ -379,7 +380,10 @@
     "phrasesShortcutHint": "按下后打开剪贴板面板并直接停在「常用语」分类，回车即粘贴。",
     "clipClearedToast": "已清空剪贴板历史",
     "clipFavClearedToast": "已清空收藏",
-    "profileResetDone": "已重置为空白模板"
+    "profileResetDone": "已重置为空白模板",
+    "secGroupData": "数据",
+    "secTrash": "回收站",
+    "secTrashDesc": "删除的东西先进这里，保留 30 天，到期自动清掉。密码保险箱的条目单独存放，锁着时看不到标题。"
   },
   "logs": {
     "title": "日志",
@@ -443,8 +447,8 @@
     "selectAll": "全选",
     "deselectAll": "取消全选",
     "deleteN": "删除 ({{count}})",
-    "confirmDelete": "确认删除选中的 {{count}} 项任务？此操作不可撤销。",
-    "confirmDeleteBtn": "确认删除",
+    "confirmDelete": "把选中的 {{count}} 项任务移入回收站？保留 30 天，之后彻底删除。",
+    "confirmDeleteBtn": "移入回收站",
     "deleteEmpty": "请先选择要删除的任务",
     "copyDetail": "复制详情",
     "retry": "重试任务",
@@ -462,7 +466,9 @@
     "errKindLabel": "分类",
     "errStepLabel": "失败于",
     "retryNotReady": "重试链路还在调试，这一版先不可用。",
-    "clearFilter": "清空筛选"
+    "clearFilter": "清空筛选",
+    "deleteBusy": "有 {{count}} 项还在跑，先停止再删",
+    "deletedToTrash": "已移入回收站 · 保留 30 天"
   },
   "inspiration": {
     "title": "灵感",
@@ -492,8 +498,8 @@
     "markOpen": "标回待办",
     "archive": "归档",
     "unarchive": "取消归档",
-    "confirmDeleteOne": "确认删除这条灵感？删除后无法恢复。",
-    "confirmDeleteBtn": "确认删除",
+    "confirmDeleteOne": "把这条灵感移入回收站？保留 30 天，之后彻底删除。",
+    "confirmDeleteBtn": "移入回收站",
     "newTitle": "记一条灵感",
     "editTitle": "编辑灵感",
     "fieldRaw": "内容",
@@ -528,7 +534,7 @@
     "researchAt": "查于",
     "researchOnCreate": "顺便查一查",
     "researchOnCreateHint": "记完之后让秘书上网摸个底。也可以之后在详情里随时点。",
-    "deletedToast": "已删除",
+    "deletedToast": "已移入回收站 · 保留 30 天",
     "deleteFailed": "删除失败，这条还在",
     "updateFailed": "改不动，状态没变",
     "doneToast": "已标记完成",
@@ -793,5 +799,34 @@
     "operateUnsupported": "operate（自主操作）尚未接入决策引擎，当前仅支持原子动作：open_app / click / type / key / scroll / screenshot。",
     "favLimit": "收藏条目已达上限"
   },
-  "notify": {}
+  "notify": {},
+  "trash": {
+    "navBadge": "{{count}} 项",
+    "countLine": "共 {{count}} 项 · 到期自动清除",
+    "selected": "选中 {{count}} 项",
+    "restore": "恢复",
+    "purge": "彻底删除",
+    "clearSelection": "取消选择",
+    "purgeAll": "清空回收站",
+    "zoneGeneric": "通用",
+    "zoneMeta": "{{count}} 项 · {{breakdown}}",
+    "kind_idea": "灵感",
+    "kind_task": "任务",
+    "kind_reminder": "提醒",
+    "rowMeta": "来自{{from}} · {{when}}删除",
+    "leftDays": "还剩 {{count}} 天",
+    "footer": "恢复会把条目放回原来的位置。彻底删除不进任何地方，也没有恢复的路。",
+    "emptyTitle": "回收站是空的",
+    "emptyBody": "删掉的任务、灵感、提醒会先放进来，保留 {{days}} 天。",
+    "purgeOneTitle": "彻底删除「{{name}}」？",
+    "purgeManyTitle": "彻底删除选中的 {{count}} 项？",
+    "purgeBody": "不进任何地方，也没有恢复的路。",
+    "purgeConfirm": "彻底删除",
+    "purgeAllTitle": "清空回收站？",
+    "purgeAllBody": "通用区的 {{count}} 项会立刻清掉。密码保险箱的条目需要解锁后单独清，这里动不了。",
+    "purgeAllConfirm": "清空",
+    "restored": "已恢复 {{count}} 项",
+    "purged": "已彻底删除 {{count}} 项",
+    "nothingDone": "没有条目被处理，刷新看看"
+  }
 }

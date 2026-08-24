@@ -20,11 +20,12 @@ import { displayAccel } from "../../components/hotkey";
 import { gotoTool } from "../tools/Tools";
 import {
   IconSliders, IconPlug, IconCpu, IconShield, IconKeyboard, IconMouse, IconChat, IconGrid, IconInfo,
-  IconCopy, IconCheck, IconAlert,
+  IconCopy, IconCheck, IconAlert, IconTrash,
 } from "../../components/icons";
+import { Trash, useTrashCount } from "./Trash";
 
-// 九个分页的标识。顺序即二级目录里的渲染顺序。
-type SecKey = "general" | "conn" | "device" | "perm" | "keys" | "chat" | "ops" | "cap" | "about";
+// 分页的标识。顺序即二级目录里的渲染顺序。
+type SecKey = "general" | "conn" | "device" | "perm" | "keys" | "chat" | "ops" | "cap" | "trash" | "about";
 type IconComp = ComponentType<{ size?: number }>;
 
 // 二级目录的分组与条目。labelKey / descKey 走 i18n，icon 是线性描边图标。
@@ -42,6 +43,11 @@ const SEC_GROUPS: { labelKey: string; items: { key: SecKey; labelKey: string; ic
   { labelKey: "settings.secGroupAssistant", items: [
     { key: "chat", labelKey: "settings.secChat", icon: IconChat },
     { key: "cap", labelKey: "settings.secCap", icon: IconGrid },
+  ] },
+  // 稿里这一组还有「密码保险箱」。它在 PC 上是独立窗口（vault.html，自己一个 React 根），
+  // 搬进设置页是另一件事，不跟着回收站一起做。
+  { labelKey: "settings.secGroupData", items: [
+    { key: "trash", labelKey: "settings.secTrash", icon: IconTrash },
   ] },
   { labelKey: "settings.secGroupOther", items: [
     { key: "about", labelKey: "settings.secAbout", icon: IconInfo },
@@ -134,6 +140,8 @@ export function Settings() {
     return n ? (bucket.get(n) || []).filter((x) => x !== o) : [];
   };
   const dupCount = [...bucket.values()].filter((os) => os.length > 1).length;
+  // 回收站条数：二级目录的角标要它，所以在**外层**拉一次，不等用户点进那一页。
+  const [trashCount, setTrashCount] = useTrashCount();
 
   const copyDeviceId = () => {
     void navigator.clipboard.writeText(legacy.deviceIdLabel()).then(() => {
@@ -158,8 +166,15 @@ export function Settings() {
                 {g.items.map((i) => {
                   const on = sec === i.key;
                   const Icon = i.icon;
-                  // 快捷键那一项在有冲突时挂一个红色计数徽章，不用点进去也知道有事。
-                  const badge = i.key === "keys" && dupCount > 0 ? dupCount : 0;
+                  // 角标分两种语气，不能都用红的：
+                  //   快捷键冲突 = **有事要你处理** → 红（danger）
+                  //   回收站条数 = **只是个数字** → 中性（chip/muted）
+                  // 稿里这一条写得很明白（回收站那项标了 'mute'）：红色是稀缺资源，
+                  // 到处都红等于哪儿都不红。
+                  const badge = i.key === "keys" && dupCount > 0 ? String(dupCount)
+                    : i.key === "trash" && trashCount > 0 ? t("trash.navBadge", { count: trashCount })
+                    : "";
+                  const badgeMute = i.key === "trash";
                   return (
                     <button key={i.key} onClick={() => setSec(i.key)}
                       className={`w-full text-left flex items-center gap-[9px] p-[6px_8px] rounded-[8px] text-[12.5px] cursor-pointer transition-colors ${
@@ -168,7 +183,10 @@ export function Settings() {
                         <Icon size={14} />
                       </span>
                       <span className="flex-1 min-w-0 truncate">{t(i.labelKey)}</span>
-                      {badge ? <span className="flex-none whitespace-nowrap px-[6px] rounded-full bg-danger-soft text-danger text-[10px] font-semibold">{badge}</span> : null}
+                      {badge ? (
+                        <span className={`flex-none whitespace-nowrap px-[6px] rounded-full text-[10px] font-semibold ${
+                          badgeMute ? "bg-chip text-muted" : "bg-danger-soft text-danger"}`}>{badge}</span>
+                      ) : null}
                     </button>
                   );
                 })}
@@ -403,6 +421,8 @@ export function Settings() {
               </SettingRow>
             </RowsCard>
           ) : null}
+
+          {sec === "trash" ? <Trash onChanged={setTrashCount} /> : null}
 
           {sec === "about" ? (
             <section className="bg-card border border-border rounded-[12px] p-[18px] flex items-center gap-[14px]">

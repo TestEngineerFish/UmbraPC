@@ -163,7 +163,8 @@
     "monthDay": "{{month}}/{{day}}",
     "monthDayAt": "{{month}}/{{day}} {{time}}",
     "yearMonthDay": "{{year}}/{{month}}/{{day}}",
-    "yearMonthDayAt": "{{year}}/{{month}}/{{day}} {{time}}"
+    "yearMonthDayAt": "{{year}}/{{month}}/{{day}} {{time}}",
+    "todayAt": "Today {{time}}"
   },
   "settings": {
     "title": "Settings",
@@ -379,7 +380,10 @@
     "phrasesShortcutHint": "Opens the clipboard panel on the Snippets tab; press Enter to paste.",
     "clipClearedToast": "Clipboard history cleared",
     "clipFavClearedToast": "Favourites cleared",
-    "profileResetDone": "Reset to a blank template"
+    "profileResetDone": "Reset to a blank template",
+    "secGroupData": "Data",
+    "secTrash": "Trash",
+    "secTrashDesc": "Deleted items land here first and stay for 30 days before they're cleared. Vault items are kept separately and their titles can't be read while it's locked."
   },
   "logs": {
     "title": "Logs",
@@ -443,8 +447,8 @@
     "selectAll": "Select all",
     "deselectAll": "Deselect all",
     "deleteN": "Delete ({{count}})",
-    "confirmDelete": "Delete {{count}} selected task(s)? This cannot be undone.",
-    "confirmDeleteBtn": "Delete",
+    "confirmDelete": "Move {{count}} selected tasks to the trash? They stay for 30 days, then go for good.",
+    "confirmDeleteBtn": "Move to trash",
     "deleteEmpty": "Select tasks to delete first",
     "copyDetail": "Copy details",
     "retry": "Retry",
@@ -462,7 +466,9 @@
     "errKindLabel": "Kind",
     "errStepLabel": "Failed at",
     "retryNotReady": "Retry is still being debugged and is unavailable in this build.",
-    "clearFilter": "Clear filters"
+    "clearFilter": "Clear filters",
+    "deleteBusy": "{{count}} of them are still running — stop them first",
+    "deletedToTrash": "Moved to trash · kept for 30 days"
   },
   "inspiration": {
     "title": "Ideas",
@@ -492,8 +498,8 @@
     "markOpen": "Move back to open",
     "archive": "Archive",
     "unarchive": "Unarchive",
-    "confirmDeleteOne": "Delete this idea? This cannot be undone.",
-    "confirmDeleteBtn": "Delete",
+    "confirmDeleteOne": "Move this idea to the trash? It stays for 30 days, then goes for good.",
+    "confirmDeleteBtn": "Move to trash",
     "newTitle": "Log an idea",
     "editTitle": "Edit idea",
     "fieldRaw": "Content",
@@ -528,7 +534,7 @@
     "researchAt": "Researched",
     "researchOnCreate": "Look into it too",
     "researchOnCreateHint": "After saving, have Umbra scout it out. You can also trigger this later from the detail pane.",
-    "deletedToast": "Deleted",
+    "deletedToast": "Moved to trash · kept for 30 days",
     "deleteFailed": "Delete failed — it's still there",
     "updateFailed": "Couldn't update; status unchanged",
     "doneToast": "Marked done",
@@ -793,5 +799,34 @@
     "operateUnsupported": "operate is not connected to the decision engine yet. Supported: open_app / click / type / key / scroll / screenshot.",
     "favLimit": "Favorite limit reached"
   },
-  "notify": {}
+  "notify": {},
+  "trash": {
+    "navBadge": "{{count}}",
+    "countLine": "{{count}} items · cleared automatically when they expire",
+    "selected": "{{count}} selected",
+    "restore": "Restore",
+    "purge": "Delete permanently",
+    "clearSelection": "Clear selection",
+    "purgeAll": "Empty trash",
+    "zoneGeneric": "GENERAL",
+    "zoneMeta": "{{count}} items · {{breakdown}}",
+    "kind_idea": "Idea",
+    "kind_task": "Task",
+    "kind_reminder": "Reminder",
+    "rowMeta": "From {{from}} · deleted {{when}}",
+    "leftDays": "{{count}} days left",
+    "footer": "Restoring puts an item back where it was. Deleting permanently is final — there is no way back.",
+    "emptyTitle": "Trash is empty",
+    "emptyBody": "Deleted tasks, ideas and reminders land here first and stay for {{days}} days.",
+    "purgeOneTitle": "Permanently delete “{{name}}”?",
+    "purgeManyTitle": "Permanently delete {{count}} selected items?",
+    "purgeBody": "It goes nowhere, and there is no way back.",
+    "purgeConfirm": "Delete permanently",
+    "purgeAllTitle": "Empty the trash?",
+    "purgeAllBody": "The {{count}} items in the general zone will be removed right away. Vault items must be cleared separately after unlocking — they can't be touched from here.",
+    "purgeAllConfirm": "Empty",
+    "restored": "Restored {{count}} items",
+    "purged": "Permanently deleted {{count}} items",
+    "nothingDone": "Nothing changed — try refreshing"
+  }
 }
