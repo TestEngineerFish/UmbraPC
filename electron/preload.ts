@@ -225,6 +225,11 @@ contextBridge.exposeInMainWorld("umbraVault", {
   deleteAttachment: (vid: string, iid: string, aid: string) => ipcRenderer.invoke("vault:deleteAttachment", vid, iid, aid),
   search: (q: string, vid?: string) => ipcRenderer.invoke("vault:search", q, vid),
   setAutoLock: (min: number) => ipcRenderer.invoke("vault:setAutoLock", min),
+  // 回收站（需要解锁；锁着时主进程直接抛「保险箱已锁定」）。
+  // 条数不在这里 —— 它在 status() 里，因为锁着的时候也要显示。
+  listTrash: () => ipcRenderer.invoke("vault:listTrash"),
+  restoreTrash: (entries: { vaultId: string; itemId: string }[]) => ipcRenderer.invoke("vault:restoreTrash", entries),
+  purgeTrash: (entries: { vaultId: string; itemId: string }[]) => ipcRenderer.invoke("vault:purgeTrash", entries),
 });
 
 // 大字显示浮层桥。

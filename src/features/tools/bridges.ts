@@ -62,10 +62,25 @@ export interface ShotAPI {
 }
 
 // 密码保险箱主进程桥（设置面用到的子集）。
+/** 回收站里的一条保险箱记录。**锁着时拿不到**（连标题都读不出来）。 */
+export interface VaultTrashRow {
+  vaultId: string;
+  itemId: string;
+  title: string;
+  /** 类型名（登录 / 安全笔记…），显示成「来自登录」。 */
+  from: string;
+  deletedAtMs: number;
+  leftDays: number;
+}
+
 export interface VaultAPI {
   openWindow(): Promise<void>;
-  status(): Promise<{ shortcut: string }>;
+  /** trashCount 锁着时也有值（读的是 meta 里的明文数字）；unlocked 决定回收站那一区能不能展开。 */
+  status(): Promise<{ shortcut: string; unlocked: boolean; exists: boolean; trashCount: number }>;
   setShortcut(acc: string): Promise<{ ok: boolean }>;
+  listTrash(): Promise<VaultTrashRow[]>;
+  restoreTrash(entries: { vaultId: string; itemId: string }[]): Promise<number>;
+  purgeTrash(entries: { vaultId: string; itemId: string }[]): Promise<number>;
 }
 
 // ── 运行时环境（Java / Python 多版本）──────────────────────────────────────────

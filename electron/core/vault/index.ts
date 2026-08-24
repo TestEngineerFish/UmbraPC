@@ -9,6 +9,9 @@ import {
   generatePassword, GenOpts,
 } from "./crypto";
 import { VaultMeta, VaultInfo, VaultType, VaultData, Item, Attachment } from "./types";
+// 回收站的三态判定单独放一个文件：那里没有 electron / fs / 密钥，
+// 拿几个假 Item 就能在 vitest 里把三态判全（同 runtime/scan.ts 的做法）。
+import { isExpired, isTrashed, leftDays } from "./trash";
 import { ConfigStore, httpBase } from "../config";
 import { httpFetch } from "../http";
 import { accelProblem } from "../launcher/hotkey";
@@ -134,6 +137,9 @@ export class VaultManager {
       quickUnlock: !!this.meta?.quickUnlockEnc, biometric: await this.biometricAvailable(),
       shortcut: c.vaultShortcut || "",
       syncConfigured: !!(c.serverUrl && c.token), syncRev: this.meta?.syncRev ?? 0,
+      // 回收站条数。锁着时也要能显示「N 项 · 解锁后可查看」——
+      // 那会儿没有密钥、数不出来，所以读的是上次解锁时记在 meta 里的明文数字。
+      trashCount: this.meta?.trashCount ?? 0,
       // 自动同步的实时状态，界面上显示「同步中… / N 分钟前 / 失败原因」。
       syncing: this.syncStatus.syncing, syncAt: this.syncStatus.lastAt, syncError: this.syncStatus.lastError,
     };
@@ -255,6 +261,12 @@ export class VaultManager {
     }
     if (secretKeyOverride) { this.meta.secretKeyEnc = await this.encSecret(secretKey); await this.saveMeta(); } // 新设备：写入本机 keychain
     this.armAutoLock();
+    // 回收站的到期清理与条数刷新，都借解锁这一刻做（锁着时没有密钥，什么都干不了）。
+    // **不 await**：清理是杂务，让它拖慢解锁不值当；失败也只吞掉 ——
+    // 因为一次清理没跑成而解不开保险箱，那是本末倒置。
+    void this.sweepExpiredTrash()
+      .then(() => this.saveTrashCount())
+      .catch(() => { /* 清理失败不影响解锁，下次解锁再来 */ });
     void this.autoSync();
     this.armSyncPull();
     return true;
@@ -315,6 +327,10 @@ export class VaultManager {
     await this.saveMeta();
     await fs.rm(this.vaultFile(id), { force: true });
     await fs.rm(this.attDir(id), { recursive: true, force: true });
+    // 删掉整个身份库是**硬删**（稿：「它的 N 条记录、附件与图片会一起清掉，无法恢复」），
+    // 不进回收站。但它连同回收站里属于这个库的条目一起没了 ——
+    // 不重算的话，锁着时那个明文条数会一直挂着几条已经不存在的记录。
+    await this.saveTrashCount();
   }
 
   // ── 类型 ──
@@ -422,22 +438,143 @@ export class VaultManager {
     d.items[idx] = { ...prev, ...item, attachments: prev.attachments, updatedAt: Date.now(), revision: prev.revision + 1 };
     await this.persistVault(vaultId);
   }
-  // 删除 = 打墓碑（保留条目参与同步，抬 revision；清空明文内容与附件）。
-  private async tombstone(vaultId: string, it: Item) {
+  // ── 删除的三态（回收站，2026-08-23）─────────────────────────────────────────
+  //
+  //   正常        deleted 未置位
+  //   在回收站    deleted = true，**内容还在**（blocks / attachments 原封不动）
+  //   已彻底删除  deleted = true，内容与标题全擦掉、附件字节也删了
+  //
+  // **一个新字段都没加**，用的还是同步协议里早就有的 deleted。这是刻意的：
+  // iOS 那边 VItem 是 Swift Codable 结构体，解码时会丢掉不认识的字段、编码时也不会再吐出来。
+  // 只要有一端还是旧版本，新加一个 `trashed` 就会在下一次同步里被抹平 ——
+  // 那条已删除的记录会在所有设备上原地复活。复用 deleted 则天然兼容：
+  // 旧版本看见 deleted=true 就照旧隐藏，行为是对的，只是没法恢复。
+  //
+  // 代价说清楚：删掉的密码密文会在云端和每台设备上**多留 30 天**。
+  // 「彻底删除」那条旁路因此不是可选项 —— 它是唯一一条「立刻擦掉」的路。
+
+  /** 移进回收站：只置标志、抬 revision。**附件文件一个都不删。** */
+  private moveToTrash(it: Item) {
+    it.deleted = true;
+    it.updatedAt = Date.now();   // 同时是回收站的「删除时刻」，倒计时按它算
+    it.revision += 1;
+  }
+
+  /** 彻底删除：擦干净内容，但**保留这一行**（墓碑还得跨端传播「这条没了」）。
+   *
+   *  比原来的 tombstone 多擦一个 title —— 原来只清 blocks/attachments/tags，
+   *  于是「旧公司 VPN」这个标题会永远躺在加密快照里跟着同步。内容确实没了，
+   *  但「你曾经有一个叫旧公司 VPN 的东西」留下来了，这不该算删干净。 */
+  private async purgeOne(vaultId: string, it: Item) {
     for (const a of it.attachments) await fs.rm(this.attFile(vaultId, a.id), { force: true });
-    it.deleted = true; it.blocks = []; it.attachments = []; it.tags = [];
+    it.deleted = true; it.title = ""; it.icon = ""; it.blocks = []; it.attachments = []; it.tags = [];
     it.updatedAt = Date.now(); it.revision += 1;
   }
+
   private async deleteItem(vaultId: string, itemId: string) {
     const it = this.data(vaultId).items.find((i) => i.id === itemId);
-    if (it) await this.tombstone(vaultId, it);
+    if (it && !it.deleted) this.moveToTrash(it);
     await this.persistVault(vaultId);
+    await this.saveTrashCount();
   }
   private async deleteItems(vaultId: string, ids: string[]) {
     const set = new Set(ids);
-    for (const it of this.data(vaultId).items) if (set.has(it.id) && !it.deleted) await this.tombstone(vaultId, it);
+    for (const it of this.data(vaultId).items) if (set.has(it.id) && !it.deleted) this.moveToTrash(it);
     await this.persistVault(vaultId);
+    await this.saveTrashCount();
     return ids.length;
+  }
+
+  // ── 回收站 ──────────────────────────────────────────────────────────────────
+  /** 回收站列表（**跨所有身份库**，最近删的在前）。只在解锁态可用。
+   *
+   *  from 取的是类型名（登录 / 安全笔记…），跟稿上「来自登录 · 3 天前删除」对应。 */
+  private listTrash() {
+    const out: { vaultId: string; itemId: string; title: string; from: string;
+                 deletedAtMs: number; leftDays: number }[] = [];
+    const now = Date.now();
+    for (const [vid, d] of this.vdata) {
+      const typeName = new Map(d.types.map((t) => [t.id, t.name]));
+      for (const it of d.items) {
+        if (!isTrashed(it)) continue;
+        out.push({
+          vaultId: vid, itemId: it.id, title: it.title || "（无标题）",
+          from: typeName.get(it.typeId) || "记录",
+          deletedAtMs: it.updatedAt,
+          leftDays: leftDays(it.updatedAt, now),
+        });
+      }
+    }
+    return out.sort((a, b) => b.deletedAtMs - a.deletedAtMs);
+  }
+
+  /** 从回收站恢复。返回真正恢复的条数。
+   *
+   *  抬 revision 是关键：云端那份的 revision 停在「已删除」那一版，
+   *  不抬的话下一次合并会按「revision 高者胜」把删除态又拉回来。 */
+  private async restoreTrash(entries: { vaultId: string; itemId: string }[]) {
+    let n = 0;
+    const touched = new Set<string>();
+    for (const e of entries || []) {
+      const it = this.vdata.get(e.vaultId)?.items.find((i) => i.id === e.itemId);
+      if (!it || !isTrashed(it)) continue;
+      it.deleted = false; it.updatedAt = Date.now(); it.revision += 1;
+      touched.add(e.vaultId); n++;
+    }
+    for (const vid of touched) await this.persistVault(vid);
+    await this.saveTrashCount();
+    return n;
+  }
+
+  /** 彻底删除回收站里的条目。返回真正处理掉的条数。 */
+  private async purgeTrash(entries: { vaultId: string; itemId: string }[]) {
+    let n = 0;
+    const touched = new Set<string>();
+    for (const e of entries || []) {
+      const it = this.vdata.get(e.vaultId)?.items.find((i) => i.id === e.itemId);
+      if (!it || !isTrashed(it)) continue;
+      await this.purgeOne(e.vaultId, it);
+      touched.add(e.vaultId); n++;
+    }
+    for (const vid of touched) await this.persistVault(vid);
+    await this.saveTrashCount();
+    return n;
+  }
+
+  /** 到期清理：超过保留期的自动彻底删除。**解锁时跑一次。**
+   *
+   *  为什么挂在解锁上而不是定时器：锁着的时候没有密钥，连有几条都数不出来，
+   *  定时器醒了也什么都干不了。而「保险箱一定是解锁之后才用」，
+   *  所以解锁这个时机既够勤，又保证有活干。 */
+  private async sweepExpiredTrash(): Promise<number> {
+    const now = Date.now();
+    let n = 0;
+    const touched = new Set<string>();
+    for (const [vid, d] of this.vdata) {
+      for (const it of d.items) {
+        if (!isTrashed(it)) continue;
+        if (!isExpired(it.updatedAt, now)) continue;
+        await this.purgeOne(vid, it);
+        touched.add(vid); n++;
+      }
+    }
+    for (const vid of touched) await this.persistVault(vid);
+    return n;
+  }
+
+  /** 把回收站条数写进 meta（**明文**），好让锁着的时候也能显示「N 项 · 解锁后可查看」。
+   *
+   *  meta.json 本来就是明文的，而且**必须是** —— 它装着 salt 和 verifier，
+   *  得在解锁之前就能读到，加密它就成了鸡生蛋。
+   *  **不会传到服务端**：上传的记录只有 {v, kdf, salt, verifier, enc} 五个字段，
+   *  enc 是整个快照的密文，trashCount 不在里面。
+   *  代价是本机磁盘上多一个「回收站里有几条」的数字 —— 没有标题、没有类型，就一个数。 */
+  private async saveTrashCount(): Promise<void> {
+    if (!this.meta || !this.unlocked) return;
+    const n = this.listTrash().length;
+    if (this.meta.trashCount === n) return;   // 没变就别写盘，也别白白触发一次同步
+    this.meta.trashCount = n;
+    await this.saveMeta();
   }
   private async moveItem(vaultId: string, itemId: string, toTypeId: string) {
     const it = this.getItem(vaultId, itemId); if (!it) throw new Error("记录不存在");
@@ -866,6 +1003,12 @@ export class VaultManager {
     H("vault:addAttachment", (vid, iid, name, mime, data) => this.addAttachment(String(vid), String(iid), String(name), String(mime), String(data)));
     H("vault:readAttachment", (vid, aid) => this.readAttachment(String(vid), String(aid)));
     H("vault:deleteAttachment", (vid, iid, aid) => this.deleteAttachment(String(vid), String(iid), String(aid)));
+
+    // 回收站三件套。都走 H（需要解锁）—— 锁着时连标题都读不出来，
+    // 这正是稿里「保险箱的条目是端到端加密的，锁着时读不出标题，也没法恢复」那句的实现。
+    H("vault:listTrash", () => this.listTrash());
+    H("vault:restoreTrash", (entries) => this.restoreTrash(entries as { vaultId: string; itemId: string }[]));
+    H("vault:purgeTrash", (entries) => this.purgeTrash(entries as { vaultId: string; itemId: string }[]));
 
     H("vault:search", (q, vid) => this.search(String(q), vid ? String(vid) : undefined));
     H("vault:setAutoLock", (min) => this.setAutoLock(Number(min)));

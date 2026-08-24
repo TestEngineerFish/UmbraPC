@@ -827,6 +827,13 @@
     "purgeAllConfirm": "清空",
     "restored": "已恢复 {{count}} 项",
     "purged": "已彻底删除 {{count}} 项",
-    "nothingDone": "没有条目被处理，刷新看看"
+    "nothingDone": "没有条目被处理，刷新看看",
+    "zoneVault": "密码保险箱",
+    "zoneVaultMeta": "{{count}} 项",
+    "vaultLocked": "{{count}} 项 · 解锁后可查看",
+    "vaultLockedHint": "保险箱的条目是端到端加密的，锁着时读不出标题，也没法恢复。",
+    "unlockVault": "解锁保险箱",
+    "purgeBodyVault": "密文一并擦掉，其它设备下次同步后同样消失。没有恢复的路。",
+    "purgeAllBodyWithVault": "通用区的 {{count}} 项会立刻清掉。保险箱那 {{vault}} 项需要解锁后单独清，这里动不了。"
   }
 }

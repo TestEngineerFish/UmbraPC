@@ -10,6 +10,7 @@ export interface VaultMeta {
   autoLockMin: number;       // 自动锁定分钟（0=不自动锁）
   quickUnlockEnc?: string;   // 启用 Touch ID 快速解锁后：safeStorage 加密的 AUK（生物识别通过即解锁）
   syncRev?: number;          // 端到端同步：本地已基于的云端版本号
+  trashCount?: number;       // 回收站条数（**明文**，只为锁着时能显示「N 项 · 解锁后可查看」）
   createdAt: number;
 }
 export interface VaultInfo {
@@ -43,7 +44,13 @@ export interface Item {
   createdAt: number;
   updatedAt: number;
   revision: number;
-  deleted?: boolean;         // 删除墓碑：标记删除后仍参与同步（界面过滤），让删除能跨端传播
+  // 删除墓碑：标记删除后仍参与同步（界面过滤），让删除能跨端传播。
+  // **一个标志位表示两种状态**（回收站，2026-08-23）：
+  //   deleted=true 且 blocks/attachments 还在 → 在回收站里，30 天内能恢复
+  //   deleted=true 且内容全空                 → 已彻底删除
+  // 没有为回收站另加字段：iOS 的 VItem 是 Swift Codable，会把不认识的字段丢掉，
+  // 新字段在混版本同步里会被抹平，那条记录就在所有设备上复活了。详见 index.ts 里那段。
+  deleted?: boolean;
 }
 
 // 一个身份库解密后的内容（存 v-<id>.enc）。
