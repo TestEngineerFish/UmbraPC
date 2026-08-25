@@ -12,7 +12,7 @@ import { catColor, catIcon, catTint, groupByDay, SRC_ICON, yuan } from "./moneyK
 
 interface Ctx { x: number; y: number; entry: MoneyEntry }
 
-export function MoneyListView({ entries, cats, catName, catSlot, filterCat, setFilterCat, monthText, onAdd, onEdit, onDelete }: {
+export function MoneyListView({ entries, cats, catName, catSlot, filterCat, setFilterCat, monthText, onAdd, onEdit, onDelete, onOpenRule }: {
   entries: MoneyEntry[];
   /** 可选分类（含收入侧），给筛选菜单用：[slug, 显示名]。 */
   cats: [string, string][];
@@ -25,6 +25,8 @@ export function MoneyListView({ entries, cats, catName, catSlot, filterCat, setF
   onAdd: () => void;
   onEdit: (e: MoneyEntry) => void;
   onDelete: (e: MoneyEntry) => void;
+  /** 「周期」徽章点回规则（稿 8378：生成的流水挂徽章能跳回规则）。 */
+  onOpenRule: (ruleId: string) => void;
 }) {
   const { t, i18n } = useTranslation();
   const [dir, setDir] = useState<"all" | "expense" | "income">("all");
@@ -146,10 +148,17 @@ export function MoneyListView({ entries, cats, catName, catSlot, filterCat, setF
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-[7px]">
                       <span className="text-[12.5px] truncate">{e.merchant || catName(e.cat)}</span>
-                      {e.src !== "manual" ? (
-                        // 周期来源的徽章在稿里能点回规则 —— 那是二期的事，一期只亮个身份。
-                        <span className={`flex items-center gap-[3px] flex-none whitespace-nowrap px-[6px] py-[1px] rounded-full text-[10.5px] ${
-                          e.src === "recur" ? "bg-orange-soft text-orange-text" : "bg-chip text-faint"}`}>
+                      {e.src === "recur" ? (
+                        // 稿 8378：周期生成的流水挂徽章，**点徽章跳回规则**（二期落地）。
+                        <button
+                          className="flex items-center gap-[3px] flex-none whitespace-nowrap px-[6px] py-[1px] rounded-full text-[10.5px] bg-orange-soft text-orange-text cursor-pointer border-none"
+                          title={t("money.recBadgeTip")}
+                          onClick={(ev) => { ev.stopPropagation(); onOpenRule(e.rule_id); }}>
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={SRC_ICON[e.src] || SRC_ICON.manual} /></svg>
+                          {t(`money.src_${e.src}`)}
+                        </button>
+                      ) : e.src !== "manual" ? (
+                        <span className="flex items-center gap-[3px] flex-none whitespace-nowrap px-[6px] py-[1px] rounded-full text-[10.5px] bg-chip text-faint">
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d={SRC_ICON[e.src] || SRC_ICON.manual} /></svg>
                           {t(`money.src_${e.src}`)}
                         </span>

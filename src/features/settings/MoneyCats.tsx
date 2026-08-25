@@ -14,7 +14,7 @@ import { useTranslation } from "react-i18next";
 import { fetchMoneyCats, updateMoneyCat, type MoneyCat } from "../../services/server";
 import { showToast } from "../../components/overlay";
 import { Modal, EmptyState, btn } from "../../components/ui";
-import { catColor, catIcon, catTint, SUBS } from "../money/moneyKit";
+import { catColor, catIcon, catTint } from "../money/moneyKit";
 
 const BTN_S = "flex-none whitespace-nowrap px-[9px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-orange hover:text-orange-text";
 const BTN_S_WARN = "flex-none whitespace-nowrap px-[9px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-warning hover:text-warning";
@@ -134,7 +134,8 @@ export function MoneyCats() {
               {c.slot ? t("money.slotN", { n: c.slot }) : t("money.slotGray")}
             </span>
             <span className="w-[70px] flex-none text-[11px] text-faint whitespace-nowrap">
-              {t("money.subCount", { n: (SUBS[c.slug] || []).length })}
+              {/* 子类数从服务端来（第二批落库；新增/编辑子类在 iOS 端，PC 管理界面缺稿已发设计） */}
+              {t("money.subCount", { n: (c.subs || []).length })}
             </span>
             <span className="w-[150px] flex-none flex justify-end gap-[6px]">
               <button className={BTN_S} disabled={busy} onClick={() => { setSlotFor(c); setGrab(null); }}>{t("money.actSlot")}</button>

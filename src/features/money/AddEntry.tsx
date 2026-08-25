@@ -13,9 +13,13 @@
 // 已记进回流台账（实现侧偏离，要稿知道）。
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { saveMoneyEntry, type MoneyCat, type MoneyEntry } from "../../services/server";
+import {
+  deleteMoneyAtt, moneyFileUrl, saveMoneyEntry,
+  type MoneyAtt, type MoneyCat, type MoneyEntry,
+} from "../../services/server";
 import { Modal, ErrorCard, btn } from "../../components/ui";
-import { amountToCents, catIcon, catColor, isExpr, SUBS, tzOffsetMin, yuan } from "./moneyKit";
+import { askConfirm, showToast } from "../../components/overlay";
+import { amountToCents, catIcon, catColor, isExpr, tzOffsetMin, yuan } from "./moneyKit";
 
 const BTN_GHOST = btn("ghost");
 const BTN_PRIMARY = btn("primary");
@@ -68,6 +72,8 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
   const [timeOpen, setTimeOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+  /** 附件本地态：initial 是快照，删掉一张后要立刻从界面消失。 */
+  const [atts, setAtts] = useState<MoneyAtt[]>(initial?.atts || []);
   const amountRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { amountRef.current?.focus(); }, []);
@@ -89,7 +95,9 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
     if (recent.length >= 3) break;
     if (!recent.includes(c.slug)) recent.push(c.slug);
   }
-  const subs = SUBS[cat] || [];
+  // 子类从服务端来（第二批落库，随分类下发）—— 本地硬编码的 SUBS 表已删：
+  // 留着它，用户在 iOS 加的子类这里永远看不见。
+  const subs = cats.find((c) => c.slug === cat)?.subs || [];
 
   /** 切方向要把分类切到那一侧的第一个 —— 支出选着「餐饮」切到收入，
    *  分类栏里根本没有这一项，保存会写出一条方向和分类打架的流水。 */
@@ -270,6 +278,49 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
         <input value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("money.notePh")}
           className="w-full px-[11px] py-[7px] border border-border rounded-[8px] bg-bg text-text text-[12.5px] outline-none focus:border-orange" />
       </div>
+
+      {/* 附件（编辑态，截图快捷记账的原图落在这）。展示位是临时的 ——
+          正式的附件区形态等 ClaudeDesign 出稿（已记回流台账）。这一版保证三件事：
+          图看得到、普通附件删得掉、原图（origin，凭证）没有删除键。 */}
+      {initial && atts.length ? (
+        <div>
+          <div className="text-[11px] font-semibold tracking-[.06em] text-faint mb-[5px]">{t("money.attsLabel")}</div>
+          <div className="flex gap-[8px] flex-wrap">
+            {atts.map((a) => (
+              <div key={a.file_id} className="relative w-[86px]">
+                <a href={moneyFileUrl(a.file_id)} target="_blank" rel="noreferrer"
+                  title={a.origin ? t("money.attOrigin") : a.label}>
+                  <img src={moneyFileUrl(a.file_id)} alt={a.label}
+                    className="w-[86px] h-[86px] object-cover rounded-[8px] border border-border" />
+                </a>
+                {!a.origin ? (
+                  <button
+                    className="absolute top-[3px] right-[3px] w-[18px] h-[18px] rounded-full bg-black/50 text-white text-[11px] leading-[18px] text-center cursor-pointer"
+                    title={t("common.delete")}
+                    onClick={async () => {
+                      const ok = await askConfirm({
+                        title: t("money.attDelTitle"),
+                        message: t("money.attDelBody"),
+                        confirmText: t("common.delete"),
+                        danger: true,
+                      });
+                      if (!ok) return;
+                      const done = await deleteMoneyAtt(initial.id, a.file_id);
+                      showToast(done ? t("money.attDeleted") : t("money.saveFailed"), { tone: done ? "ok" : "warn" });
+                      if (done) setAtts((cur) => cur.filter((x) => x.file_id !== a.file_id));
+                    }}>×</button>
+                ) : null}
+                <div className="mt-[3px] text-[10.5px] text-faint truncate text-center">
+                  {a.origin ? t("money.attOrigin") : (a.label || t("money.attImage"))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-[5px] text-[11px] text-faint">
+            {atts.some((a) => a.origin) ? t("money.attOriginHint") : t("money.attHint")}
+          </div>
+        </div>
+      ) : null}
     </Modal>
   );
 }

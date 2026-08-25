@@ -10,8 +10,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  deleteMoneyEntries, fetchMoneyCats, fetchMoneyEntries, fetchMoneyStats,
-  type MoneyCat, type MoneyEntry, type MoneyStats,
+  deleteMoneyEntries, fetchMoneyCats, fetchMoneyEntries, fetchMoneyRecur, fetchMoneyStats,
+  type MoneyCat, type MoneyEntry, type MoneyRecur, type MoneyStats,
 } from "../../services/server";
 import { askConfirm, showToast } from "../../components/overlay";
 import { EmptyState, btn } from "../../components/ui";
@@ -19,6 +19,7 @@ import { IconPlus } from "../../components/icons";
 import { AddEntry } from "./AddEntry";
 import { MoneyStatsView } from "./MoneyStats";
 import { MoneyListView } from "./MoneyList";
+import { RecurModal } from "./RecurModal";
 import { ymOf, yuan } from "./moneyKit";
 
 type Phase = "loading" | "error" | "ready";
@@ -34,6 +35,9 @@ export function Money() {
   const [filterCat, setFilterCat] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
   const [editEntry, setEditEntry] = useState<MoneyEntry | null>(null);
+  /** 周期规则（二期）。null = 弹窗没开；"" = 开在列表态；非空 = 直接落某条的编辑态。 */
+  const [rules, setRules] = useState<MoneyRecur[]>([]);
+  const [recurOpen, setRecurOpen] = useState<string | null>(null);
 
   const reload = useCallback(async (silent = false) => {
     // 每次重拉时重算当月：页面在月底跨零点开着不关，第二天记的账要进新的月。
@@ -41,13 +45,15 @@ export function Money() {
     setYm(m);
     if (!silent) setPhase("loading");
     // 趋势一次拉 12 个月，近 6 月在统计页里切片 —— 切档位不再打接口。
-    const [c, e, s] = await Promise.all([
-      fetchMoneyCats(), fetchMoneyEntries(m), fetchMoneyStats(m, 12),
+    const [c, e, s, r] = await Promise.all([
+      fetchMoneyCats(), fetchMoneyEntries(m), fetchMoneyStats(m, 12), fetchMoneyRecur(),
     ]);
     if (!c || !e || !s) { setPhase("error"); return; }
     setCats(c);
     setEntries(e.items);
     setStats(s);
+    // 周期规则不参与整页成败：拉挂了保持旧值，按钮上的计数顶多旧一拍。
+    if (r) setRules(r);
     setPhase("ready");
   }, []);
 
@@ -83,13 +89,24 @@ export function Money() {
 
   return (
     <div className="absolute inset-0 flex flex-col min-h-0 text-[13px] bg-bg">
-      {/* 顶栏：视图切换 + 记一笔。稿里还有「周期记账」按钮（二期）和预览态切换（演示用），一期都不画。 */}
+      {/* 顶栏：视图切换 + 周期记账（二期，带在跑条数）+ 记一笔。 */}
       <div className="flex-none flex items-center gap-[12px] px-[18px] py-[11px] border-b border-border bg-card">
         <div className="flex-none flex border border-border rounded-[8px] overflow-hidden">
           <button className={tabBtn(view === "stats")} onClick={() => setView("stats")}>{t("money.tabStats")}</button>
           <button className={tabBtn(view === "list", true)} onClick={() => setView("list")}>{t("money.tabList")}</button>
         </div>
         <span className="flex-1" />
+        <button
+          className="flex items-center gap-[6px] flex-none whitespace-nowrap px-[12px] py-[6px] border border-border bg-card text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
+          onClick={() => setRecurOpen("")}>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8 8 0 0 0-13.7-5.7L3 8" /><path d="M3 4v4h4" /><path d="M4 13a8 8 0 0 0 13.7 5.7L21 16" /><path d="M21 20v-4h-4" /></svg>
+          {t("money.recTitle")}
+          {rules.filter((r) => !r.paused && r.next_at_ms > 0).length ? (
+            <span className="flex-none px-[6px] py-[0.5px] rounded-full bg-orange-soft text-orange-text text-[10.5px] font-semibold">
+              {rules.filter((r) => !r.paused && r.next_at_ms > 0).length}
+            </span>
+          ) : null}
+        </button>
         <button className={btn("primary")} onClick={() => setAddOpen(true)}>
           <span className="flex items-center gap-[6px]"><IconPlus size={13} />{t("money.addOne")}</span>
         </button>
@@ -136,13 +153,24 @@ export function Money() {
         <MoneyListView entries={entries} catName={catName} catSlot={catSlot}
           cats={cats.filter((c) => c.enabled).map((c) => [c.slug, c.name])}
           filterCat={filterCat} setFilterCat={setFilterCat} monthText={monthText}
-          onAdd={() => setAddOpen(true)} onEdit={(e) => setEditEntry(e)} onDelete={(e) => void doDelete(e)} />
+          onAdd={() => setAddOpen(true)} onEdit={(e) => setEditEntry(e)} onDelete={(e) => void doDelete(e)}
+          onOpenRule={(ruleId) => {
+            // 规则可能已删（删规则不删流水）—— 那就说人话，别装作能跳。
+            if (rules.some((r) => r.id === ruleId)) setRecurOpen(ruleId);
+            else showToast(t("money.recGone"), { tone: "warn" });
+          }} />
       )}
 
       {addOpen || editEntry ? (
         <AddEntry cats={cats} entries={entries} initial={editEntry}
           onClose={() => { setAddOpen(false); setEditEntry(null); }}
           onSaved={() => { showToast(t("money.saved"), { tone: "ok" }); void reload(true); }} />
+      ) : null}
+
+      {recurOpen !== null ? (
+        <RecurModal cats={cats} rules={rules} initialEditId={recurOpen || null}
+          onClose={() => setRecurOpen(null)}
+          onChanged={() => void reload(true)} />
       ) : null}
     </div>
   );

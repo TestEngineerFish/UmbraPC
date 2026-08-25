@@ -495,10 +495,12 @@ export interface MoneyCat {
   slug: string;          // 稳定标识，永不变：流水里存的是它
   name: string;          // 显示名，可改；改名不影响历史数据
   direction: "expense" | "income";
-  slot: number;          // 0 = 无色槽（图表里中性灰），1–7 彩色
+  slot: number;          // 0 = 无色槽（图表里中性灰），1–7 / 9 / 10 彩色
   seq: number;
   enabled: boolean;
   locked: boolean;       // other / other_in：兜底分类，不可停用
+  /** 二级分类（第二批起服务端落库，随分类下发）。可选：老服务端没有这个字段。 */
+  subs?: string[];
 }
 
 export interface MoneyEntry {
@@ -517,6 +519,43 @@ export interface MoneyEntry {
   order_no: string;
   updated_at_ms: number;
   deleted: boolean;
+  /** 附件（截图快捷记账的原图 + 手动加的图）。可选：老服务端没有这个字段。 */
+  atts?: MoneyAtt[];
+}
+
+/** 一张账单附件。文件本体在服务端（GET /files/{file_id}），这里只有引用。 */
+export interface MoneyAtt {
+  file_id: string;
+  label: string;
+  /** 截图记账的原图：稿明写「一直留着，不能删」—— 它是这笔账的凭证。 */
+  origin: boolean;
+}
+
+/** 一条周期规则（二期）。日期是 'YYYY-MM-DD' 文本 —— 「每月 31 号」的锚是
+ *  首次日期的「31」，转时间戳这层日历语义就丢了。done_count / last_done_ms
+ *  是服务端从流水现算的真值。 */
+export interface MoneyRecur {
+  id: string;
+  name: string;
+  cents: number;
+  direction: "expense" | "income";
+  cat: string;
+  sub: string;
+  merchant: string;
+  cycle: "day" | "week" | "month" | "year";
+  every_n: number;       // 每 N 个周期（D6 备用列，编辑器一期恒 1）
+  week_day: number;      // cycle='week' 用，0=周一
+  first_date: string;
+  time_hhmm: string;
+  tz_offset_min: number;
+  end_kind: "never" | "date";   // 结束日期含当天
+  end_date: string;
+  next_date: string;     // '' = 到头了（过了结束日期）
+  next_at_ms: number;
+  paused: boolean;
+  done_count: number;
+  last_done_ms: number;
+  updated_at_ms: number;
 }
 
 /** 当前筛选下的合计（服务端按**整个筛选结果**算，不是按页）。 */
@@ -625,6 +664,82 @@ export async function fetchMoneyStats(ym: string, trendMonths = 6): Promise<Mone
     return d as MoneyStats;
   } catch {
     return null;
+  }
+}
+
+/** 附件图片的下载地址（GET /files/{id} 不鉴权，file_id 本身即凭证）。 */
+export function moneyFileUrl(fileId: string): string {
+  return `${getServerUrl()}/files/${encodeURIComponent(fileId)}`;
+}
+
+/** 摘一张附件。原图（origin）服务端会拒 —— 界面本来就不给它删除键。 */
+export async function deleteMoneyAtt(entryId: string, fileId: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/entries/${encodeURIComponent(entryId)}/atts/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_id: fileId }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+// ── 记账 · 周期规则（二期）。触发在服务端（拍板 D5）：这里只管规则的增删改停，
+// 到点写流水、停机补记都是服务端看门狗的事。
+
+export async function fetchMoneyRecur(): Promise<MoneyRecur[] | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/recur`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return Array.isArray(d?.items) ? (d.items as MoneyRecur[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 建/改一条规则。改动只影响以后的（服务端重算下一次，已生成流水不动）。 */
+export async function putMoneyRecur(
+  id: string,
+  body: Record<string, unknown>,
+): Promise<MoneyRecur | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/recur/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return (d?.rule as MoneyRecur) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 停止/重新开始。恢复**不补停用期间的账**（服务端语义，稿的开关文案就是这么说的）。 */
+export async function pauseMoneyRecur(id: string, paused: boolean): Promise<boolean> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/recur/${encodeURIComponent(id)}/pause`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paused }),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 删规则不删已生成的流水（稿：那些是真花过的钱）。 */
+export async function deleteMoneyRecur(id: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/recur/${encodeURIComponent(id)}`, { method: "DELETE" });
+    return r.ok;
+  } catch {
+    return false;
   }
 }
 
