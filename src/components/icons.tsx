@@ -822,12 +822,12 @@ export function IconVideo(p: IconProps) {
   );
 }
 
-// 电脑操作：显示器 + 底座。实时操作页的空态也用它（稿 1928 同一张）。
+// 电脑操作：屏幕 + 光标箭头（2026-08-24 稿把老的「显示器 + 底座」换成了这张，
+// 语义从「一台机器」改成「正在被操作的屏幕」）。实时操作页的空态也用它。
 export function IconMonitor(p: IconProps) {
   return (
     <svg {...base(p)}>
-      <rect x="2.5" y="4" width="19" height="13" rx="2" />
-      <path d="M8 21h8M12 17v4" />
+      <path d="M20.5 12.5V6a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h6M12.5 10.5 16 19.5l1.3-3.8 3.8-1.3z" />
     </svg>
   );
 }

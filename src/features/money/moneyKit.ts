@@ -8,24 +8,29 @@
 // 服务端新增分类（现在还不能）时这里兜底用「其他」的三个点。
 import { Parser } from "expr-eval";
 
-// ── 分类图标（线性描边 path，取值照抄设计稿 CATS 表）───────────────────────
+// ── 分类图标（线性描边 path）────────────────────────────────────────────────
+// 取值照抄 doc/Umbra设计稿-ClaudeDesign/umbra-icons.json 的 category 组 ——
+// 那份文件自己声明「两端同名图标以本文件为准」，稿里 demo 的 CATS 表偶尔滞后，
+// 以 json 为正本（2026-08-24 全量导入起）。bonus / parttime / invest 三个
+// json 没收录，沿用稿的 CATS 值。iOS 的 MoneyCatArt 是同一批 path 的
+// M/L/C/Z 转换版，改这里必须同步改那边。
 export const CAT_ICON: Record<string, string> = {
-  housing: "M4 11 12 4l8 7v8a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z",
-  food: "M6 3v8a3 3 0 0 0 6 0V3M9 11v10M16 3c-1.5 2-2 4-2 6a2 2 0 0 0 2 2h1V3z",
-  shopping: "M5 8h14l-1.2 12H6.2zM9 8V6a3 3 0 0 1 6 0v2",
-  transport: "M5 16V9l1.6-3.4h10.8L19 9v7M5 16h14M7.5 13h.01M16.5 13h.01M7 16v2M17 16v2",
-  fun: "M4 8h16v10H4zM9 4h6M12 12h.01",
-  daily: "M6 8h12l-1 12H7zM9 8V5h6v3",
-  medical: "M12 7v10M7 12h10M5 5h14v14H5z",
-  study: "M4 6a2 2 0 0 1 2-2h5v16H6a2 2 0 0 1-2-2zM20 6a2 2 0 0 0-2-2h-5v16h5a2 2 0 0 0 2-2z",
-  social: "M4 9h16v11H4zM4 9l2-4h12l2 4M12 9v11",
-  other: "M6 12h.01M12 12h.01M18 12h.01",
-  salary: "M4 7h16v10H4zM4 11h16M9 14h2",
+  housing: "M4 11l8-6 8 6v9H4zM10 20v-6h4v6",
+  food: "M6 3v4.2M9 3v4.2M12 3v4.2M6 7.2h6M9 7.2V21M17.5 10.6V21M17.5 2.9c1.5 0 2.7 1.7 2.7 3.9s-1.2 3.9-2.7 3.9-2.7-1.7-2.7-3.9 1.2-3.9 2.7-3.9z",
+  shopping: "M5 8h14l-1.2 12H6.2zM9 8V5a3 3 0 0 1 6 0v3",
+  transport: "M2.5 15.5v-2.6l2.3-.6 2.4-3.3h9l2.6 3.3 2.7.6v2.6h-2.4M14.8 15.5H9.2M5 15.5H2.5M5.2 15.7a1.9 1.9 0 1 0 3.8 0 1.9 1.9 0 1 0-3.8 0M15 15.7a1.9 1.9 0 1 0 3.8 0 1.9 1.9 0 1 0-3.8 0",
+  fun: "M4 6h16v12H4zM9 9v6l5-3z",
+  daily: "M7 4h10l1 16H6zM10 4V2h4v2M9 12h6",
+  medical: "M10 4h4v6h6v4h-6v6h-4v-6H4v-4h6z",
+  study: "M2.5 9.2 12 5.2l9.5 4-9.5 4zM6.8 11v4.2c0 1.4 2.3 2.4 5.2 2.4s5.2-1 5.2-2.4V11M21.5 9.6v4.4",
+  social: "M12 20s-7-4.4-7-9a4 4 0 0 1 7-2.6A4 4 0 0 1 19 11c0 4.6-7 9-7 9z",
+  other: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17M8.4 12h.01M12 12h.01M15.6 12h.01",
+  salary: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17M8.8 8.2 12 12l3.2-3.8M12 12v4.6M9.4 13h5.2",
   bonus: "M12 3l2.5 5.5L20 11l-5.5 2.5L12 19l-2.5-5.5L4 11l5.5-2.5z",
   parttime: "M4 8h16v11H4zM9 8V5h6v3",
   invest: "M4 18l5-6 4 3 6-8M4 20h16",
-  reimburse: "M6 3h12v18l-3-2-3 2-3-2-3 2z M9 8h6M9 12h6",
-  other_in: "M6 12h.01M12 12h.01M18 12h.01",
+  reimburse: "M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6",
+  other_in: "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17M8.4 12h.01M12 12h.01M15.6 12h.01",
 };
 export const catIcon = (slug: string): string => CAT_ICON[slug] || CAT_ICON.other;
 

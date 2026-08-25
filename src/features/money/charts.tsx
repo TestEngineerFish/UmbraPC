@@ -1,10 +1,20 @@
 // 记账的两张图：分类环形图 + 月度趋势柱状图。**手绘 canvas，不引 Chart.js** ——
-// 一个环加一排柱，不值一个运行时依赖 + 一次 package-lock 三端同步的麻烦；
-// 而且手绘才能直接吃 CSS 变量，浅深主题切换不用配第二套颜色。
+// 一个环加一排柱，不值一个运行时依赖 + 一次 package-lock 三端同步的麻烦。
 //
-// 主题与尺寸的处理方式：每次 effect 都整张重画（没有依赖数组）。图表数据一个月
-// 最多十来个点，整画一次远小于一帧的预算；换来的是「主题切换 → App 重渲染 →
-// 这里自动跟着重画」，不用自己去监听 data-theme。窗口拉伸靠 ResizeObserver。
+// 两条用血换来的规矩（验收第二轮的两个 bug）：
+//
+// 1. **canvas 不认识 CSS 变量**。fillStyle 塞 "var(--c1)" 这种字符串是非法值，
+//    canvas 会原地保留上一次的颜色 —— 初始值是黑，于是整个环全黑。
+//    所有进 canvas 的颜色都必须先过 resolveColor() 换成真实色值。
+// 2. **重画必须挂依赖数组**。Chromium 在「内容从光标底下滚过」时会补发合成
+//    mousemove 来刷 :hover —— 滚动经过图表 = 一串 mousemove = 一串 setTip
+//    重渲染；effect 不挂依赖的话，每次重渲染都整张重画 + 重建 ResizeObserver，
+//    滚到「月度趋势」那一段就一卡一卡（用户实测点名）。现在：数据变才重画，
+//    悬停提示只在**命中的段变了**才 setState，滚动路过一次都不画。
+//
+// 主题切换：换肤是 App 根上的 React state，整棵子树会重渲染、segs/points 换新
+// 引用、effect 跟着重跑 —— 正常路径够用。再补一个 MutationObserver 盯着最近的
+// data-theme 属性，是给「子树被 memo 掉 / 独立窗口只改属性不重渲染」兜底的。
 import { useEffect, useRef, useState } from "react";
 import { yuan } from "./moneyKit";
 
@@ -12,6 +22,12 @@ import { yuan } from "./moneyKit";
 function cssVar(el: HTMLElement | null, name: string): string {
   if (!el) return "#888";
   return getComputedStyle(el).getPropertyValue(name).trim() || "#888";
+}
+
+/** 把 "var(--xx)" 解析成真实色值再交给 canvas；已经是真实色值的原样放行。 */
+function resolveColor(el: HTMLElement | null, color: string): string {
+  const m = /^var\((--[\w-]+)\)$/.exec(color.trim());
+  return m ? cssVar(el, m[1]) : color;
 }
 
 /** 按设备像素比撑起画布，避免高分屏发糊。返回 CSS 像素下的宽高。 */
@@ -28,6 +44,16 @@ function fitCanvas(cv: HTMLCanvasElement): { w: number; h: number } {
   return { w, h };
 }
 
+/** 数据重画之外的两个重画时机：容器变尺寸、主题换肤。挂上并返回统一的清理函数。 */
+function watchRedraw(cv: HTMLCanvasElement, draw: () => void): () => void {
+  const ro = new ResizeObserver(draw);
+  if (cv.parentElement) ro.observe(cv.parentElement);
+  const themed = cv.closest("[data-theme]");
+  const mo = new MutationObserver(draw);
+  if (themed) mo.observe(themed, { attributes: true, attributeFilter: ["data-theme"] });
+  return () => { ro.disconnect(); mo.disconnect(); };
+}
+
 interface Tip { x: number; y: number; text: string }
 
 /** 悬停提示。绝对定位在图表容器里，夹在容器内不出界。 */
@@ -41,13 +67,26 @@ function TipBox({ tip }: { tip: Tip | null }) {
   );
 }
 
+/** 提示只在「命中目标变了」才 setState —— 光标在同一段里挪动零重渲染。 */
+function useTip(): [Tip | null, (t: Tip | null) => void] {
+  const [tip, setTip] = useState<Tip | null>(null);
+  const keyRef = useRef<string | null>(null);
+  const show = (t: Tip | null) => {
+    const key = t?.text ?? null;
+    if (key === keyRef.current) return;
+    keyRef.current = key;
+    setTip(t);
+  };
+  return [tip, show];
+}
+
 export interface DonutSeg { label: string; cents: number; color: string }
 
 /** 环形图。中心文字由外面叠（跟稿一样），这里只画环与承接悬停。 */
 export function DonutChart({ segs }: { segs: DonutSeg[] }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const cvRef = useRef<HTMLCanvasElement>(null);
-  const [tip, setTip] = useState<Tip | null>(null);
+  const [tip, showTip] = useTip();
   // 悬停命中要用到每段的角度区间，画的时候顺手存下来。
   const arcsRef = useRef<{ from: number; to: number; label: string; cents: number }[]>([]);
 
@@ -73,7 +112,8 @@ export function DonutChart({ segs }: { segs: DonutSeg[] }) {
         ctx.arc(cx, cy, r, a, a + sweep);
         ctx.arc(cx, cy, inner, a + sweep, a, true);
         ctx.closePath();
-        ctx.fillStyle = s.color;
+        // 段色是 "var(--cN)" —— 必须解析成真实色值，直接塞会整环全黑（见文件头）。
+        ctx.fillStyle = resolveColor(boxRef.current, s.color);
         ctx.fill();
         // 段间 2px 的卡片色描边，跟稿的 borderWidth: 2 同款。
         ctx.strokeStyle = border;
@@ -84,10 +124,8 @@ export function DonutChart({ segs }: { segs: DonutSeg[] }) {
       }
     };
     draw();
-    const ro = new ResizeObserver(draw);
-    if (cv.parentElement) ro.observe(cv.parentElement);
-    return () => ro.disconnect();
-  });
+    return watchRedraw(cv, draw);
+  }, [segs]);
 
   const onMove = (e: React.MouseEvent) => {
     const cv = cvRef.current;
@@ -97,18 +135,20 @@ export function DonutChart({ segs }: { segs: DonutSeg[] }) {
     const cx = rect.width / 2, cy = rect.height / 2;
     const r = Math.min(rect.width, rect.height) / 2 - 2;
     const dist = Math.hypot(x - cx, y - cy);
-    if (dist < r * 0.68 || dist > r) { setTip(null); return; }
+    if (dist < r * 0.68 || dist > r) { showTip(null); return; }
     // atan2 的角从 -π 起，画的时候从 -π/2 起 —— 归一到同一个圈再比对。
     let ang = Math.atan2(y - cy, x - cx);
     if (ang < -Math.PI / 2) ang += Math.PI * 2;
     const hit = arcsRef.current.find((s) => ang >= s.from && ang < s.to);
-    if (!hit) { setTip(null); return; }
-    setTip({ x, y, text: `${hit.label} ¥${yuan(hit.cents)}` });
+    if (!hit) { showTip(null); return; }
+    // 提示钉在这一段的中点角上，不跟着光标跑 —— 光标在段内挪动就不触发重渲染。
+    const mid = (hit.from + hit.to) / 2, rad = (r + r * 0.68) / 2;
+    showTip({ x: cx + Math.cos(mid) * rad, y: cy + Math.sin(mid) * rad, text: `${hit.label} ¥${yuan(hit.cents)}` });
   };
 
   return (
     <div ref={boxRef} className="relative w-full h-full">
-      <canvas ref={cvRef} className="block w-full h-full" onMouseMove={onMove} onMouseLeave={() => setTip(null)} />
+      <canvas ref={cvRef} className="block w-full h-full" onMouseMove={onMove} onMouseLeave={() => showTip(null)} />
       <TipBox tip={tip} />
     </div>
   );
@@ -121,7 +161,7 @@ export interface TrendPt { label: string; cents: number; current: boolean }
 export function TrendBars({ points }: { points: TrendPt[] }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const cvRef = useRef<HTMLCanvasElement>(null);
-  const [tip, setTip] = useState<Tip | null>(null);
+  const [tip, showTip] = useTip();
   const barsRef = useRef<{ x: number; w: number; label: string; cents: number }[]>([]);
 
   useEffect(() => {
@@ -171,6 +211,7 @@ export function TrendBars({ points }: { points: TrendPt[] }) {
         ctx.fillText(p.label, x + bw / 2, padT + plotH + 5);
         if (p.current && p.cents > 0) {
           ctx.fillStyle = cssVar(el, "--text");
+          ctx.textAlign = "center";
           ctx.textBaseline = "bottom";
           ctx.font = "600 11px system-ui, sans-serif";
           ctx.fillText(`¥${yuan(p.cents)}`, x + bw / 2, y - 3);
@@ -180,10 +221,8 @@ export function TrendBars({ points }: { points: TrendPt[] }) {
       });
     };
     draw();
-    const ro = new ResizeObserver(draw);
-    if (cv.parentElement) ro.observe(cv.parentElement);
-    return () => ro.disconnect();
-  });
+    return watchRedraw(cv, draw);
+  }, [points]);
 
   const onMove = (e: React.MouseEvent) => {
     const cv = cvRef.current;
@@ -191,13 +230,14 @@ export function TrendBars({ points }: { points: TrendPt[] }) {
     const rect = cv.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const hit = barsRef.current.find((b) => x >= b.x && x <= b.x + b.w);
-    if (!hit) { setTip(null); return; }
-    setTip({ x: hit.x + hit.w / 2, y: 26, text: `${hit.label} ¥${yuan(hit.cents)}` });
+    if (!hit) { showTip(null); return; }
+    // 位置由命中的柱决定（柱心 + 固定高度），同一根柱里挪光标不重渲染。
+    showTip({ x: hit.x + hit.w / 2, y: 26, text: `${hit.label} ¥${yuan(hit.cents)}` });
   };
 
   return (
     <div ref={boxRef} className="relative w-full h-full">
-      <canvas ref={cvRef} className="block w-full h-full" onMouseMove={onMove} onMouseLeave={() => setTip(null)} />
+      <canvas ref={cvRef} className="block w-full h-full" onMouseMove={onMove} onMouseLeave={() => showTip(null)} />
       <TipBox tip={tip} />
     </div>
   );
