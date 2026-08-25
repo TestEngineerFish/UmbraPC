@@ -14,6 +14,7 @@ import { ClipboardManager } from "./core/clipboard";
 import { ScreenshotManager } from "./core/screenshot";
 import { LauncherManager } from "./core/launcher";
 import { VaultManager } from "./core/vault";
+import { NotifyManager } from "./core/notify";
 import { registerRuntimeIpc } from "./core/runtime";
 import { getMainLocale, resolveLocale, setMainLocale } from "./i18n";
 import { cancelAgentTask, killAllAgentChildren } from "./core/providers/agent";
@@ -57,6 +58,7 @@ let clipboard: ClipboardManager;
 let screenshot: ScreenshotManager;
 let launcher: LauncherManager;
 let vault: VaultManager;
+let notify: NotifyManager;
 let mainWindow: BrowserWindow | null = null; // 显式跟踪主窗口：剪贴板/截图的隐藏窗口会让 getAllWindows() 恒 >0，不能靠它判断
 let tray: Tray | null = null;
 let quitting = false; // true 时才真正退出（关窗默认只隐藏）
@@ -470,6 +472,24 @@ app.whenReady().then(async () => {
   vault = new VaultManager(store, app.getPath("userData"), winOpts, { copyConceal: (t) => clipboard.writeConcealed(t) }, reregisterShortcuts);
   // 工作流配置项里的密钥存保险箱（W10）：launcher 先于 vault 建好，所以建完再回填。
   launcher.setVault(vault);
+
+  // 提醒引擎。core/notify 早就写完（60s 扫描、系统通知、双向同步、IPC 都在），
+  // 但这里一直没实例化、preload 也没暴露桥 —— 提醒页恒显示「没有注入提醒能力」
+  // 的空态（用户验收点名）。两个回调都取**调用时**的 mainWindow：
+  // 主窗口可能被关掉重建，捕获引用会发给一具死窗口。
+  const sendToMain = (channel: string, ...args: unknown[]) => {
+    const w = mainWindow;
+    if (w && !w.isDestroyed()) {
+      const post = () => w.webContents.send(channel, ...args);
+      if (w.webContents.isLoading()) w.webContents.once("did-finish-load", post); else post();
+    }
+  };
+  notify = new NotifyManager(store, app.getPath("userData"), {
+    showMainWindow,
+    // 点系统通知本体 → 唤起主窗口并把那条提醒的 id 递给渲染层（跳提醒页高亮）。
+    openReminder: (id) => { showMainWindow(); sendToMain("notify:open", id); },
+  }, () => sendToMain("notify:changed"));
+  void notify.init();
   Promise.all([clipboard.init(), screenshot.init(), launcher.init(), vault.init()])
     .then(() => {
       reregisterShortcuts(); // 就绪后统一注册各自快捷键
@@ -537,6 +557,7 @@ app.on("before-quit", () => {
 app.on("will-quit", () => {
   globalShortcut.unregisterAll();
   clipboard?.dispose();   // 停掉剪贴板历史的过期巡检定时器
+  notify?.dispose();      // 停掉提醒的扫描/同步定时器
   // 带走还在跑的引擎进程（claude/codex）：否则会留下孤儿进程，
   // 下次同一工作区的任务会被永久堵在队列里。
   killAllAgentChildren();

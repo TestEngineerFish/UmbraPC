@@ -305,3 +305,28 @@ contextBridge.exposeInMainWorld("umbraSticker", {
 contextBridge.exposeInMainWorld("umbraRuntime", {
   scan: (kind: string) => ipcRenderer.invoke("runtime:scan", kind),
 });
+
+// 提醒桥（提醒页用，类型契约在 src/features/notify/bridge.ts 的 NotifyAPI）。
+// 这块曾经漏接：core/notify 的主进程引擎和渲染层 UI 都写完了，
+// 中间这座桥没建 —— hasNotify 恒为 false，提醒页永远停在
+// 「当前环境没有注入提醒能力」的空态（用户验收点名）。改 NotifyAPI 记得两头一起改。
+contextBridge.exposeInMainWorld("umbraNotify", {
+  list: () => ipcRenderer.invoke("notify:list"),
+  state: () => ipcRenderer.invoke("notify:state"),
+  save: (r: unknown) => ipcRenderer.invoke("notify:save", r),
+  // 渲染层叫 remove（delete 在 JS 里是保留字，做方法名到处别扭），IPC 频道叫 delete。
+  remove: (id: string) => ipcRenderer.invoke("notify:delete", id),
+  setDone: (id: string, done: boolean) => ipcRenderer.invoke("notify:setDone", id, done),
+  snooze: (id: string, minutes: number) => ipcRenderer.invoke("notify:snooze", id, minutes),
+  syncNow: () => ipcRenderer.invoke("notify:syncNow"),
+  onChanged: (cb: () => void) => {
+    const l = () => cb();
+    ipcRenderer.on("notify:changed", l);
+    return () => ipcRenderer.removeListener("notify:changed", l);
+  },
+  onOpen: (cb: (id: string) => void) => {
+    const l = (_e: unknown, id: string) => cb(id);
+    ipcRenderer.on("notify:open", l);
+    return () => ipcRenderer.removeListener("notify:open", l);
+  },
+});
