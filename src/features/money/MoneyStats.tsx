@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import type { MoneyEntry, MoneyStats as Stats } from "../../services/server";
 import { IconUp, IconDown, IconArrowRight } from "../../components/icons";
 import { DonutChart, TrendBars, type DonutSeg } from "./charts";
-import { catColor, catIcon, yuan } from "./moneyKit";
+import { catColor, catIcon, catTint, yuan } from "./moneyKit";
 
 /** 环形图只画金额前 5 的分类，其余合并为「其他分类」（稿明写的规则）。 */
 const RING_TOP = 5;
@@ -142,8 +142,10 @@ export function MoneyStatsView({ stats, entries, catName, catSlot, onGoList }: {
                 <div key={r.slug} onClick={() => onGoList(r.slug)}
                   className="flex items-center gap-[10px] px-[8px] py-[7px] rounded-[8px] cursor-pointer hover:bg-hover">
                   <span className="w-[8px] h-[8px] flex-none rounded-full" style={{ background: r.color }} />
-                  <span className="w-[20px] flex-none flex items-center justify-center text-muted">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(r.slug)} /></svg>
+                  {/* 分类色块（批次 003）：排行的图标也进同色 tint 块，色点保留当图例锚。 */}
+                  <span className="w-[22px] h-[22px] flex-none rounded-[6px] flex items-center justify-center"
+                    style={{ color: r.color, background: `color-mix(in srgb, ${r.color} var(--cat-tint), transparent)` }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(r.slug)} /></svg>
                   </span>
                   <span className="w-[52px] flex-none text-[12.5px] whitespace-nowrap">{r.name}</span>
                   <span className="flex-1 min-w-[40px] h-[5px] rounded-full bg-track overflow-hidden">
@@ -200,8 +202,8 @@ export function MoneyStatsView({ stats, entries, catName, catSlot, onGoList }: {
             <div className="flex flex-col">
               {top5.map((e) => (
                 <div key={e.id} className="flex items-center gap-[10px] py-[7px] border-b border-border-soft last:border-b-0">
-                  <span className="w-[26px] h-[26px] flex-none rounded-[7px] bg-chip flex items-center justify-center"
-                    style={{ color: catColor(catSlot(e.cat)) }}>
+                  <span className="w-[26px] h-[26px] flex-none rounded-[7px] flex items-center justify-center"
+                    style={{ color: catColor(catSlot(e.cat)), background: catTint(catSlot(e.cat)) }}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(e.cat)} /></svg>
                   </span>
                   <div className="flex-1 min-w-0">

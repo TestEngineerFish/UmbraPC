@@ -8,7 +8,7 @@ import { useTranslation } from "react-i18next";
 import type { MoneyEntry } from "../../services/server";
 import { ContextMenu, EmptyState } from "../../components/ui";
 import { IconChevronDown, IconPencil, IconSearch, IconTrash } from "../../components/icons";
-import { catColor, catIcon, groupByDay, SRC_ICON, yuan } from "./moneyKit";
+import { catColor, catIcon, catTint, groupByDay, SRC_ICON, yuan } from "./moneyKit";
 
 interface Ctx { x: number; y: number; entry: MoneyEntry }
 
@@ -138,8 +138,9 @@ export function MoneyListView({ entries, cats, catName, catSlot, filterCat, setF
                 <div key={e.id}
                   onContextMenu={(ev) => { ev.preventDefault(); setCtx({ x: ev.clientX, y: ev.clientY, entry: e }); }}
                   className="flex items-center gap-[11px] px-[13px] py-[9px] border-b border-border-soft last:border-b-0 hover:bg-hover">
-                  <span className="w-[28px] h-[28px] flex-none rounded-[8px] bg-chip flex items-center justify-center"
-                    style={{ color: catColor(catSlot(e.cat)) }}>
+                  {/* 分类色块（批次 003）：图标底是同色 tint 圆角块，描边取色槽色。 */}
+                  <span className="w-[28px] h-[28px] flex-none rounded-[8px] flex items-center justify-center"
+                    style={{ color: catColor(catSlot(e.cat)), background: catTint(catSlot(e.cat)) }}>
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(e.cat)} /></svg>
                   </span>
                   <div className="flex-1 min-w-0">

@@ -14,7 +14,7 @@ import { useTranslation } from "react-i18next";
 import { fetchMoneyCats, updateMoneyCat, type MoneyCat } from "../../services/server";
 import { showToast } from "../../components/overlay";
 import { Modal, EmptyState, btn } from "../../components/ui";
-import { catColor, catIcon, SUBS } from "../money/moneyKit";
+import { catColor, catIcon, catTint, SUBS } from "../money/moneyKit";
 
 const BTN_S = "flex-none whitespace-nowrap px-[9px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-orange hover:text-orange-text";
 const BTN_S_WARN = "flex-none whitespace-nowrap px-[9px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-warning hover:text-warning";
@@ -69,7 +69,9 @@ export function MoneyCats() {
 
   const ownerOf = (slot: number): MoneyCat | null => cats.find((c) => c.slot === slot && c.enabled) || null;
   const grayNames = cats.filter((c) => c.slot === 0 && c.enabled).map((c) => c.name);
-  const freeSlots = [1, 2, 3, 4, 5, 6, 7].filter((n) => !ownerOf(n)).length;
+  // 彩色槽 1–7、9、10（批次 003 扩容：9=墨青、10=紫罗兰）；8 是中性灰不参与占用。
+  const COLOR_SLOTS = [1, 2, 3, 4, 5, 6, 7, 9, 10];
+  const freeSlots = COLOR_SLOTS.filter((n) => !ownerOf(n)).length;
 
   return (
     <div className="flex flex-col gap-[14px] max-w-[820px]">
@@ -77,7 +79,7 @@ export function MoneyCats() {
       <div className="flex items-center gap-[10px] px-[14px] py-[11px] bg-card border border-border rounded-[11px] flex-wrap">
         <span className="flex-none text-[12px] font-semibold whitespace-nowrap">{t("money.catsSlotUsage")}</span>
         <div className="flex-1 min-w-0 flex flex-wrap gap-[6px]">
-          {[1, 2, 3, 4, 5, 6, 7].map((n) => {
+          {COLOR_SLOTS.map((n) => {
             const o = ownerOf(n);
             return (
               <span key={n} className="flex items-center gap-[5px] px-[9px] py-[2px] rounded-full bg-chip text-[11px] whitespace-nowrap flex-none">
@@ -109,8 +111,10 @@ export function MoneyCats() {
         </div>
         {cats.map((c) => (
           <div key={c.slug} className={`flex items-center gap-[11px] px-[14px] py-[9px] border-b border-border-soft last:border-b-0 hover:bg-hover ${c.enabled ? "" : "opacity-60"}`}>
-            <span className="w-[26px] h-[26px] flex-none rounded-[7px] bg-chip flex items-center justify-center"
-              style={{ color: c.enabled ? catColor(c.slot) : "var(--faint)" }}>
+            <span className="w-[26px] h-[26px] flex-none rounded-[7px] flex items-center justify-center"
+              style={c.enabled
+                ? { color: catColor(c.slot), background: catTint(c.slot) }
+                : { color: "var(--faint)", background: "var(--chip)" }}>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(c.slug)} /></svg>
             </span>
             <span className="flex-1 min-w-0 flex items-center gap-[8px]">
@@ -195,7 +199,7 @@ export function MoneyCats() {
             </div>
           ) : (
             <div className="flex flex-col gap-[6px]">
-              {[0, 1, 2, 3, 4, 5, 6, 7].map((n) => {
+              {[0, ...COLOR_SLOTS].map((n) => {
                 const o = n ? ownerOf(n) : null;
                 const mine = slotFor.slot === n;
                 return (

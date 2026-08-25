@@ -75,14 +75,19 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
   const cents = amountToCents(amount);
   const expr = isExpr(amount);
   const dirCats = cats.filter((c) => c.direction === dir && c.enabled);
-  // 最近用过：本月流水里同方向、按时间新→旧去重后的前三个分类。
-  // 没记过账时整行不出现 —— 空荡荡的「最近用过」只是在提醒用户他没用过。
+  // 最近用过（批次 003 定稿）：本月流水里同方向、按时间新→旧去重取 3 个；
+  // 该方向还没记过时用分类表前几个兜底 —— 行为稳定，切方向不再时有时无。
+  // （iOS 那条「分类总数 ≤3 整行不显示」的规则 PC 不适用：两个方向的分类都多于 3。）
   const recent: string[] = [];
   for (const e of entries) {
     if (e.direction !== dir || recent.includes(e.cat)) continue;
     if (!dirCats.some((c) => c.slug === e.cat)) continue;
     recent.push(e.cat);
     if (recent.length >= 3) break;
+  }
+  for (const c of dirCats) {
+    if (recent.length >= 3) break;
+    if (!recent.includes(c.slug)) recent.push(c.slug);
   }
   const subs = SUBS[cat] || [];
 

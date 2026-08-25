@@ -68,9 +68,16 @@ export function yuan(cents: number): string {
   return (cents / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/** 色槽 → CSS 变量。slot 1–7 是彩色，0（无槽）与一切非法值用中性灰 --c8。 */
+/** 色槽 → CSS 变量。彩色槽是 1–7、9、10（批次 003 起居住=9、人情=10）；
+ *  8 是中性灰，0（无槽）与一切非法值也落它。 */
 export function catColor(slot: number): string {
-  return slot >= 1 && slot <= 7 ? `var(--c${slot})` : "var(--c8)";
+  return slot >= 1 && slot <= 10 && slot !== 8 ? `var(--c${slot})` : "var(--c8)";
+}
+
+/** 分类色块：图标底的同色圆角块（稿：color-mix 同色 + --cat-tint 浓度，
+ *  浅色 13% / 深色 22%，浓度差写在主题变量里，这里不用分主题）。 */
+export function catTint(slot: number): string {
+  return `color-mix(in srgb, ${catColor(slot)} var(--cat-tint), transparent)`;
 }
 
 // ── 金额算式（记一笔的输入框支持直接敲 258/3）───────────────────────────────
