@@ -111,9 +111,41 @@ let forceScroll = false;
 let loadingOlder = false;
 // 输入草稿：按会话各存一份，切换联系人不串味。
 const drafts: Record<string, string> = {};
-// 三态开关（过渡拐杖）：auto=模型判；chat=强制聊天；execution=强制执行。默认 auto。
-type ChatMode = "auto" | "chat" | "execution";
-let chatMode: ChatMode = "auto";
+// ── 「/」快捷输入（批次 005 落地；三态「模式」开关同批撤除）──────────────────
+// 动作是把自然语言引向特定意图的**芯片**，不是结构化命令：发出去的永远是
+// 「【动作名】+ 用户原文」，由秘书的语言理解接住 —— 所以这里不需要迷你表单，
+// 将来 Skill / MCP 动态接入的动作也只要提供 图标/名称/说明/占位 四样就能进面板。
+interface SlashAction {
+  k: string;        // 动作 id（过滤时也当英文别名匹配）
+  label: string;
+  desc: string;
+  params: string;   // 选中后输入框的灰色参数占位
+  icon: string;     // 24×24 线性描边 path（取值照稿）
+  tag?: string;     // Skill / MCP 胶囊标签（内建动作无）
+}
+// 目录做成函数而不是常量：label 走 i18n，语言切换后要取到新文案。
+// 「接入的能力」组现在是空的 —— 稿里那三条（翻译/压缩视频/查天气）是示例，
+// 没有真实后端能力之前不放假动作；组为空整组不渲染，接入后追加进来即可。
+function slashCatalog(): { name: string; items: SlashAction[] }[] {
+  return [
+    { name: t("chat.slashGroupRecord"), items: [
+      { k: "money", label: t("chat.slashMoney"), desc: t("chat.slashMoneyDesc"), params: t("chat.slashMoneyParams"),
+        icon: "M5 4.5l7 9 7-9M8 13.5h8M8 17.5h8M12 13.5V21" },
+      { k: "insp", label: t("chat.slashInsp"), desc: t("chat.slashInspDesc"), params: t("chat.slashInspParams"),
+        icon: "M9.5 18h5M10.5 21.5h3M12 2.5a7 7 0 0 0-4 12.8V18h8v-2.7a7 7 0 0 0-4-12.8" },
+      { k: "rem", label: t("chat.slashRem"), desc: t("chat.slashRemDesc"), params: t("chat.slashRemParams"),
+        icon: "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" },
+    ] },
+    { name: t("chat.slashGroupTask"), items: [
+      { k: "task", label: t("chat.slashTask"), desc: t("chat.slashTaskDesc"), params: t("chat.slashTaskParams"),
+        icon: "M9 11.5l3 3L22 5M21 12.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" },
+    ] },
+  ];
+}
+let chipAction: SlashAction | null = null; // 输入框左侧的前缀芯片（选中的动作）
+let slashSel = 0;                          // 面板键盘选中下标（拉平序）
+let slashDismissed = false;                // 「当普通消息发」：这段 / 开头文本不再弹面板
+let ideaBanner: string | null = null;      // 灵感来源横幅文案（「知道了」可关）
 // 正在清空历史：清空期间禁发消息，避免新消息被服务端的会话重置一起删掉。
 let clearing = false;
 
@@ -192,6 +224,11 @@ export function setAppRerender(cb: () => void): void {
 let openTaskCb: ((taskId: string) => void) | null = null;
 export function setOpenTask(cb: (taskId: string) => void): void {
   openTaskCb = cb;
+}
+// 斜杠面板空态的「去能力」要跳能力页，同 openTask 一样由 shell 注入（防循环依赖）。
+let goNavCb: ((nav: string) => void) | null = null;
+export function setGoNav(cb: (nav: string) => void): void {
+  goNavCb = cb;
 }
 
 const esc = (s: string) =>
@@ -750,16 +787,30 @@ function blockHtml(b: Block, i: number): string {
   }
 
   if (b.kind === "done") {
-    const links = (b.results || [])
-      .map((r) => {
-        const img = isImageUrl(r.url) ? imageHtml(r.url) : "";
-        return `${img}<div style="display:flex;align-items:center;gap:8px;font-size:13px;margin-top:5px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg><a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:var(--orange-text);text-decoration:none;font-weight:500;">${esc(r.title)}</a></div>`;
-      })
-      .join("");
-    // 左边那条 3px 竖条去掉了：这张卡已经有 --success-soft 底 + --success 描边 + 对勾图标
-    // 三处在表状态，第四处纯属重复。分层只用「1px 描边 + 底色差」——
-    // 同一批把任务卡的竖条也去掉了，两张卡保持一套语言。
-    return `<div style="align-self:flex-start;max-width:82%;background:var(--success-soft);border:1px solid var(--success);border-radius:11px;padding:12px 14px;"><div style="font-weight:600;color:var(--success);margin-bottom:7px;display:flex;align-items:center;gap:7px;">${svgIcon(ICON_CHECK, 14, 2.2)}<span style="min-width:0;">${esc(t("chat.done"))}：${esc(b.goal)}</span></div>${links}</div>`;
+    // 产出区按批次 005 的统一行形态（原来是手写的绿字绿框 + 裸图块）：
+    // 38×38 前导（图片缩略 / 文件描边图标）+ 文件名橙链接 + 等宽 meta + 24px 下载按钮，
+    // 容器 1px 描边圆角 9、行间 --border-soft。图片点开走灯箱（data-img → openLightbox）。
+    const results = b.results || [];
+    const rows = results.map((r, i) => {
+      const url = absUrl(r.url);
+      const img = isImageUrl(url);
+      const lead = img
+        ? `<img data-img="${esc(url)}" src="${esc(url)}" alt="${esc(r.title)}" style="flex:none;width:38px;height:38px;border-radius:7px;object-fit:cover;cursor:zoom-in;" onerror="this.style.display='none'">`
+        : `<span style="flex:none;width:38px;height:38px;border-radius:8px;background:var(--chip);color:var(--muted);display:flex;align-items:center;justify-content:center;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"></path><path d="M14 3v5h5"></path></svg></span>`;
+      const meta = url.replace(/^https?:\/\/[^/]+/, "");
+      const name = img
+        ? `<span data-img="${esc(url)}" style="font-size:12.5px;font-weight:500;color:var(--orange-text);cursor:zoom-in;">${esc(r.title)}</span>`
+        : `<a href="${esc(url)}" target="_blank" rel="noopener" style="font-size:12.5px;font-weight:500;color:var(--orange-text);text-decoration:none;">${esc(r.title)}</a>`;
+      return `<div class="hover:bg-hover transition-colors" style="display:flex;align-items:center;gap:10px;padding:8px 11px;${i > 0 ? "border-top:1px solid var(--border-soft);" : ""}">${lead}`
+        + `<div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;">${name}`
+        + `<span style="font-size:10.5px;color:var(--faint);font-family:ui-monospace,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(meta)}</span></div>`
+        + `<a href="${esc(url)}" target="_blank" rel="noopener" title="${esc(t("chat.resultDownload"))}" style="flex:none;width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);border-radius:7px;color:var(--muted);"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path></svg></a></div>`;
+    }).join("");
+    const out = results.length
+      ? `<div style="font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--faint);margin:9px 0 6px;">${esc(t("chat.resultsTitle", { n: results.length }))}</div>`
+        + `<div style="border:1px solid var(--border);border-radius:9px;background:var(--card);overflow:hidden;">${rows}</div>`
+      : "";
+    return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--success-soft);border:1px solid var(--success);border-radius:11px;padding:12px 14px;"><div style="font-weight:600;color:var(--success);display:flex;align-items:center;gap:7px;">${svgIcon(ICON_CHECK, 14, 2.2)}<span style="min-width:0;">${esc(t("chat.done"))}：${esc(b.goal)}</span></div>${out}</div>`;
   }
 
   if (b.kind === "confirm") {
@@ -1143,33 +1194,166 @@ function refreshComposer(): void {
     return;
   }
   wrap.style.display = "";
-  const ph = t("chat.placeholder");
   if (!wrap.querySelector("#draft")) {
+    // position:relative：斜杠面板绝对定位在输入区上方（稿：left 16、贴着输入条向上）。
+    wrap.style.position = "relative";
     wrap.innerHTML = `
-      <div id="umodebar" style="display:flex;gap:8px;align-items:center;padding:8px 16px 0;"></div>
-      <div style="display:flex;gap:10px;align-items:flex-end;padding:10px 16px 12px;">
-        <textarea id="draft" rows="2" class="flex-1 resize-none border border-border bg-bg text-text rounded-[10px] px-[12px] py-[9px] text-[13.5px] leading-[1.5] font-[inherit] max-h-[120px] outline-none transition-[border-color,box-shadow] duration-[130ms] ease-out hover:border-orange focus:border-orange focus:shadow-[var(--focus-ring)]"></textarea>
+      <div id="uslash"></div>
+      <div id="uideabanner"></div>
+      <div style="display:flex;gap:10px;align-items:flex-end;padding:10px 16px 4px;">
+        <div style="flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:flex-start;gap:7px;border:1px solid var(--border);background:var(--bg);border-radius:10px;padding:6px 8px;">
+          <span id="uchip"></span>
+          <textarea id="draft" rows="2" class="flex-1 min-w-[120px] resize-none border-none bg-transparent text-text px-[4px] py-[3px] text-[13.5px] leading-[1.5] font-[inherit] max-h-[120px] outline-none"></textarea>
+        </div>
         <button id="sendbtn" class="${btn("primary")} gap-[6px] self-center" ${clearing ? "disabled" : ""}>${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
-      </div>`;
+      </div>
+      <div id="uchiphint" style="padding:0 16px 10px;"></div>`;
     wrap.querySelector("#sendbtn")!.addEventListener("click", send);
     const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
-    ta.addEventListener("input", () => { drafts[activeConv] = ta.value; });
+    ta.addEventListener("input", () => {
+      drafts[activeConv] = ta.value;
+      // 文本不再以 / 开头（清空/改写）时，「当普通消息发」的豁免自动失效。
+      if (ta.value.charAt(0) !== "/") slashDismissed = false;
+      slashSel = 0;
+      renderSlashPanel();
+    });
     ta.addEventListener("keydown", (e) => {
       if (e.isComposing || e.keyCode === 229) return;
+      // 芯片态：空文本按 Backspace 删芯片，回到普通输入（稿的 PC 删法）。
+      if (chipAction && e.key === "Backspace" && !ta.value) {
+        e.preventDefault();
+        setChip(null);
+        return;
+      }
+      const flat = slashFlat();
+      if (slashPanelOn()) {
+        // 面板开着：↑↓ 移动选中、Enter 选用、Esc 清掉 / 关面板 —— 都不落进文本。
+        if (e.key === "Escape") { e.preventDefault(); ta.value = ""; drafts[activeConv] = ""; renderSlashPanel(); return; }
+        if (e.key === "ArrowDown") { e.preventDefault(); slashSel = Math.min(slashSel + 1, Math.max(flat.length - 1, 0)); renderSlashPanel(); return; }
+        if (e.key === "ArrowUp") { e.preventDefault(); slashSel = Math.max(slashSel - 1, 0); renderSlashPanel(); return; }
+        if (e.key === "Enter" && !e.shiftKey && flat.length) { e.preventDefault(); pickSlash(flat[Math.min(slashSel, flat.length - 1)]); return; }
+      }
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
     });
-    // 三态开关（自动/聊天/执行）：点选即切，只对本端后续发送生效。
-    wrap.querySelector("#umodebar")!.addEventListener("click", (e) => {
-      const el = (e.target as HTMLElement).closest("[data-mode]") as HTMLElement | null;
+    // 面板行点击 / hover 同步选中 / 空态两个出口，全走事件代理。
+    (wrap.querySelector("#uslash") as HTMLElement).addEventListener("click", (e) => {
+      const el = (e.target as HTMLElement).closest("[data-slash],[data-slashgocaps],[data-slashplain]") as HTMLElement | null;
       if (!el) return;
-      chatMode = (el.dataset.mode as ChatMode) || "auto";
-      renderModeBar(wrap);
+      if (el.dataset.slashgocaps !== undefined) { goNavCb?.("abilities"); return; }
+      if (el.dataset.slashplain !== undefined) {
+        slashDismissed = true;                 // 保留文本，仅本段 / 文本不再弹面板
+        renderSlashPanel();
+        (wrap.querySelector("#draft") as HTMLTextAreaElement).focus();
+        return;
+      }
+      const a = slashFlat().find((x) => x.k === el.dataset.slash);
+      if (a) pickSlash(a);
+    });
+    (wrap.querySelector("#uslash") as HTMLElement).addEventListener("mouseover", (e) => {
+      const el = (e.target as HTMLElement).closest("[data-slash]") as HTMLElement | null;
+      if (!el) return;
+      const idx = slashFlat().findIndex((x) => x.k === el.dataset.slash);
+      if (idx >= 0 && idx !== slashSel) { slashSel = idx; renderSlashPanel(); }
+    });
+    // 芯片可点删（Backspace 之外的鼠标出口）；横幅「知道了」关横幅。
+    (wrap.querySelector("#uchip") as HTMLElement).addEventListener("click", () => setChip(null));
+    (wrap.querySelector("#uideabanner") as HTMLElement).addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest("[data-ideagotit]")) { ideaBanner = null; renderIdeaBanner(); }
     });
   }
-  renderModeBar(wrap);
   const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
-  ta.placeholder = ph;
+  ta.placeholder = chipAction ? chipAction.params : t("chat.placeholder");
   if (ta.value !== (drafts[activeConv] || "")) ta.value = drafts[activeConv] || "";
+  renderChip();
+  renderIdeaBanner();
+  renderSlashPanel();
+}
+
+// ── 「/」面板的渲染与状态 ────────────────────────────────────────────────────
+function slashQuery(): string {
+  const d = drafts[MAIN] || "";
+  return d.charAt(0) === "/" ? d.slice(1).trim() : "";
+}
+function slashPanelOn(): boolean {
+  const d = drafts[MAIN] || "";
+  return activeConv === MAIN && !chipAction && !slashDismissed && d.charAt(0) === "/";
+}
+// 过滤后的分组与拉平序（键盘选中按拉平序走）。匹配名称，动作 id 当英文别名。
+function slashGroupsFiltered(): { name: string; items: SlashAction[] }[] {
+  const q = slashQuery();
+  return slashCatalog()
+    .map((g) => ({ name: g.name, items: g.items.filter((a) => !q || a.label.includes(q) || a.k.includes(q.toLowerCase())) }))
+    .filter((g) => g.items.length > 0);
+}
+function slashFlat(): SlashAction[] {
+  return slashGroupsFiltered().flatMap((g) => g.items);
+}
+function pickSlash(a: SlashAction): void {
+  setChip(a);
+  drafts[MAIN] = "";
+  slashSel = 0;
+  refreshComposer();
+  (container?.querySelector("#draft") as HTMLTextAreaElement | null)?.focus();
+}
+function setChip(a: SlashAction | null): void {
+  chipAction = a;
+  refreshComposer();
+  (container?.querySelector("#draft") as HTMLTextAreaElement | null)?.focus();
+}
+function renderChip(): void {
+  const el = container?.querySelector("#uchip") as HTMLElement | null;
+  const hint = container?.querySelector("#uchiphint") as HTMLElement | null;
+  if (!el || !hint) return;
+  if (!chipAction) { el.innerHTML = ""; el.style.display = "none"; hint.innerHTML = ""; return; }
+  el.style.display = "";
+  el.innerHTML = `<span title="${esc(t("chat.slashSendAsIs"))}" style="flex:none;display:inline-flex;align-items:center;gap:5px;height:23px;margin-top:3px;padding:0 8px;border:1px solid var(--orange);background:var(--orange-soft);color:var(--orange-text);border-radius:7px;font-size:11.5px;font-weight:600;white-space:nowrap;cursor:pointer;">`
+    + `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="${chipAction.icon}"></path></svg>${esc(chipAction.label)}</span>`;
+  hint.innerHTML = `<span style="font-size:11px;color:var(--faint);line-height:1.65;">${esc(t("chat.slashActionHint", { label: chipAction.label }))}</span>`;
+}
+function renderIdeaBanner(): void {
+  const el = container?.querySelector("#uideabanner") as HTMLElement | null;
+  if (!el) return;
+  el.innerHTML = ideaBanner
+    ? `<div style="display:flex;align-items:center;gap:9px;margin:8px 16px 0;padding:7px 11px;border:1px solid var(--orange);background:var(--orange-soft);border-radius:9px;">`
+      + `<span style="flex:1;min-width:0;font-size:11.5px;color:var(--orange-text);line-height:1.6;">${esc(ideaBanner)}</span>`
+      + `<button data-ideagotit="1" style="flex:none;border:none;background:transparent;color:var(--orange-text);font-size:11.5px;cursor:pointer;font-family:inherit;padding:0;white-space:nowrap;">${esc(t("chat.ideaBannerGotIt"))}</button></div>`
+    : "";
+}
+function renderSlashPanel(): void {
+  const el = container?.querySelector("#uslash") as HTMLElement | null;
+  if (!el) return;
+  if (!slashPanelOn()) { el.innerHTML = ""; return; }
+  const groups = slashGroupsFiltered();
+  const flat = slashFlat();
+  const at = Math.min(slashSel, Math.max(flat.length - 1, 0));
+  const total = slashCatalog().reduce((n, g) => n + g.items.length, 0);
+  const rows = groups.map((g) =>
+    `<div style="display:flex;flex-direction:column;">`
+    + `<span style="padding:9px 12px 4px;font-size:10.5px;font-weight:600;letter-spacing:.06em;color:var(--faint);white-space:nowrap;">${esc(g.name)}</span>`
+    + g.items.map((a) => {
+      const on = flat[at]?.k === a.k;
+      const tag = a.tag ? `<span style="flex:none;padding:1px 7px;border-radius:999px;background:var(--chip);color:var(--muted);font-size:10px;font-weight:600;">${esc(a.tag)}</span>` : "";
+      return `<div data-slash="${esc(a.k)}" style="display:flex;align-items:center;gap:9px;padding:7px 12px;cursor:pointer;background:${on ? "var(--orange-soft)" : "transparent"};color:${on ? "var(--orange-text)" : "var(--text)"};">`
+        + `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="${a.icon}"></path></svg>`
+        + `<span style="flex:none;font-size:12.5px;font-weight:600;white-space:nowrap;">${esc(a.label)}</span>`
+        + `<span style="flex:1;min-width:0;font-size:11.5px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(a.desc)}</span>${tag}</div>`;
+    }).join("") + `</div>`).join("");
+  const empty = !flat.length
+    ? `<div style="display:flex;flex-direction:column;gap:7px;padding:14px 12px 15px;">`
+      + `<span style="font-size:12.5px;font-weight:600;">${esc(t("chat.slashEmptyTitle", { q: slashQuery() }))}</span>`
+      + `<span style="font-size:11.5px;color:var(--faint);line-height:1.65;">${esc(t("chat.slashEmptyBody"))}</span>`
+      + `<div style="display:flex;gap:8px;padding-top:2px;">`
+      + `<button data-slashgocaps="1" class="${btn("ghost", "sm")}">${esc(t("chat.slashGoCaps"))}</button>`
+      + `<button data-slashplain="1" class="${btn("ghost", "sm")}">${esc(t("chat.slashSendAsIs"))}</button></div></div>`
+    : "";
+  el.innerHTML =
+    `<div style="position:absolute;left:16px;bottom:calc(100% - 5px);z-index:40;width:424px;max-width:calc(100% - 32px);display:flex;flex-direction:column;border:1px solid var(--border);border-radius:11px;background:var(--card);box-shadow:0 8px 24px rgba(0,0,0,.13);overflow:hidden;">`
+    + `<div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 12px 7px;border-bottom:1px solid var(--border-soft);">`
+    + `<span style="flex:1;min-width:0;font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--faint);white-space:nowrap;">${esc(t("chat.slashTitle"))}</span>`
+    + `<span style="flex:none;font-size:10.5px;color:var(--faint);white-space:nowrap;">${esc(t("chat.slashKeys"))}</span></div>`
+    + `<div style="max-height:282px;overflow-y:auto;">${rows}${empty}</div>`
+    + `<div style="flex:none;padding:7px 12px;border-top:1px solid var(--border-soft);">`
+    + `<span style="font-size:10.5px;color:var(--faint);line-height:1.6;">${esc(t("chat.slashFoot", { n: total }))}</span></div></div>`;
 }
 
 // 设备离线横幅（稿 1390-1395）：贴在会话头下面，横跨整个消息区顶部。
@@ -1192,50 +1376,22 @@ function refreshOfflineBar(): void {
     : "";
 }
 
-// 渲染「自动/聊天/执行」三态切换条（当前项高亮）。仅主会话显示（设备会话语义不同）。
-function renderModeBar(wrap: HTMLElement): void {
-  const bar = wrap.querySelector("#umodebar") as HTMLElement | null;
-  if (!bar) return;
-  if (activeConv !== MAIN) { bar.style.display = "none"; return; }
-  bar.style.display = "flex";
-  const items: Array<[ChatMode, string]> = [
-    ["auto", t("chat.modeAuto")], ["chat", t("chat.modeChat")], ["execution", t("chat.modeExec")],
-  ];
-  // 稿 1693 / 7205-7208：这是一个**分段控件**（--chip 底槽 + 内距 3 + gap 3 + 圆角 999），
-  // 不是三颗各自带描边的裸胶囊。差别不只是好看 —— 有底槽才看得出「三选一」，
-  // 三颗平铺的描边胶囊看起来像三个可以各自开关的筛选器。
-  //
-  // 另一处：「执行」选中时是**实心橙 + 白字**，不跟另外两个共用橙软底。
-  // 执行模式会真的去建任务做事，它选中与否比另外两个都要紧，值得单独一档。
-  const seg = items.map(([m, label]) => {
-    const on = chatMode === m;
-    const skin = !on
-      ? "border:1px solid transparent;background:transparent;color:var(--muted);"
-      : m === "execution"
-        ? "border:1px solid var(--orange);background:var(--orange);color:#fff;font-weight:560;"
-        : "border:1px solid var(--orange);background:var(--orange-soft);color:var(--orange-text);font-weight:560;";
-    return `<button data-mode="${m}" style="display:flex;align-items:center;height:23px;padding:0 11px;border-radius:999px;font-size:11.5px;font-family:inherit;white-space:nowrap;cursor:pointer;transition:background .13s ease,color .13s ease;${skin}">${esc(label)}</button>`;
-  }).join("");
-  // 稿 1697-1700：非 auto 时，分段控件右边跟一句灰字，直说这条消息会被怎么处理。
-  // auto 不给提示是对的 —— 「模型自己判断」没有可预告的行为，硬写一句反而像承诺。
-  const hint = chatMode === "auto"
-    ? ""
-    : `<span style="flex:1;min-width:0;font-size:11px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t(chatMode === "execution" ? "chat.modeHintExec" : "chat.modeHintChat"))}</span>`;
-  bar.innerHTML =
-    `<span style="font-size:11px;color:var(--muted);flex:none;">${esc(t("chat.modeLabel"))}</span>`
-    + `<span style="display:flex;gap:3px;padding:3px;border-radius:999px;background:var(--chip);flex:none;">${seg}</span>`
-    + hint;
-}
-
 function send(): void {
   if (!container) return;
   const ta = container.querySelector("#draft") as HTMLTextAreaElement | null;
   if (!ta) return;
   if (clearing) return; // 清空历史进行中，暂不发送，避免与会话重置竞争
-  const text = ta.value.trim();
-  if (!text) return;
+  const raw = ta.value.trim();
+  if (!raw) return;
+  // 芯片承载意图：发出去的是「【动作名】+ 原文」——服务端零改动，秘书的语言理解
+  // 接得住，聊天历史里也看得出这条消息带着什么意图（Telegram 的 /命令 同理）。
+  const text = chipAction ? `【${chipAction.label}】${raw}` : raw;
   ta.value = "";
   drafts[activeConv] = "";
+  chipAction = null;
+  ideaBanner = null;
+  slashDismissed = false;
+  refreshComposer();
   sendTo(activeConv, text);
 }
 
@@ -1256,9 +1412,9 @@ function sendTo(conv: string, text: string): void {
   s.assistantIdx = s.blocks.length - 1;
   s.lastText = t2;
   s.lastAt = now;
-  // 三态开关只对主会话生效（设备会话有自己的「目标设备」上下文语义）。
-  const mode = conv === MAIN ? chatMode : "auto";
-  if (!chatConn.sendMessage(t2, operateAutoApprove(), conv, mode)) {
+  // 「模式」三态开关随批次 005 撤除：一律发 auto（服务端 mode 参数保留一段时间，
+  // 界面不再出现）。意图改由「/」动作芯片表达（send 里拼进正文）。
+  if (!chatConn.sendMessage(t2, operateAutoApprove(), conv, "auto")) {
     s.blocks.push({ kind: "error", text: t("chat.notConnected") });
     s.assistantIdx = null;
   }
@@ -1272,12 +1428,17 @@ export function sendText(text: string): void {
   sendTo(MAIN, text);
 }
 
-// 从别处（灵感页「让 Umbra 去做这件事」）切换发送模式。
-// 只改主会话的模式并重绘那个三态开关 —— 用户跳过来之后能一眼看到当前是「执行」，
-// 而不是在不知情的状态下把消息发进了另一种模式。
-export function setMode(m: ChatMode): void {
-  chatMode = m;
-  if (container) renderModeBar(container);
+// 灵感页「让 Umbra 去做这件事」的新通路（稿：不再直发、不再切模式）：
+// 跳过来时**预填**「创建任务」芯片 + 灵感正文，配一条来源横幅 ——
+// 用户看一眼、补两句再回车，比背着他直接发出去多一步确认，少一次误发。
+export function prefillTaskFromIdea(text: string, sourceTitle: string): void {
+  chipAction = slashCatalog().flatMap((g) => g.items).find((a) => a.k === "task") || null;
+  drafts[MAIN] = text;
+  ideaBanner = t("chat.ideaBanner", { title: sourceTitle });
+  slashDismissed = false;
+  if (activeConv !== MAIN) switchConv(MAIN);
+  refreshComposer();
+  (container?.querySelector("#draft") as HTMLTextAreaElement | null)?.focus();
 }
 
 function switchConv(id: string): void {

@@ -476,17 +476,14 @@ export function setInspFilter(f: "" | "open" | "done" | "archived"): void {
   state.insp.filter = f;
   loadInspirations();
 }
-// 灵感页「让 Umbra 去做这件事」：跳到聊天页，把这条灵感当一条消息发给秘书。
-// 走的是快捷入口「发给秘书」那条现成通路（等聊天页挂载后再发，确保渲染）。
-// 跳到聊天页并发一条消息。mode 用来指定发送模式（灵感的「让 Umbra 去做」要走「执行」）。
-// setTimeout(0) 是等聊天页挂载完 —— 模式也要在那之后设，否则 renderModeBar 拿不到容器。
-export function sendToChat(text: string, mode?: "auto" | "chat" | "execution"): void {
+// 灵感页「让 Umbra 去做这件事」：跳到聊天页，**预填**「创建任务」芯片 + 灵感正文
+// （批次 005：三态「模式」撤了，意图改由「/」动作芯片表达；预填不直发 ——
+// 用户看一眼、补两句再回车，比背着他直接发出去多一步确认）。
+// setTimeout(0) 是等聊天页挂载完，否则 composer 还没有容器可渲染。
+export function prefillTaskToChat(text: string, sourceTitle: string): void {
   if (!text.trim()) return;
   setNav("chat");
-  setTimeout(() => {
-    if (mode) chat.setMode(mode);
-    chat.sendText(text);
-  }, 0);
+  setTimeout(() => chat.prefillTaskFromIdea(text, sourceTitle), 0);
 }
 // 灵感详情「关联任务 → 查看」：跳到任务页并直接展开那条任务。
 export function openTaskFrom(taskId: string): void {
@@ -661,6 +658,7 @@ export function initLegacy(): void {
   // 聊天里的任务卡「查看结果」→ 跳任务页展开那条。回填而不是让 chat 直接 import 本文件，
   // 因为本文件已经 import 了 chat（sendText / setAppRerender），反向再引就是循环依赖。
   chat.setOpenTask(openTaskFrom);
+  chat.setGoNav((n) => goNav(n as Nav)); // 斜杠面板空态「去能力」跳能力页（同款注入，防循环依赖）
   document.addEventListener("click", onClick); // 委托：处理各页面/弹窗内的 data-act（含侧边栏 nav / 标题栏 theme）
   window.addEventListener("keydown", onKeydown);
   // 快捷入口「发给秘书」：跳到聊天页并把这条消息发给秘书。

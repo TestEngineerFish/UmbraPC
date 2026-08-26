@@ -47,9 +47,10 @@ const tagChip = (on: boolean) =>
 
 // 「让 Umbra 去做这件事」发给秘书的那条消息。
 //
-// 为什么是**跳聊天页 + 切「执行」模式 + 发一段固定格式的文字**，而不是直接调 create_task：
-// 灵感常常只是一句话，直接建任务等于让秘书拿着半个需求硬做。走执行模式让它先把需求问清楚，
-// 确认之后再由它自己决定建几个任务、怎么拆 —— 这是秘书本来就擅长的事。
+// 为什么是**跳聊天页 + 预填「创建任务」芯片 + 这段文字**（批次 005 起，原「执行模式」已撤），
+// 而不是直接调 create_task：灵感常常只是一句话，直接建任务等于让秘书拿着半个需求硬做。
+// 预填不直发 —— 用户看一眼、补两句再回车；芯片把意图递给秘书，由它先问清楚
+// 再决定建几个任务、怎么拆 —— 这是秘书本来就擅长的事。
 //
 // 为什么把灵感**正文整段带上**，而不是只发一个 id 让它自己查：
 // 秘书手上查灵感的工具是 list_inspirations，它只回「标题 + 标签」，拿不到正文；
@@ -449,7 +450,7 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
     </div>
 
     <div className="flex-none p-[12px_16px] border-t border-border bg-bg flex flex-col gap-[9px]">
-      <button onClick={() => legacy.sendToChat(doItPrompt(item), "execution")}
+      <button onClick={() => legacy.prefillTaskToChat(doItPrompt(item), item.title || item.raw.slice(0, 18))}
         className="w-full flex items-center justify-center gap-[6px] px-0 py-[8px] bg-orange text-white border-none rounded-[8px] text-[12.5px] font-semibold cursor-pointer hover:bg-orange-deep">
         <IconArrowRight size={13} />{t("inspiration.sendToChat")}
       </button>
