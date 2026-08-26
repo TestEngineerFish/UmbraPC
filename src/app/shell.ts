@@ -4,7 +4,7 @@
 // 业务逻辑走 services/*(server/desktop/…)；聊天走 features/chat。
 
 import { chatConn, getServerUrl, setServerUrl, hasToken, getDeviceName, setDeviceName } from "../services/server";
-import { fetchJobs, fetchJobDetail, type Job, type JobDetail } from "../services/server";
+import { fetchTasks, fetchTaskDetail, type TaskItem, type TaskDetail } from "../services/server";
 import { fetchInspirations, fetchInspirationCounts, type Inspiration, type InspirationCounts } from "../services/server";
 import { readLayout, toAccelerator, type LayoutMap } from "../components/hotkey";
 import * as chat from "../features/chat/chat";
@@ -53,11 +53,11 @@ const state = {
   cu: false,
   codingMode: 1,
   tasks: {
-    list: [] as Job[],
+    list: [] as TaskItem[],
     loading: false,
     refreshing: false,
     detailId: null as string | null,
-    detail: null as JobDetail | null,
+    detail: null as TaskDetail | null,
   },
   insp: {
     list: [] as Inspiration[],
@@ -489,9 +489,9 @@ export function sendToChat(text: string, mode?: "auto" | "chat" | "execution"): 
   }, 0);
 }
 // 灵感详情「关联任务 → 查看」：跳到任务页并直接展开那条任务。
-export function openTaskFrom(jobId: string): void {
+export function openTaskFrom(taskId: string): void {
   setNav("tasks");
-  openJob(jobId);
+  openTask(taskId);
 }
 // React 能力页：写入/删除自定义程序（复用 providers.json 持久化逻辑）。
 export function saveCustomProviderEntry(entry: desktop.CustomProviderCfg, original: string | null): void {
@@ -528,15 +528,15 @@ function toggleComputerUse(): void {
   desktop.pushConfig({ computerUseEnabled: next }).then(() => render()).catch(() => {});
 }
 
-// ── 任务页数据（/jobs）──────────────────────────────────────────────────────
+// ── 任务页数据（/tasks）─────────────────────────────────────────────────────
 let tasksTimer: number | undefined;
 
 // 拉取任务列表；若详情抽屉打开则一并刷新详情。
-async function loadJobs(): Promise<void> {
+async function loadTasks(): Promise<void> {
   if (state.tasks.list.length === 0) state.tasks.loading = true;
   const [list, detail] = await Promise.all([
-    fetchJobs(30),
-    state.tasks.detailId ? fetchJobDetail(state.tasks.detailId) : Promise.resolve(null),
+    fetchTasks(30),
+    state.tasks.detailId ? fetchTaskDetail(state.tasks.detailId) : Promise.resolve(null),
   ]);
   state.tasks.list = list;
   state.tasks.loading = false;
@@ -548,15 +548,15 @@ async function loadJobs(): Promise<void> {
 async function manualRefresh(): Promise<void> {
   state.tasks.refreshing = true;
   render();
-  await Promise.all([loadJobs(), new Promise((r) => setTimeout(r, 500))]);
+  await Promise.all([loadTasks(), new Promise((r) => setTimeout(r, 500))]);
   state.tasks.refreshing = false;
   render();
 }
 
 function startTasksPolling(): void {
-  loadJobs();
+  loadTasks();
   if (tasksTimer) clearInterval(tasksTimer);
-  tasksTimer = window.setInterval(loadJobs, 3500);
+  tasksTimer = window.setInterval(loadTasks, 3500);
 }
 function stopTasksPolling(): void {
   if (tasksTimer) clearInterval(tasksTimer);
@@ -605,17 +605,17 @@ function stopInspPolling(): void {
   inspTimer = undefined;
 }
 
-async function openJob(id: string): Promise<void> {
+async function openTask(id: string): Promise<void> {
   state.tasks.detailId = id;
   state.tasks.detail = null;
   render();
-  const d = await fetchJobDetail(id);
+  const d = await fetchTaskDetail(id);
   if (state.tasks.detailId === id) {
     state.tasks.detail = d;
     render();
   }
 }
-function closeJob(): void {
+function closeTask(): void {
   state.tasks.detailId = null;
   state.tasks.detail = null;
   render();
@@ -652,7 +652,7 @@ function onClick(e: MouseEvent): void {
 }
 
 function onKeydown(e: KeyboardEvent): void {
-  if (e.key === "Escape" && state.tasks.detailId) closeJob();
+  if (e.key === "Escape" && state.tasks.detailId) closeTask();
 }
 
 // 由 React 根（main.tsx）在挂载后调用：接管点击委托、键盘、设备事件订阅。
@@ -689,6 +689,6 @@ export { titlebar, sidebar, currentScreen };
 // 供 React 设置页复用的处理器 / 载入器。
 export { setCodingMode, toggleComputerUse, computerEnabled, tokenPlaceholder, deviceIdLabel, toggleClipEnabled, clearClipHistory, toggleShotEnabled, beginShortcutRecording, loadClipSettings, loadShotSettings };
 // 供 React 任务页复用。
-export { openJob, closeJob, manualRefresh, fmtTime, fmtListTime };
+export { openTask, closeTask, manualRefresh, fmtTime, fmtListTime };
 // 供 React 灵感页复用。
 export { manualRefreshInsp };

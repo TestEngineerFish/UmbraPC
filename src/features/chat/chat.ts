@@ -15,7 +15,7 @@ import {
   fetchAllDevices,
   forgetDevice,
   clearHistory,
-  retryJob,
+  retryTask,
   getServerUrl,
   getClientId,
   getAutoApproveOperate,
@@ -36,9 +36,12 @@ type Block =
   | { kind: "user"; text: string; ts?: string | number }
   | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number }
   | { kind: "device"; text: string; ts?: string | number }
-  | { kind: "job"; jobId: string; goal: string; pct: number; status: string; message: string; agentState?: string; confirmTaskId?: string; confirmScope?: string; results?: { title: string; url: string }[] }
+  // 任务进度卡（task_update）：引擎里程碑 + 电脑操控共用。kind 沿用 "job" 只是
+  // 界面层的历史名（连着 i18n 的 chat.job* 文案键），线上协议已全部是 task_id。
+  // confirmId 是嵌在卡里的授权单号（operate 的 confirm_id），不是任务 id。
+  | { kind: "job"; taskId: string; goal: string; pct: number; status: string; message: string; confirmId?: string; confirmScope?: string; results?: { title: string; url: string }[] }
   | { kind: "done"; goal: string; results: { title: string; url: string }[] }
-  | { kind: "confirm"; taskId: string; summary: string; detail?: unknown; scope?: string; resolved?: "approved" | "denied" }
+  | { kind: "confirm"; confirmId: string; summary: string; detail?: unknown; scope?: string; resolved?: "approved" | "denied" }
   // 问答卡：秘书在派活前把歧义问清楚（多题、单选/多选、可自定义、逐题推进、统一提交）。
   | { kind: "question"; cardId: string; title: string; questions: QCard[]; at: number; picked: Record<string, string[]>; custom: Record<string, string>; done?: boolean }
   // 系统提示行（稿 1412-1413）：居中的一颗小灰胶囊，说明「不是你干的、但这里变了」。
@@ -50,8 +53,8 @@ type Block =
   // 用户看着任务停在那儿，直到服务端 LOCATE_TIMEOUT 到点自己放弃。
   | {
       kind: "locate";
-      taskId: string;
-      jobId: string;
+      askId: string;  // 这次求助的单号（回答用它）；一次操控可能求助多次，每次一个
+      runId: string;  // 这次操控运行的编号（「暂停后继续」用它）
       imageUrl: string;
       target: string;
       hint: string;
@@ -186,8 +189,8 @@ export function setAppRerender(cb: () => void): void {
 // 任务卡「查看结果」要跳到任务页并展开那条任务，而那个能力在 shell.ts（openTaskFrom）。
 // 这里不直接 import shell —— shell 已经 import 了 chat（sendText / setAppRerender），
 // 反向再 import 就成了循环依赖。沿用 setAppRerender 同一套注入写法由 shell 回填。
-let openTaskCb: ((jobId: string) => void) | null = null;
-export function setOpenTask(cb: (jobId: string) => void): void {
+let openTaskCb: ((taskId: string) => void) | null = null;
+export function setOpenTask(cb: (taskId: string) => void): void {
   openTaskCb = cb;
 }
 
@@ -287,7 +290,7 @@ function convOf(msg: any): string {
   return c || MAIN;
 }
 
-// 已自动批准过的 task，避免重复发送。
+// 已自动批准过的确认单（confirm_id），避免重复发送。
 const autoApproved = new Set<string>();
 // 是否自动批准电脑操作：开了「自动批准」开关，或把核心动作(打开/点击/输入/按键)都设成了「总是允许」。
 function operateAutoApprove(): boolean {
@@ -298,11 +301,11 @@ function operateAutoApprove(): boolean {
 // 满足自动批准条件时，收到确认请求就自动批准，不再每次询问。
 // 注意：「总是允许」只对**电脑操作(operate)**生效。代理任务(scope=agent)的执行模式授权
 // 必须你亲自点——否则一个为了少弹窗打开的开关，会顺手放开所有任务的跑命令/装依赖权限。
-function autoApproveIfEnabled(taskId: string | undefined, scope?: string): void {
-  if (!taskId || autoApproved.has(taskId) || scope === "agent" || !operateAutoApprove()) return;
-  autoApproved.add(taskId);
-  chatConn.sendConfirm(taskId, true);
-  resolveConfirm(taskId, true);
+function autoApproveIfEnabled(confirmId: string | undefined, scope?: string): void {
+  if (!confirmId || autoApproved.has(confirmId) || scope === "agent" || !operateAutoApprove()) return;
+  autoApproved.add(confirmId);
+  chatConn.sendConfirm(confirmId, true);
+  resolveConfirm(confirmId, true);
 }
 
 // 提醒变更 → 让主进程立刻拉一次。
@@ -364,9 +367,8 @@ function onMessage(msg: any): void {
       cs(target).lastAt = Date.now();
       break;
     }
-    case "job_update":
-    case "task_update": // 新任务模型（里程碑进度）：复用进度卡，按 done/total 显示
-      target = handleJob(msg);
+    case "task_update": // 任务进度（引擎里程碑 + 电脑操控共用）：更新/新建进度卡
+      target = handleTaskUpdate(msg);
       break;
     case "device_presence": {
       // 设备上/下线：刷新联系人列表（顺带更新能力目录）。
@@ -381,7 +383,7 @@ function onMessage(msg: any): void {
       return;
     }
     case "device_message": {
-      // 服务端↔设备的直接交互（非 Job），落到对应设备会话。
+      // 服务端↔设备的直接交互（不属于任何任务卡），落到对应设备会话。
       const s = cs(target);
       const ts = msg.created_at || Date.now();
       if (msg.role === "device") s.blocks.push({ kind: "device", text: msg.text || "", ts });
@@ -391,13 +393,14 @@ function onMessage(msg: any): void {
       break;
     }
     case "confirm_request":
-      // 执行前授权卡：落在事件所属会话，供用户处理。
-      if (msg.task_id) {
+      // 执行前授权卡：落在事件所属会话，供用户处理。confirm_id 是这张卡的单号
+      //（B 批改名：原来叫 task_id，和真正的任务 id 一直在打架）。
+      if (msg.confirm_id) {
         const s = cs(target);
-        if (!s.blocks.some((b) => b.kind === "confirm" && b.taskId === msg.task_id)) {
-          s.blocks.push({ kind: "confirm", taskId: msg.task_id, summary: msg.summary || t("chat.needConfirm"), detail: msg.detail, scope: msg.scope });
+        if (!s.blocks.some((b) => b.kind === "confirm" && b.confirmId === msg.confirm_id)) {
+          s.blocks.push({ kind: "confirm", confirmId: msg.confirm_id, summary: msg.summary || t("chat.needConfirm"), detail: msg.detail, scope: msg.scope });
         }
-        autoApproveIfEnabled(msg.task_id, msg.scope);
+        autoApproveIfEnabled(msg.confirm_id, msg.scope);
       }
       break;
     case "question_card": {
@@ -417,9 +420,9 @@ function onMessage(msg: any): void {
       // 电脑操作定位不准 → 停下来请人指位。服务端广播给所有端，谁先答谁作数
       // （operate.py 的 future 只 set_result 一次，晚到的 has_pending_locate 已经是 false）。
       const s = cs(target);
-      if (msg.task_id && msg.image_url && !s.blocks.some((b) => b.kind === "locate" && b.taskId === msg.task_id)) {
+      if (msg.ask_id && msg.image_url && !s.blocks.some((b) => b.kind === "locate" && b.askId === msg.ask_id)) {
         s.blocks.push({
-          kind: "locate", taskId: msg.task_id, jobId: msg.job_id || "",
+          kind: "locate", askId: msg.ask_id, runId: msg.run_id || "",
           imageUrl: msg.image_url, target: msg.target || "", hint: msg.hint || t("chat.locateHint"),
         });
         s.lastText = t("chat.locateTitle");
@@ -438,7 +441,7 @@ function onMessage(msg: any): void {
       return;
     }
     case "confirm_resolved":
-      resolveConfirm(msg.task_id || "", Boolean(msg.approved)); // 跨会话统一更新
+      resolveConfirm(msg.confirm_id || "", Boolean(msg.approved)); // 跨会话统一更新
       renderMessages();
       return;
     case "history_cleared": {
@@ -491,20 +494,22 @@ function assistantOf(conv: string): Extract<Block, { kind: "assistant" }> | null
   return b && b.kind === "assistant" ? b : null;
 }
 
-// 返回该 job_update/task_update 归属的会话 id（供 onMessage 决定是否刷新/标未读）。
-function handleJob(msg: any): string {
-  const id = msg.job_id || msg.task_id; // 兼容旧 job_update 与新 task_update
+// 返回该 task_update 归属的会话 id（供 onMessage 决定是否刷新/标未读）。
+// 引擎里程碑与电脑操控共用这一种事件；操控的进度卡也按 task_id 建 ——
+// 它落库就是一条单步任务，聊天卡和任务页指的是同一条。
+function handleTaskUpdate(msg: any): string {
+  const id = msg.task_id;
   const conv = convOf(msg);
   if (!id) return conv;
   const s = cs(conv);
   const overall = typeof msg.overall === "number" ? msg.overall : msg.status === "done" ? 1 : 0;
   const pct = Math.max(0, Math.min(100, Math.round(overall * 100)));
-  // 新任务：进度按里程碑 done/total，消息尾部标一下。
+  // 进度按里程碑 done/total，消息尾部标一下。
   const milestone = typeof msg.steps_total === "number" && msg.steps_total > 0
     ? `（${msg.steps_done || 0}/${msg.steps_total} 里程碑）` : "";
   let idx = s.jobMap[id];
   if (idx === undefined) {
-    s.blocks.push({ kind: "job", jobId: id, goal: msg.goal || t("chat.task"), pct, status: msg.status || "running", message: (msg.message || "") + milestone });
+    s.blocks.push({ kind: "job", taskId: id, goal: msg.goal || t("chat.task"), pct, status: msg.status || "running", message: (msg.message || "") + milestone });
     idx = s.blocks.length - 1;
     s.jobMap[id] = idx;
   }
@@ -513,11 +518,11 @@ function handleJob(msg: any): string {
   b.pct = pct;
   b.status = msg.status || b.status;
   b.message = (msg.message || b.message) + (msg.message ? milestone : "");
-  if (msg.agent_state) b.agentState = msg.agent_state;
   if (msg.goal) b.goal = msg.goal;
-  b.confirmTaskId = msg.event === "confirm" && msg.needs_confirm ? msg.confirm_task_id : undefined;
+  // 操控的执行前授权嵌在进度卡里：confirm_id 是授权单号（不是任务 id）。
+  b.confirmId = msg.event === "confirm" && msg.needs_confirm ? msg.confirm_id : undefined;
   b.confirmScope = msg.scope;
-  if (b.confirmTaskId) autoApproveIfEnabled(b.confirmTaskId, b.confirmScope);
+  if (b.confirmId) autoApproveIfEnabled(b.confirmId, b.confirmScope);
   if (msg.results) b.results = msg.results;
   if (msg.status === "done" && !s.doneJobs.has(id)) {
     s.doneJobs.add(id);
@@ -562,7 +567,7 @@ const timeLine = (ts: string | number | undefined, align: "flex-start" | "flex-e
 // 稿给了六个状态（running/idle/done/failed/stopped/auth），但那是设计稿自己编的一套。
 // 服务端**也**是六个，只是不完全重合（task_tools.py:79 _STATUS_CN）：
 //   pending 待执行 · running 执行中 · suspended 已挂起 · done 已完成 · failed 失败 · cancelled 已取消
-// 加上一个纯前端的 awaiting（agent_state=idle，跑完一轮等你拍板），一共七档。
+// 加上一个纯前端的 awaiting（电脑操控停下来等你授权，卡里嵌着确认子卡），一共七档。
 // 这里按**服务端的真实状态**建表，色调借稿的：
 //   - 在动的（running）用橙 —— 橙是「Umbra 正在为你做事」，全站一致
 //   - 等外部条件的（suspended 等设备、awaiting 等你）用琥珀 —— 卡住了，需要人或设备介入
@@ -584,8 +589,8 @@ function jobState(status: string, awaiting: boolean): JobState {
   return (status in JOB_TONE && status !== "awaiting" ? status : "running") as JobState;
 }
 
-function confirmButtons(taskId: string, scope?: string, tight = false): string {
-  const tid = esc(taskId);
+function confirmButtons(confirmId: string, scope?: string, tight = false): string {
+  const tid = esc(confirmId);
   // scope=agent：授权只在这个任务内有效（端侧只问一次），因此不提供「总是允许(全局)」。
   //
   // 稿 1533-1535 在这种情况下还要给一句解释「这类授权不给『总是允许』」——
@@ -687,8 +692,8 @@ function blockHtml(b: Block, i: number): string {
   }
 
   if (b.kind === "job") {
-    // 代理任务干完一轮会停在 idle —— 那不是「90%」，那是**待确认**（等你说改还是收工）。
-    const awaiting = b.agentState === "idle" && b.status !== "done" && b.status !== "failed";
+    // 卡里嵌着待处理的授权 —— 那不是「90%」，那是**待确认**（停下来等你点头）。
+    const awaiting = !!b.confirmId && b.status !== "done" && b.status !== "failed";
     const st = jobState(b.status, awaiting);
     const tone = JOB_TONE[st];
     // 稿 1487-1524。相对原来这张卡的四处改动：
@@ -713,10 +718,10 @@ function blockHtml(b: Block, i: number): string {
         </div>`;
     // 稿 1505-1519：待确认的授权嵌在任务卡里时是一块琥珀底的子卡，不是一排裸按钮 ——
     // 它要求你停下来做决定，得和卡片其余部分在视觉上分开。
-    const confirm = b.confirmTaskId
+    const confirm = b.confirmId
       ? `<div style="padding:10px 11px;background:var(--warning-soft);border:1px solid var(--warning);border-radius:9px;display:flex;flex-direction:column;gap:8px;">
           <div style="display:flex;align-items:center;gap:7px;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M12 3 4 6v6c0 5 3.5 7.5 8 9 4.5-1.5 8-4 8-9V6z"></path></svg><span style="flex:1;min-width:0;font-size:12px;font-weight:600;color:var(--warning);">${esc(t("chat.needConfirm"))}</span></div>
-          ${confirmButtons(b.confirmTaskId, b.confirmScope, true)}
+          ${confirmButtons(b.confirmId, b.confirmScope, true)}
         </div>`
       : "";
     const actLabel = st === "failed" ? t("chat.retryTask") : t("chat.viewResult");
@@ -732,7 +737,7 @@ function blockHtml(b: Block, i: number): string {
         ${confirm}
         <div style="display:flex;align-items:center;gap:8px;">
           <span style="flex:1;"></span>
-          <button data-jobact="${esc(b.jobId)}" data-jobfail="${st === "failed" ? "1" : ""}" class="${btn("ghost", "sm")}">${esc(actLabel)}</button>
+          <button data-jobact="${esc(b.taskId)}" data-jobfail="${st === "failed" ? "1" : ""}" class="${btn("ghost", "sm")}">${esc(actLabel)}</button>
         </div>
       </div>`;
   }
@@ -764,7 +769,7 @@ function blockHtml(b: Block, i: number): string {
           b.resolved === "approved"
             ? `${svgIcon(ICON_AUTH_APPROVED, 12, 1.9)}${esc(t("chat.approved"))}`
             : `${svgIcon(ICON_AUTH_DENIED, 12, 1.9)}${esc(t("chat.denied"))}`}</div>`
-      : confirmButtons(b.taskId, b.scope);
+      : confirmButtons(b.confirmId, b.scope);
     return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;">
         <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>${esc(t("chat.needConfirm"))}</div>
         <div style="font-size:13px;line-height:1.55;color:var(--text);">${esc(b.summary)}</div>
@@ -1306,7 +1311,8 @@ function conversationToText(convId: string): string {
       lines.push("");
     } else if (b.kind === "device") lines.push(`[设备] ${b.text}`, "");
     else if (b.kind === "job") {
-      lines.push(`[任务卡] ${b.goal}（${Math.round((b.pct || 0) * 100)}%，${b.status}）${b.message || ""}`, "");
+      // b.pct 本身就是 0-100 的百分数，别再乘一次（之前导出文本里写成 9000%）。
+      lines.push(`[任务卡] ${b.goal}（${b.pct || 0}%，${b.status}）${b.message || ""}`, "");
     } else if (b.kind === "done") {
       const urls = (b.results || []).map((r) => r.url).filter(Boolean).join(" ");
       lines.push(`[任务完成] ${b.goal}${urls ? `　产物：${urls}` : ""}`, "");
@@ -1479,11 +1485,12 @@ function onMsgsClick(e: Event): void {
   }
   // ── 任务卡底部的动作按钮 ──
   if (el.dataset.jobact !== undefined) {
-    const jobId = el.dataset.jobact;
-    if (!jobId) return;
+    const taskId = el.dataset.jobact;
+    if (!taskId) return;
     if (el.dataset.jobfail) {
-      // 失败 → 重试。retryJob 会保留已完成的步骤，只重跑断掉的那些，所以文案是「重试」不是「重来」。
-      void retryJob(jobId).then((r) => {
+      // 失败 → 重试。retryTask 会保留已完成的步骤，只重跑断掉的那些，所以文案是「重试」不是「重来」。
+      // 电脑操控任务服务端会回 409「不支持重试」——原样提示，让用户重新发起一次。
+      void retryTask(taskId).then((r) => {
         if (r.ok) showToast(t("chat.retryStarted"), { tone: "ok" });
         else showToast(r.error || t("chat.retryFailed"), { tone: "fail" });
       });
@@ -1491,7 +1498,7 @@ function onMsgsClick(e: Event): void {
     }
     // 其余 → 跳到任务页并展开这条任务。回调没接上（理论上不会发生）就什么也不做，
     // 总比抛异常把整个点击代理打断强。
-    openTaskCb?.(jobId);
+    openTaskCb?.(taskId);
     return;
   }
   // ── 问答卡 ──
@@ -1548,23 +1555,23 @@ function onMsgsClick(e: Event): void {
     } else if (el.dataset.locfbsend !== undefined) {
       const txt = (b.fbText || "").trim();
       if (!txt) return;
-      chatConn.sendLocate(b.taskId, { feedback: txt });
+      chatConn.sendLocate(b.askId, { feedback: txt });
       b.resolved = "feedback";
       showToast(t("chat.locateFbSentToast"), { tone: "ok" });
     } else if (el.dataset.locpause !== undefined) {
-      chatConn.sendLocate(b.taskId, { paused: true });
+      chatConn.sendLocate(b.askId, { paused: true });
       b.resolved = "paused";
     } else if (el.dataset.locsend !== undefined) {
       if (b.nx === undefined || b.ny === undefined) return;
-      chatConn.sendLocate(b.taskId, { nx: b.nx, ny: b.ny });
+      chatConn.sendLocate(b.askId, { nx: b.nx, ny: b.ny });
       b.resolved = "located";
       showToast(t("chat.locateSentToast"), { tone: "ok" });
     } else if (el.dataset.locresume !== undefined) {
-      // 「继续」按 job_id 走，不是 task_id：一个任务可能求助过好几次，
-      // 服务端等的是「这个 job 能接着跑了」。jobId 为空说明这条求助是旧协议来的，
+      // 「继续」按 run_id 走，不是 ask_id：一次操控可能求助过好几次，
+      // 服务端等的是「这次运行能接着跑了」。runId 为空说明这条求助是旧协议来的，
       // 唤不醒就别把卡片标成已继续，不然按钮消失了、任务还吊着。
-      if (!b.jobId) { showToast(t("chat.locateResumeNoJob"), { tone: "fail" }); return; }
-      chatConn.sendOperateResume(b.jobId);
+      if (!b.runId) { showToast(t("chat.locateResumeNoJob"), { tone: "fail" }); return; }
+      chatConn.sendOperateResume(b.runId);
       b.resolved = "resumed";
     }
     renderMessages();
@@ -1597,14 +1604,14 @@ function onMsgsClick(e: Event): void {
   }
 }
 
-// 标记某个确认已被处理（所有会话里的 Job 卡片 + 独立确认卡片都更新）。
-function resolveConfirm(taskId: string, approved: boolean): void {
+// 标记某张确认单已被处理（所有会话里的任务卡内嵌授权 + 独立确认卡都更新）。
+function resolveConfirm(confirmId: string, approved: boolean): void {
   for (const id of Object.keys(convs)) {
     const s = convs[id];
     if (!s) continue;
     for (const b of s.blocks) {
-      if (b.kind === "job" && b.confirmTaskId === taskId) { b.confirmTaskId = undefined; b.message = approved ? t("chat.approved") : t("chat.denied"); }
-      if (b.kind === "confirm" && b.taskId === taskId) { b.resolved = approved ? "approved" : "denied"; }
+      if (b.kind === "job" && b.confirmId === confirmId) { b.confirmId = undefined; b.message = approved ? t("chat.approved") : t("chat.denied"); }
+      if (b.kind === "confirm" && b.confirmId === confirmId) { b.resolved = approved ? "approved" : "denied"; }
     }
   }
 }

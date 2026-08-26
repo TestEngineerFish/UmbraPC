@@ -6,8 +6,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
-import { deleteJobs, getServerUrl, retryJob, stopJob } from "../../services/server";
-import type { Job, JobDetail, StepError, Subtask } from "../../services/server";
+import { deleteTasks, getServerUrl, retryTask, stopTask } from "../../services/server";
+import type { TaskItem, TaskDetail, StepError, TaskStep } from "../../services/server";
 import { ImageViewer } from "../../components/ImageViewer";
 import { btnGhost, btnDanger, RefreshButton, filterChip, filterChipCount, ErrorCard, EmptyState } from "../../components/ui";
 import { showToast } from "../../components/overlay";
@@ -16,8 +16,8 @@ import { IconSearch, IconRefresh, IconCheck, IconX, IconClock, IconAlert, IconFo
 // 全局图片预览：任意 Step 图片点击后打开（避免逐层透传 onClick）。
 let openPreview: (src: string, alt?: string) => void = () => {};
 
-// 从子任务结果里取截图 URL（相对路径拼服务端地址）。
-function stepShot(s: Subtask): string | null {
+// 从步骤结果里取截图 URL（相对路径拼服务端地址）。
+function stepShot(s: TaskStep): string | null {
   if (!s.result_json) return null;
   try {
     const r = JSON.parse(s.result_json);
@@ -38,12 +38,11 @@ function shotName(url: string): string {
 }
 
 // ── 状态语义（徽章配色 + 图标 + 进度条颜色的唯一来源）──
-// 绿=已完成，橙=执行中，黄=待确认/已挂起，红=失败，灰=待执行/已取消。
+// 绿=已完成，橙=执行中，黄=已挂起（等设备/等外部条件），红=失败，灰=待执行/已取消。
 type Tone = "success" | "orange" | "warning" | "danger" | "neutral";
 const STATUS_META: Record<string, { key: string; tone: Tone }> = {
   done: { key: "tasks.statusDone", tone: "success" },
   running: { key: "tasks.statusRunning", tone: "orange" },
-  awaiting_review: { key: "tasks.statusAwaitingReview", tone: "warning" },
   suspended: { key: "tasks.statusSuspended", tone: "warning" },
   pending: { key: "tasks.statusPending", tone: "neutral" },
   failed: { key: "tasks.statusFailed", tone: "danger" },
@@ -64,36 +63,31 @@ function StatusIcon({ status, size = 13 }: { status: string; size?: number }) {
   if (status === "done") return <IconCheck size={size} />;
   if (status === "failed") return <IconX size={size} />;
   if (status === "running") return <IconRefresh size={size} />;
-  if (status === "awaiting_review" || status === "suspended") return <IconAlert size={size} />;
+  if (status === "suspended") return <IconAlert size={size} />;
   return <IconClock size={size} />;
 }
 
-// 代理任务干完一轮会停在 idle —— 对用户来说那不是「执行中」，是**待确认**。
-function displayStatus(job: { status: string; kind?: string; agent_state?: string | null }): string {
-  if (job.kind === "agent" && job.agent_state === "idle" && job.status === "running") return "awaiting_review";
-  return job.status;
-}
 const metaOf = (status: string) => STATUS_META[status] || { key: status, tone: "neutral" as Tone };
 
 function isImg(u: string) {
   return /\.(png|jpe?g|gif|bmp|webp)(\?|$)/i.test(u);
 }
 
-// 里程碑进度百分比。没有 steps_total 的旧 Job 行按状态兜底（完成=100，其余=0），不编假进度。
-function pctOf(job: Job): number {
-  if (job.steps_total) return Math.round(((job.steps_done || 0) / job.steps_total) * 100);
-  return job.status === "done" ? 100 : 0;
+// 里程碑进度百分比。没有 steps_total 的旧任务行按状态兜底（完成=100，其余=0），不编假进度。
+function pctOf(task: TaskItem): number {
+  if (task.steps_total) return Math.round(((task.steps_done || 0) / task.steps_total) * 100);
+  return task.status === "done" ? 100 : 0;
 }
 
-// 耗时：created_at → updated_at（执行中的算到现在）。Subtask 没存每步时间，所以只有整任务这一个量级。
-function durationOf(job: Job, t: (k: string, o?: Record<string, unknown>) => string): string {
-  const a = job.created_at ? Date.parse(job.created_at.replace(" ", "T")) : NaN;
+// 耗时：created_at → updated_at（执行中的算到现在）。这是整任务的量级；每步各自的耗时在步骤行（elapsed_ms）。
+function durationOf(task: TaskItem, t: (k: string, o?: Record<string, unknown>) => string): string {
+  const a = task.created_at ? Date.parse(task.created_at.replace(" ", "T")) : NaN;
   if (Number.isNaN(a)) return "—";
-  const running = job.status === "running" || job.status === "pending";
-  const bRaw = running ? Date.now() : job.updated_at ? Date.parse(job.updated_at.replace(" ", "T")) : NaN;
+  const running = task.status === "running" || task.status === "pending";
+  const bRaw = running ? Date.now() : task.updated_at ? Date.parse(task.updated_at.replace(" ", "T")) : NaN;
   if (Number.isNaN(bRaw) || bRaw < a) return "—";
   const human = humanMs(bRaw - a);
-  if (job.status === "failed") return t("tasks.durInterrupted", { human });
+  if (task.status === "failed") return t("tasks.durInterrupted", { human });
   if (running) return t("tasks.durRunning", { human });
   return human;
 }
@@ -121,25 +115,23 @@ export function Tasks() {
   // 搜索命中范围：短标题 + 详细描述 + 结果摘要（错误信息通常落在 result_summary 里）。
   const kw = q.trim().toLowerCase();
   const list = useMemo(() => tasks.list.filter((j) => {
-    if (filter !== "all" && displayStatus(j) !== filter) return false;
+    if (filter !== "all" && j.status !== filter) return false;
     if (!kw) return true;
     return `${j.name || ""} ${j.goal} ${j.result_summary || ""}`.toLowerCase().includes(kw);
   }), [tasks.list, filter, kw]);
 
-  // 筛选胶囊的计数按「显示状态」算，所以待确认那一档和徽章说的是同一件事。
+  // 筛选胶囊的计数与徽章同源（都直接用服务端状态）。
   // cancelled / suspended 没有单独的档，只出现在「全部」里。
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: tasks.list.length };
     for (const j of tasks.list) {
-      const s = displayStatus(j);
-      c[s] = (c[s] || 0) + 1;
+      c[j.status] = (c[j.status] || 0) + 1;
     }
     return c;
   }, [tasks.list]);
   const FILTERS: { k: string; label: string }[] = [
     { k: "all", label: t("tasks.filterAll") },
     { k: "running", label: t("tasks.statusRunning") },
-    { k: "awaiting_review", label: t("tasks.statusAwaitingReview") },
     { k: "pending", label: t("tasks.statusPending") },
     { k: "done", label: t("tasks.statusDone") },
     { k: "failed", label: t("tasks.statusFailed") },
@@ -152,7 +144,7 @@ export function Tasks() {
     if (tasks.detailId || selectMode || !list.length) return;
     if (openedRef.current) return;
     openedRef.current = true;
-    void legacy.openJob(list[0].id);
+    void legacy.openTask(list[0].id);
   }, [tasks.detailId, selectMode, list]);
 
   const ids = list.map((j) => j.id);
@@ -166,7 +158,7 @@ export function Tasks() {
   const doDelete = async () => {
     if (!selected.size) return;
     setBusy(true);
-    const r = await deleteJobs([...selected]);
+    const r = await deleteTasks([...selected]);
     setBusy(false);
     exitSelect();
     legacy.manualRefresh();
@@ -210,8 +202,8 @@ export function Tasks() {
               className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
           </div>
 
-          {/* 六档筛选（比稿多了 待确认 / 已挂起 / 已取消 三档）。稿里 452px 列表栏是按五档算的宽度，
-              这里补 flex-wrap 让它窄窗折行，不要挤成一条压扁的胶囊带。 */}
+          {/* 五档筛选（待确认那档随旧代理状态一起删了 —— B 批后任务只有服务端那六个状态）。
+              flex-wrap 让它窄窗折行，不要挤成一条压扁的胶囊带。 */}
           <div className="flex flex-wrap gap-[4px]">
             {FILTERS.map((f) => {
               const on = filter === f.k;
@@ -235,9 +227,9 @@ export function Tasks() {
 
         <div className="flex-1 overflow-y-auto p-[9px] flex flex-col gap-[7px]">
           {list.map((j) => (
-            <TaskCard key={j.id} job={j} active={j.id === tasks.detailId && !selectMode}
+            <TaskCard key={j.id} task={j} active={j.id === tasks.detailId && !selectMode}
               selectMode={selectMode} checked={selected.has(j.id)}
-              onOpen={() => (selectMode ? toggle(j.id) : legacy.openJob(j.id))} />
+              onOpen={() => (selectMode ? toggle(j.id) : legacy.openTask(j.id))} />
           ))}
           {/* 空态走通用空态件。compact 是因为它落在 452px 的列表列里，不是主区。
               「搜索无结果」和「一条都没有」给的是两套动作：前者该能一键清掉筛选，
@@ -259,9 +251,9 @@ export function Tasks() {
       <main className="flex-1 min-w-0 flex flex-col min-h-0 bg-bg">
         {/* onChanged：重试/停止改了服务端状态之后重拉列表与详情——不然按钮按完界面纹丝不动。
             注释放在三元外面：放进表达式容器里会被当成对象字面量，编译不过（灵感页踩过一次）。 */}
-        {tasks.detailId && tasks.detail && tasks.detail.job.id === tasks.detailId ? (
-          <Detail key={tasks.detail.job.id} d={tasks.detail}
-            onChanged={() => { void legacy.manualRefresh(); void legacy.openJob(tasks.detail!.job.id); }} />
+        {tasks.detailId && tasks.detail && tasks.detail.task.id === tasks.detailId ? (
+          <Detail key={tasks.detail.task.id} d={tasks.detail}
+            onChanged={() => { void legacy.manualRefresh(); void legacy.openTask(tasks.detail!.task.id); }} />
         ) : (
           <div className="flex-1 flex items-center justify-center text-[12.5px] text-muted">
             {tasks.detailId ? t("tasks.loadingDetail") : t("tasks.pickOne")}
@@ -275,20 +267,20 @@ export function Tasks() {
 }
 
 // 列表里的一张任务卡。选中态用「橙描边 + 左侧 3px 橙条」，比只换描边更容易在一屏卡片里找到。
-function TaskCard({ job, active, selectMode, checked, onOpen }: {
-  job: Job; active: boolean; selectMode: boolean; checked: boolean; onOpen: () => void;
+function TaskCard({ task, active, selectMode, checked, onOpen }: {
+  task: TaskItem; active: boolean; selectMode: boolean; checked: boolean; onOpen: () => void;
 }) {
   const { t } = useTranslation();
-  const st = displayStatus(job);
+  const st = task.status;
   const m = metaOf(st);
-  const pct = pctOf(job);
+  const pct = pctOf(task);
   const running = st === "running";
-  const total = job.steps_total || 0;
-  const done = job.steps_done || 0;
+  const total = task.steps_total || 0;
+  const done = task.steps_done || 0;
   // 里程碑小格：步数多时格子变窄，免得把一行撑破。
   const pipW = total > 6 ? "w-[4px]" : "w-[9px]";
-  const err = st === "failed" ? job.result_summary || "" : "";
-  const sub = job.name ? job.goal : job.channel ? t("tasks.fromChannel", { channel: job.channel }) : job.result_summary || "";
+  const err = st === "failed" ? task.result_summary || "" : "";
+  const sub = task.name ? task.goal : task.channel ? t("tasks.fromChannel", { channel: task.channel }) : task.result_summary || "";
 
   return (
     <div onClick={onOpen}
@@ -306,8 +298,8 @@ function TaskCard({ job, active, selectMode, checked, onOpen }: {
         </span>
         <div className="flex-1 min-w-0">
           <div className="flex items-baseline gap-[8px]">
-            <span className="flex-1 min-w-0 text-[13px] font-medium leading-[1.45] line-clamp-2">{job.name || job.goal}</span>
-            <span className="flex-none whitespace-nowrap text-[10.5px] text-faint" title={job.updated_at || ""}>{legacy.fmtListTime(job.updated_at)}</span>
+            <span className="flex-1 min-w-0 text-[13px] font-medium leading-[1.45] line-clamp-2">{task.name || task.goal}</span>
+            <span className="flex-none whitespace-nowrap text-[10.5px] text-faint" title={task.updated_at || ""}>{legacy.fmtListTime(task.updated_at)}</span>
           </div>
           <div className="flex items-center gap-[8px] mt-[5px]">
             <span className={`flex-none whitespace-nowrap px-[8px] py-px rounded-full text-[10.5px] font-semibold ${TONE_SOFT[m.tone]}`}>{t(m.key)}</span>
@@ -341,12 +333,12 @@ function TaskCard({ job, active, selectMode, checked, onOpen }: {
 }
 
 // 把任务详情序列化成纯文本，方便一键复制发出去调试。
-function detailToText(d: JobDetail): string {
-  const subs = [...d.subtasks].sort((a, b) => a.seq - b.seq);
+function detailToText(d: TaskDetail): string {
+  const subs = [...d.steps].sort((a, b) => a.seq - b.seq);
   const lines: string[] = [];
-  lines.push(`任务：${d.job.goal}`);
-  lines.push(`状态：${d.job.status}`);
-  if (d.job.result_summary) lines.push(`结果：${d.job.result_summary}`);
+  lines.push(`任务：${d.task.goal}`);
+  lines.push(`状态：${d.task.status}`);
+  if (d.task.result_summary) lines.push(`结果：${d.task.result_summary}`);
   lines.push("", "步骤：");
   subs.forEach((s) => {
     lines.push(`  ${s.seq + 1}. [${s.status}] ${s.title || `${s.provider || ""}.${s.skill || ""}`}${s.error ? ` — 错误：${s.error}` : ""}`);
@@ -358,7 +350,7 @@ function detailToText(d: JobDetail): string {
   return lines.join("\n");
 }
 
-function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
+function Detail({ d, onChanged }: { d: TaskDetail; onChanged: () => void }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   // 重试/停止的进行中标志与失败提示。成功不提示——列表会自己刷新，状态胶囊就是反馈。
@@ -367,22 +359,22 @@ function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
   const [retryNote, setRetryNote] = useState("");
   // 目标描述默认收起（两行截断）；这份 state 靠外层的 key={job.id} 在切换任务时自动重置。
   const [descOpen, setDescOpen] = useState(false);
-  const st = displayStatus(d.job);
+  const st = d.task.status;
   const m = metaOf(st);
-  const subs = useMemo(() => [...d.subtasks].sort((a, b) => a.seq - b.seq), [d.subtasks]);
-  const total = d.job.steps_total || subs.length;
-  const done = d.job.steps_total ? (d.job.steps_done || 0) : subs.filter((s) => s.status === "done").length;
-  const pct = total ? Math.round((done / total) * 100) : pctOf(d.job);
-  const kind = [d.job.kind, d.job.channel].filter(Boolean).join(" · ");
+  const subs = useMemo(() => [...d.steps].sort((a, b) => a.seq - b.seq), [d.steps]);
+  const total = d.task.steps_total || subs.length;
+  const done = d.task.steps_total ? (d.task.steps_done || 0) : subs.filter((s) => s.status === "done").length;
+  const pct = total ? Math.round((done / total) * 100) : pctOf(d.task);
+  const kind = d.task.channel || "";
   // 失败卡用的错误：取第一个失败步骤的结构化错误（比任务级的 result_summary 具体）。
   const failErr: StepError | null = useMemo(
     () => subs.map((x) => normErr(x.error)).find(Boolean) || null, [subs]);
-  // job.name 存在时 goal 才是「描述」；没有 name 时 goal 已经顶在标题位置了，不重复铺一遍。
-  const desc = d.job.name ? (d.job.goal || "") : "";
+  // task.name 存在时 goal 才是「描述」；没有 name 时 goal 已经顶在标题位置了，不重复铺一遍。
+  const desc = d.task.name ? (d.task.goal || "") : "";
 
   // 执行设备：任务本身不绑定设备（去设备化模型），设备是**逐步骤**记的，
   // 所以这里把各步骤的设备去重列出来 —— 一个任务确实可能跨设备跑。
-  // 一台都没有（纯 server 步 / 旧 Job）时整格不出现，不摆破折号占位。
+  // 一台都没有（纯 server 步）时整格不出现，不摆破折号占位。
   const devices = useMemo(
     () => [...new Set(subs.map((s) => s.device_id).filter(Boolean) as string[])],
     [subs],
@@ -390,22 +382,22 @@ function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
   // 统计条：里程碑与创建/更新时间是现成的；耗时由起止时间推。
   const stats: { k: string; v: string }[] = [
     { k: t("tasks.statMilestone"), v: total ? `${done} / ${total}` : "—" },
-    { k: t("tasks.statDuration"), v: durationOf(d.job, t) },
+    { k: t("tasks.statDuration"), v: durationOf(d.task, t) },
     ...(devices.length ? [{ k: t("tasks.statDevice"), v: devices.join("、") }] : []),
     // 自动纠错回合只在真补做过时才出现 —— 恒为 0 的一格纯占地方。
-    ...(d.job.fix_rounds ? [{ k: t("tasks.statFixRounds"), v: t("tasks.fixRoundsN", { n: d.job.fix_rounds }) }] : []),
-    { k: t("tasks.statCreated"), v: legacy.fmtTime(d.job.created_at) },
-    { k: t("tasks.statUpdated"), v: legacy.fmtTime(d.job.updated_at) },
+    ...(d.task.fix_rounds ? [{ k: t("tasks.statFixRounds"), v: t("tasks.fixRoundsN", { n: d.task.fix_rounds }) }] : []),
+    { k: t("tasks.statCreated"), v: legacy.fmtTime(d.task.created_at) },
+    { k: t("tasks.statUpdated"), v: legacy.fmtTime(d.task.updated_at) },
   ];
 
-  // 重试只对失败/已取消的**新任务**开放（旧 Job 没有里程碑模型，重试没有意义）；
+  // 重试对失败/已取消开放（电脑操控任务服务端会回 409「不支持重试」——原样显示给用户）；
   // 停止只对还在跑或挂起的任务开放。两个按钮都按状态出现，不摆死按钮。
-  const canRetry = !!d.job.is_task && (st === "failed" || st === "cancelled");
+  const canRetry = st === "failed" || st === "cancelled";
   const canStop = st === "running" || st === "pending" || st === "suspended";
   const act = async (kind: "retry" | "stop") => {
     if (busy) return;
     setBusy(kind); setActErr("");
-    const r = kind === "retry" ? await retryJob(d.job.id) : await stopJob(d.job.id);
+    const r = kind === "retry" ? await retryTask(d.task.id) : await stopTask(d.task.id);
     setBusy("");
     if (!r.ok) { setActErr(r.error); return; }
     onChanged();
@@ -419,7 +411,7 @@ function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
             <span className={`flex-none whitespace-nowrap px-[9px] py-[2px] rounded-full text-[11px] font-semibold ${TONE_SOFT[m.tone]}`}>{t(m.key)}</span>
             {kind ? <span className="flex-none whitespace-nowrap text-[11px] text-faint">{kind}</span> : null}
           </div>
-          <div className="text-[15.5px] font-semibold leading-[1.45]">{d.job.name || d.job.goal}</div>
+          <div className="text-[15.5px] font-semibold leading-[1.45]">{d.task.name || d.task.goal}</div>
           {/* 目标描述：只有标题另有其名时才单独铺一段（否则 goal 已经当标题用了）。
               收起态两行截断，展开态给一个 132px 的滚动窗；描述够长才出切换按钮。 */}
           {desc ? (
@@ -500,7 +492,7 @@ function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
               <ErrorCard
                 variant="card"
                 title={t("tasks.statusFailed")}
-                reason={failErr?.message || d.job.result_summary || t("tasks.statusFailed")}
+                reason={failErr?.message || d.task.result_summary || t("tasks.statusFailed")}
                 raw={failErr?.detail || undefined}
                 meta={[
                   ...(failErr?.kind && ERR_KIND_KEY[failErr.kind] ? [{ label: t("tasks.errKindLabel"), value: t(ERR_KIND_KEY[failErr.kind]) }] : []),
@@ -516,7 +508,7 @@ function Detail({ d, onChanged }: { d: JobDetail; onChanged: () => void }) {
             </div>
           ) : null}
 
-          <Checklist raw={d.job.checklist} />
+          <Checklist raw={d.task.checklist} />
 
           <Results subs={subs} />
         </div>
@@ -558,8 +550,8 @@ function SecLabel({ children }: { children: React.ReactNode }) {
 }
 
 // 步骤时间线的一行：左侧 20px 标记列（圆点 + 竖线），右侧标题 / 说明 / 截图。
-// 步骤错误有两种形状：新任务回结构化对象，旧 Job 回一串自由文本。统一成对象再渲染。
-function normErr(e: Subtask["error"]): StepError | null {
+// 步骤错误有两种形状：结构化对象，或旧数据里的一串自由文本。统一成对象再渲染。
+function normErr(e: TaskStep["error"]): StepError | null {
   if (!e) return null;
   if (typeof e === "string") return { kind: "", message: e };
   return e.message ? e : null;
@@ -588,7 +580,7 @@ function fmtBytes(n: number | null | undefined): string {
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function Step({ s, last }: { s: Subtask; last: boolean }) {
+function Step({ s, last }: { s: TaskStep; last: boolean }) {
   const { t } = useTranslation();
   const pale = s.status === "pending";
   const m = metaOf(s.status === "dispatched" ? "running" : s.status);
@@ -611,7 +603,7 @@ function Step({ s, last }: { s: Subtask; last: boolean }) {
           {s.elapsed_ms != null ? <span className="flex-none whitespace-nowrap text-[10.5px] text-faint font-mono">{fmtMs(s.elapsed_ms)}</span> : null}
         </div>
         {/* 这一步实际干了什么（稿 2155-2157 的 st.note）。服务端一直在回 detail，
-            以前 Subtask 类型里压根没声明这个字段，于是整层说明信息在界面上凭空消失 ——
+            以前步骤类型里压根没声明这个字段，于是整层说明信息在界面上凭空消失 ——
             步骤列表只剩四行光秃秃的标题，「设备不在线，挂起等待」这种话一句看不见。
             失败步骤不重复显示：下面的错误块已经把话说得更具体了。 */}
         {s.detail && !err ? (
@@ -691,7 +683,7 @@ function Checklist({ raw }: { raw?: string | null }) {
 
 // 生成结果：从每步的 result_json 里挑出产物（下载链接 / 路径 / 变更文件），
 // 外加 write_artifact 登记的产物（带字节数——设备写文件时回报的，服务端 stat 不到）。
-function Results({ subs }: { subs: Subtask[] }) {
+function Results({ subs }: { subs: TaskStep[] }) {
   const { t } = useTranslation();
   const rows: { name: string; path: string; url?: string; ext: string; bytes?: number | null }[] = [];
   const notes: string[] = [];

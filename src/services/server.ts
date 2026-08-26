@@ -213,7 +213,7 @@ export function setAutoApproveOperate(v: boolean): void {
   localStorage.setItem(LS_AUTO_APPROVE_OPERATE, v ? "1" : "0");
 }
 
-export interface Job {
+export interface TaskItem {
   id: string;
   // 新任务模型：name=短标题（列表主展示），goal=详细描述（副行）。旧数据 name 为空 → 回退显示 goal。
   name?: string | null;
@@ -223,16 +223,10 @@ export interface Job {
   channel?: string | null;
   created_at?: string;
   updated_at?: string;
-  // 代理任务（可追问的长任务）：kind='agent'；agent_state=working/idle/suspended/closed。
-  // idle = 干完一轮、**等你确认**（改还是收工）——这才是它真实的状态，不是「执行中」。
-  kind?: string;
-  agent_state?: string | null;
-  // 新任务模型（tasks 表）在 /jobs 列表里附带的里程碑进度：done/total。
-  // 旧 Job 行没有这两个字段 → 列表行不显示进度条（显示不准不如不显示）。
+  // 里程碑进度：done/total（列表行的进度条）。
   steps_total?: number;
   steps_done?: number;
-  is_task?: boolean;
-  // 所属工作区的名字（tasks.project）。旧 Job 行没有项目概念，恒为空。
+  // 所属工作区的名字（tasks.project）。
   project?: string | null;
   // 验收清单：服务端存的是 JSON 文本（`["…","…"]`），这里原样透传，由界面解析。
   // 解析放界面而不是这里，是因为脏数据只该影响那一块的渲染，不该让整个详情挂掉。
@@ -253,7 +247,7 @@ export interface StepArtifact {
   path: string;
   bytes?: number | null;
 }
-export interface Subtask {
+export interface TaskStep {
   id: string;
   seq: number;
   title?: string | null;
@@ -268,26 +262,26 @@ export interface Subtask {
    *  和 error.detail 不是一回事：那个是失败时的原始错误文本，这个是正常流程的说明。 */
   detail?: string | null;
   result_json?: string | null;
-  // 新任务的里程碑回结构化对象；旧 Job 的 subtask 回的是一串自由文本。两种都要认。
   error?: string | StepError | null;
-  // ↓ 以下四项只有新任务（is_task）才有，旧 Job 一律缺省。
   device_id?: string | null;   // 这一步派给了哪台设备；server 步没有设备，空串
   started_at?: string | null;  // 真正开始执行的时刻（不是排里程碑的时刻）
   elapsed_ms?: number | null;  // 本步耗时；没开始过时为 null，界面显示破折号
   artifacts?: StepArtifact[];
   artifacts_bytes?: number;    // 本步产物字节合计（bytes 缺失的条目不计入）
 }
-export interface JobEvent {
+export interface TaskEvent {
   id: number;
   type: string;
   message?: string | null;
-  subtask_id?: string | null;
+  // 事件挂在哪一步上（可空）。原来声明成 subtask_id，服务端实际给的键一直是 step_id。
+  step_id?: string | null;
   created_at?: string;
 }
-export interface JobDetail {
-  job: Job;
-  subtasks: Subtask[];
-  events: JobEvent[];
+export interface TaskDetail {
+  // B 批改名：键名跟着任务模型走（原 {job, subtasks, events}）。
+  task: TaskItem;
+  steps: TaskStep[];
+  events: TaskEvent[];
 }
 
 // 任务列表（最近 limit 条，按更新时间倒序）。
@@ -326,9 +320,9 @@ export async function resetProfile(): Promise<string | null> {
   }
 }
 
-export async function fetchJobs(limit = 30): Promise<Job[]> {
+export async function fetchTasks(limit = 30): Promise<TaskItem[]> {
   try {
-    const r = await fetch(`${getServerUrl()}/jobs?limit=${limit}`);
+    const r = await fetch(`${getServerUrl()}/tasks?limit=${limit}`);
     if (!r.ok) return [];
     return await r.json();
   } catch {
@@ -336,12 +330,12 @@ export async function fetchJobs(limit = 30): Promise<Job[]> {
   }
 }
 
-// 某个工作区（= 项目名）下的任务。过滤在服务端做（/jobs?project=），
+// 某个工作区（= 项目名）下的任务。过滤在服务端做（/tasks?project=），
 // 不把全部任务拉回客户端再筛 —— 任务多了那样会越来越慢。
-export async function fetchJobsByProject(project: string, limit = 20): Promise<Job[]> {
+export async function fetchTasksByProject(project: string, limit = 20): Promise<TaskItem[]> {
   if (!project) return [];
   try {
-    const r = await fetch(`${getServerUrl()}/jobs?limit=${limit}&project=${encodeURIComponent(project)}`);
+    const r = await fetch(`${getServerUrl()}/tasks?limit=${limit}&project=${encodeURIComponent(project)}`);
     if (!r.ok) return [];
     return await r.json();
   } catch {
@@ -349,11 +343,11 @@ export async function fetchJobsByProject(project: string, limit = 20): Promise<J
   }
 }
 
-// 停止一个正在跑/挂起中的任务。服务端两种任务都认（新任务走取消，旧 operate Job 走停止请求）。
+// 停止一个正在跑/挂起中的任务（电脑操控任务也认：服务端先唤醒它的等待再收尾）。
 // 返回是否成功；失败原因交给调用方提示（这里不弹窗，任务面板自己有提示位）。
-export async function stopJob(id: string): Promise<{ ok: boolean; error: string }> {
+export async function stopTask(id: string): Promise<{ ok: boolean; error: string }> {
   try {
-    const r = await fetch(`${getServerUrl()}/jobs/${encodeURIComponent(id)}/stop`, { method: "POST" });
+    const r = await fetch(`${getServerUrl()}/tasks/${encodeURIComponent(id)}/stop`, { method: "POST" });
     if (!r.ok) return { ok: false, error: await errText(r) };
     return { ok: true, error: "" };
   } catch (e) {
@@ -363,9 +357,9 @@ export async function stopJob(id: string): Promise<{ ok: boolean; error: string 
 
 // 重试任务：从失败的那一步继续（已完成的里程碑保留不重做）。
 // 409 = 当前状态不能重试（比如任务还在跑，或者已经做完了）——这类错误要原样告诉用户。
-export async function retryJob(id: string): Promise<{ ok: boolean; error: string; kept?: number; total?: number }> {
+export async function retryTask(id: string): Promise<{ ok: boolean; error: string; kept?: number; total?: number }> {
   try {
-    const r = await fetch(`${getServerUrl()}/jobs/${encodeURIComponent(id)}/retry`, { method: "POST" });
+    const r = await fetch(`${getServerUrl()}/tasks/${encodeURIComponent(id)}/retry`, { method: "POST" });
     if (!r.ok) return { ok: false, error: await errText(r) };
     const data = await r.json();
     return { ok: true, error: "", kept: data?.kept, total: data?.total };
@@ -388,10 +382,10 @@ async function errText(r: Response): Promise<string> {
 // 返回 { deleted, busy }。busy 是「还在跑、删不掉」的那几个 id ——
 // **调用方必须把它说出来**：服务端只删得动终态的任务（还在跑的要先停止），
 // 删除数量比请求的少而界面上一声不吭，用户看到的就是「我点了删除，它没反应」。
-export async function deleteJobs(ids: string[]): Promise<{ deleted: number; busy: string[] }> {
+export async function deleteTasks(ids: string[]): Promise<{ deleted: number; busy: string[] }> {
   if (!ids.length) return { deleted: 0, busy: [] };
   try {
-    const r = await fetch(`${getServerUrl()}/jobs/delete`, {
+    const r = await fetch(`${getServerUrl()}/tasks/delete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ids }),
@@ -819,9 +813,9 @@ export async function deleteWorkspace(
 }
 
 // 单个任务详情（子任务 + 事件时间线）。
-export async function fetchJobDetail(id: string): Promise<JobDetail | null> {
+export async function fetchTaskDetail(id: string): Promise<TaskDetail | null> {
   try {
-    const r = await fetch(`${getServerUrl()}/jobs/${encodeURIComponent(id)}`);
+    const r = await fetch(`${getServerUrl()}/tasks/${encodeURIComponent(id)}`);
     if (!r.ok) return null;
     return await r.json();
   } catch {
@@ -838,7 +832,7 @@ export interface Inspiration {
   tags: string[];
   status: string; // open/done/archived
   source_channel?: string;
-  job_id?: string; // 已落地成任务时指向 tasks.id；空串表示没关联
+  task_id?: string; // 已落地成任务时指向 tasks.id；空串表示没关联（B 批改名，原 job_id）
   created_at?: string;
   updated_at?: string;
 
@@ -917,7 +911,7 @@ export async function createInspiration(body: {
 
 export async function updateInspiration(
   id: number,
-  patch: Partial<Pick<Inspiration, "raw" | "title" | "summary" | "tags" | "status" | "job_id">>,
+  patch: Partial<Pick<Inspiration, "raw" | "title" | "summary" | "tags" | "status" | "task_id">>,
 ): Promise<Inspiration | null> {
   try {
     const r = await fetch(`${getServerUrl()}/inspirations/${id}`, {
@@ -1071,8 +1065,9 @@ class ChatConnection {
     });
   }
 
-  sendConfirm(taskId: string, approved: boolean): boolean {
-    return this.rawSend({ type: "job_confirm_response", task_id: taskId, approved });
+  sendConfirm(confirmId: string, approved: boolean): boolean {
+    // B 批改名：确认单号叫 confirm_id，不再冒充任务 id。
+    return this.rawSend({ type: "confirm_response", confirm_id: confirmId, approved });
   }
 
   // 问答卡：多题答完后一次性提交（秘书在派活前把歧义问清楚）。
@@ -1091,14 +1086,14 @@ class ChatConnection {
   //
   // nx/ny 是**归一化到 0-1000** 的整数，不是像素：截图分辨率因设备而异，
   // 传像素的话服务端还得知道原图尺寸才能还原。
-  sendLocate(taskId: string, body: { nx?: number; ny?: number; feedback?: string; paused?: boolean; cancelled?: boolean }): boolean {
-    return this.rawSend({ type: "operate_locate_response", task_id: taskId, ...body });
+  sendLocate(askId: string, body: { nx?: number; ny?: number; feedback?: string; paused?: boolean; cancelled?: boolean }): boolean {
+    return this.rawSend({ type: "operate_locate_response", ask_id: askId, ...body });
   }
 
   // 用户「暂停我来」自己处理完，点「继续」→ 唤醒挂起的任务，AI 重新看屏接着干。
-  // 注意它按 job_id 走，不是 task_id（一个 job 可能求助过好几次）。
-  sendOperateResume(jobId: string): boolean {
-    return this.rawSend({ type: "operate_resume", job_id: jobId });
+  // 注意它按 run_id 走，不是 task_id（一次操控可能求助过好几次，续跑要对准这一次）。
+  sendOperateResume(runId: string): boolean {
+    return this.rawSend({ type: "operate_resume", run_id: runId });
   }
 }
 

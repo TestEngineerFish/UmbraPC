@@ -467,7 +467,6 @@
     "errTimeout": "疑似卡住",
     "errDetail": "原始错误",
     "copied": "已复制",
-    "statusAwaitingReview": "待确认",
     "errKindLabel": "分类",
     "errStepLabel": "失败于",
     "retryNotReady": "重试链路还在调试，这一版先不可用。",

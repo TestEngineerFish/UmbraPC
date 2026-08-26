@@ -467,7 +467,6 @@
     "errTimeout": "Stalled",
     "errDetail": "Raw error",
     "copied": "Copied",
-    "statusAwaitingReview": "Awaiting review",
     "errKindLabel": "Kind",
     "errStepLabel": "Failed at",
     "retryNotReady": "Retry is still being debugged and is unavailable in this build.",

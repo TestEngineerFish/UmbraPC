@@ -12,10 +12,10 @@ import {
   IconPencil, IconPhone, IconPlus, IconSearch, IconTrash,
 } from "../../components/icons";
 import {
-  createInspiration, deleteInspirations, fetchJobDetail, organizeStateOf,
+  createInspiration, deleteInspirations, fetchTaskDetail, organizeStateOf,
   requestInspirationResearch, researchInFlight, researchStateOf, updateInspiration,
 } from "../../services/server";
-import type { Inspiration, Job } from "../../services/server";
+import type { Inspiration, TaskItem } from "../../services/server";
 import { mdToHtml } from "../chat/markdown";
 
 type Filter = "" | "open" | "done" | "archived";
@@ -318,7 +318,7 @@ function Card({ item, on, tag, onPick }: { item: Inspiration; on: boolean; tag: 
         <span className="flex-1 inline-flex items-center gap-[4px] text-[10.5px] text-faint whitespace-nowrap">
           <Source channel={item.source_channel} />
         </span>
-        {item.job_id ? (
+        {item.task_id ? (
           <span className="flex-none inline-flex items-center gap-[4px] text-[10.5px] text-success whitespace-nowrap">
             <IconCheck size={10} />{t("inspiration.linkedJob")}
           </span>
@@ -338,17 +338,17 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
-  const [job, setJob] = useState<Job | null>(null);
+  const [task, setTask] = useState<TaskItem | null>(null);
   const m = metaOf(item.status);
 
-  // 关联任务的标题 / 状态 / 时间不在灵感行里，按 job_id 单独取一次（只有选中项会取）。
+  // 关联任务的标题 / 状态 / 时间不在灵感行里，按 task_id 单独取一次（只有选中项会取）。
   useEffect(() => {
     let alive = true;
-    setJob(null);
-    if (!item.job_id) return;
-    fetchJobDetail(item.job_id).then((d) => { if (alive && d) setJob(d.job); });
+    setTask(null);
+    if (!item.task_id) return;
+    fetchTaskDetail(item.task_id).then((d) => { if (alive && d) setTask(d.task); });
     return () => { alive = false; };
-  }, [item.job_id]);
+  }, [item.task_id]);
 
   const setStatus = async (status: string) => {
     setBusy(true);
@@ -428,18 +428,18 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
         </div>
       </div>
 
-      {item.job_id ? (
+      {item.task_id ? (
         <div>
           <SecLabel>{t("inspiration.jobLabel")}</SecLabel>
           <div className="flex items-center gap-[9px] border border-border rounded-[10px] p-[10px_12px] hover:border-orange">
             <span className="w-[22px] h-[22px] flex-none rounded-[6px] bg-success-soft text-success flex items-center justify-center"><IconCheck size={12} /></span>
             <div className="flex-1 min-w-0">
-              <div className="text-[12px] truncate">{job ? (job.name || job.goal) : item.job_id}</div>
+              <div className="text-[12px] truncate">{task ? (task.name || task.goal) : item.task_id}</div>
               <div className="text-[10.5px] text-faint mt-[2px] whitespace-nowrap">
-                {job ? `${t(`tasks.status${job.status.charAt(0).toUpperCase()}${job.status.slice(1)}`, { defaultValue: job.status })} · ${legacy.fmtListTime(job.updated_at)}` : t("common.loading")}
+                {task ? `${t(`tasks.status${task.status.charAt(0).toUpperCase()}${task.status.slice(1)}`, { defaultValue: task.status })} · ${legacy.fmtListTime(task.updated_at)}` : t("common.loading")}
               </div>
             </div>
-            <button onClick={() => legacy.openTaskFrom(item.job_id!)}
+            <button onClick={() => legacy.openTaskFrom(item.task_id!)}
               className="flex-none whitespace-nowrap p-0 border-none bg-transparent text-orange-text hover:text-orange-deep text-[11px] cursor-pointer">
               {t("inspiration.jobOpen")}
             </button>

@@ -5,8 +5,8 @@
 // 「目录内容」走 PC 侧的 umbra:listDir（只读顶层，不递归）。
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchWorkspaces, createWorkspace, deleteWorkspace, updateWorkspaceDesc, fetchJobsByProject } from "../../services/server";
-import type { Workspace, Job } from "../../services/server";
+import { fetchWorkspaces, createWorkspace, deleteWorkspace, updateWorkspaceDesc, fetchTasksByProject } from "../../services/server";
+import type { Workspace, TaskItem } from "../../services/server";
 import { getState } from "../../services/deviceTransport";
 import * as desktop from "../../services/desktop";
 import type { DirEntry } from "../../services/desktop";
@@ -289,7 +289,7 @@ export function Workspaces() {
 // 详情列。相关任务与目录内容都随选中项重新拉一次。
 function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; onSaved: () => void }) {
   const { t } = useTranslation();
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [dir, setDir] = useState<{ items: DirEntry[]; total: number }>({ items: [], total: -1 });
   const [copied, setCopied] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -299,10 +299,10 @@ function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; 
   // 切工作区时把两块异步数据都重拉；alive 守卫防止旧请求晚回来把新选中项的数据盖掉。
   useEffect(() => {
     let alive = true;
-    setJobs([]);
+    setTasks([]);
     setDir({ items: [], total: -1 });
     setEditing(false);
-    void fetchJobsByProject(w.name, 20).then((r) => { if (alive) setJobs(r); });
+    void fetchTasksByProject(w.name, 20).then((r) => { if (alive) setTasks(r); });
     if (w.dir) void desktop.listDir(w.dir, 5).then((r) => { if (alive) setDir(r); });
     return () => { alive = false; };
   }, [w.id, w.name, w.dir]);
@@ -374,7 +374,7 @@ function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; 
               </button>
             }>{t("workspaces.relatedJobs")}</SecLabel>
             <div className="flex flex-col gap-[7px]">
-              {jobs.map((j) => (
+              {tasks.map((j) => (
                 <div key={j.id} className="bg-card border border-border rounded-[10px] px-[12px] py-[10px]">
                   <div className="flex items-baseline gap-[8px]">
                     <span className="flex-1 min-w-0 text-[12.5px] font-medium line-clamp-2 leading-[1.45]">{j.name || j.goal}</span>
@@ -389,7 +389,7 @@ function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; 
                   </div>
                 </div>
               ))}
-              {!jobs.length ? <div className="text-[12px] text-muted">{t("workspaces.noRelatedJobs")}</div> : null}
+              {!tasks.length ? <div className="text-[12px] text-muted">{t("workspaces.noRelatedJobs")}</div> : null}
             </div>
           </div>
 
