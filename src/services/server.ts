@@ -605,10 +605,11 @@ export async function createMoneyCat(
   }
 }
 
-/** 改分类（改名 / 换色槽 / 停用启用）。slug 不可改 —— 它是流水指过来的稳定标识。 */
+/** 改分类（改名 / 换色槽 / 停用启用 / 改图标）。slug 不可改 —— 它是流水指过来的
+ *  稳定标识。icon 传语义名（批次 006「改图标」弹层）；空串 = 清掉回 slug 兜底。 */
 export async function updateMoneyCat(
   slug: string,
-  patch: { name?: string; slot?: number; enabled?: boolean },
+  patch: { name?: string; slot?: number; enabled?: boolean; icon?: string },
 ): Promise<MoneyCat | null> {
   try {
     const r = await fetch(`${getServerUrl()}/money/categories/${encodeURIComponent(slug)}`, {

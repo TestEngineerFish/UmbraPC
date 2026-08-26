@@ -1073,6 +1073,10 @@
     "attUploading": "Uploading…",
     "attUploadFailed": "\"{{name}}\" failed to upload",
     "recDir": "Side",
-    "recDirIncomeHint": "Recurring rules on the income side — e.g. salary auto-recorded on the 10th each month."
+    "recDirIncomeHint": "Recurring rules on the income side — e.g. salary auto-recorded on the 10th each month.",
+    "actIcon": "Change icon",
+    "iconPopTitle": "Change icon",
+    "iconChangeHint": "Only the look changes — the name and existing entries stay.",
+    "iconChanged": "Changed to \"{{name}}\""
   }
 }

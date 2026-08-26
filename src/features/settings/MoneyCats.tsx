@@ -52,6 +52,9 @@ export function MoneyCats() {
   const [newDir, setNewDir] = useState<"expense" | "income">("expense");
   const [newName, setNewName] = useState("");
   const [newIcon, setNewIcon] = useState(PICK_ICONS[0].k);
+  /** 「改图标」小弹层（批次 006）：锚定点击位置，点空白关。表格容器 overflow:hidden，
+   *  所以走 fixed 浮层不走行内展开（稿的原话）。 */
+  const [iconPop, setIconPop] = useState<{ x: number; y: number; cat: MoneyCat } | null>(null);
 
   const reload = useCallback(async () => {
     const r = await fetchMoneyCats(true);   // 停用的也要能看见、能开回来
@@ -60,7 +63,7 @@ export function MoneyCats() {
   }, []);
   useEffect(() => { void reload(); }, [reload]);
 
-  const patch = async (slug: string, p: { name?: string; slot?: number; enabled?: boolean }): Promise<boolean> => {
+  const patch = async (slug: string, p: { name?: string; slot?: number; enabled?: boolean; icon?: string }): Promise<boolean> => {
     const r = await updateMoneyCat(slug, p);
     if (!r) showToast(t("money.catSaveFailed"), { tone: "warn" });
     return !!r;
@@ -138,6 +141,24 @@ export function MoneyCats() {
     await subMutate(slug, () => deleteMoneySub(slug, s.label), t("money.subDeleted", { name: s.label }));
   };
 
+  // ── 改图标（批次 006：选完即存，不走二次确认 —— 不是破坏性操作）────────────
+  const openIconPop = (e: React.MouseEvent, c: MoneyCat) => {
+    // 钳进视口：弹层 184 宽 + 网格两行 ≈ 200×210，贴边点开时往回收。
+    const x = Math.max(8, Math.min(e.clientX, window.innerWidth - 200));
+    const y = Math.max(8, Math.min(e.clientY, window.innerHeight - 210));
+    setIconPop({ x, y, cat: c });
+  };
+
+  const pickIcon = async (c: MoneyCat, k: string, label: string) => {
+    setIconPop(null);
+    if ((c.icon || "") === k) return;   // 点的就是当前项：不发请求不吐司
+    setBusy(true);
+    const ok = await patch(c.slug, { icon: k });
+    setBusy(false);
+    if (ok) showToast(t("money.iconChanged", { name: label }), { tone: "ok" });
+    await reload();
+  };
+
   // ── 新增分类 ──────────────────────────────────────────────────────────────
   const newNameTrim = newName.trim();
   // 重名当场红字（服务端是全局查重：收入里也不许再来一个「餐饮」；停用的也算 ——
@@ -211,7 +232,7 @@ export function MoneyCats() {
           <span className="flex-1 min-w-0">{t("money.thCat")}</span>
           <span className="w-[58px] flex-none">{t("money.catsThSlot")}</span>
           <span className="w-[82px] flex-none">{t("money.catsThSub")}</span>
-          <span className="w-[150px] flex-none text-right">{t("money.catsThActions")}</span>
+          <span className="w-[212px] flex-none text-right">{t("money.catsThActions")}</span>
         </div>
         {cats.map((c) => {
           const open = subOpen === c.slug;
@@ -252,7 +273,9 @@ export function MoneyCats() {
                   <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"
                     className={`flex-none transition-transform ${open ? "rotate-90" : ""}`}><path d="M9 6l6 6-6 6" /></svg>
                 </button>
-                <span className="w-[150px] flex-none flex justify-end gap-[6px]">
+                <span className="w-[212px] flex-none flex justify-end gap-[6px]">
+                  {/* 改图标（批次 006）：第一颗，弹层锚定点击位置 */}
+                  <button className={BTN_S} disabled={busy} onClick={(e) => openIconPop(e, c)}>{t("money.actIcon")}</button>
                   <button className={BTN_S} disabled={busy} onClick={() => { setSlotFor(c); setGrab(null); }}>{t("money.actSlot")}</button>
                   <button className={BTN_S} disabled={busy} onClick={() => { setRenaming(c); setRenameVal(c.name); }}>{t("money.actRename")}</button>
                   {/* locked 是兜底分类，不给停用；停用可逆，所以不弹确认 */}
@@ -347,6 +370,35 @@ export function MoneyCats() {
           );
         })}
       </div>
+
+      {/* 「改图标」小弹层（批次 006）：184 宽、锚定点击位置、点空白关、选完即存。
+          网格与新建弹窗同一张（PICK_ICONS 模块级共用，稿点名别各写一遍）。 */}
+      {iconPop ? (
+        <>
+          <div className="fixed inset-0 z-[69]" onClick={() => setIconPop(null)} />
+          <div className="fixed z-[70] w-[184px] bg-card border border-border rounded-[9px] px-[10px] pt-[9px] pb-[8px]"
+            style={{ left: iconPop.x, top: iconPop.y, boxShadow: "0 8px 24px rgba(0,0,0,.18)" }}>
+            <div className="flex items-baseline gap-[7px] px-[3px] pt-[1px] pb-[8px]">
+              <span className="flex-none text-[10.5px] font-semibold tracking-[.06em] text-faint whitespace-nowrap">{t("money.iconPopTitle")}</span>
+              <span className="flex-1 min-w-0 text-[11px] text-text truncate">{iconPop.cat.name}</span>
+            </div>
+            <div className="flex flex-wrap gap-[7px]">
+              {PICK_ICONS.map((o) => {
+                const on = (iconPop.cat.icon || "") === o.k;
+                return (
+                  <button key={o.k} title={o.label} disabled={busy}
+                    onClick={() => void pickIcon(iconPop.cat, o.k, o.label)}
+                    className={`w-[32px] h-[32px] flex-none flex items-center justify-center rounded-[8px] cursor-pointer border ${
+                      on ? "border-orange bg-orange-soft text-orange-text" : "border-border bg-card text-muted hover:border-orange"}`}>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={o.d} /></svg>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="px-[3px] pt-[9px] pb-[1px] text-[10.5px] text-faint leading-[1.65]">{t("money.iconChangeHint")}</div>
+          </div>
+        </>
+      ) : null}
 
       {/* 改名弹窗 */}
       {renaming ? (

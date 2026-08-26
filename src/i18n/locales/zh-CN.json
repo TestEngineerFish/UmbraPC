@@ -1073,6 +1073,10 @@
     "attUploading": "上传中…",
     "attUploadFailed": "「{{name}}」没传上去",
     "recDir": "记在哪边",
-    "recDirIncomeHint": "收入侧的周期规则，比如工资每月 10 号自动入账。"
+    "recDirIncomeHint": "收入侧的周期规则，比如工资每月 10 号自动入账。",
+    "actIcon": "改图标",
+    "iconPopTitle": "换图标",
+    "iconChangeHint": "只换样子，名字和已记的账不动。",
+    "iconChanged": "已换成「{{name}}」"
   }
 }
