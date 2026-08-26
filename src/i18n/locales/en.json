@@ -939,7 +939,7 @@
     "amountPh": "0.00, or type 258/3",
     "keypad": "Keypad",
     "exprBad": "Can't read that expression",
-    "direction": "Type",
+    "direction": "Side",
     "time": "Time",
     "recentCats": "Recent",
     "subLabel": "Subcategory (optional)",

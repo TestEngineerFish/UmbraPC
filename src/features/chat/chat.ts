@@ -762,6 +762,14 @@ function blockHtml(b: Block, i: number): string {
         </div>`
       : "";
     const actLabel = st === "failed" ? t("chat.retryTask") : t("chat.viewResult");
+    // 琥珀档（等你授权）不给右下角按钮（批次 006 定稿：三键就地内嵌、授权就地完成，
+    // 稿把原来的「去授权」单按钮删了 —— 留着它用户会以为通向另一个地方）。
+    const actRow = awaiting
+      ? ""
+      : `<div style="display:flex;align-items:center;gap:8px;">
+          <span style="flex:1;"></span>
+          <button data-jobact="${esc(b.taskId)}" data-jobfail="${st === "failed" ? "1" : ""}" class="${btn("ghost", "sm")}">${esc(actLabel)}</button>
+        </div>`;
     // 长摘要（agent 的输出动辄几百字）限高可滚，别撑破卡片。
     return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;display:flex;flex-direction:column;gap:9px;">
         <div style="display:flex;align-items:center;gap:9px;">
@@ -772,10 +780,7 @@ function blockHtml(b: Block, i: number): string {
         ${bar}
         <span style="font-size:12px;color:var(--muted);line-height:1.7;max-height:150px;overflow-y:auto;white-space:pre-wrap;word-break:break-word;">${esc(b.message)}</span>
         ${confirm}
-        <div style="display:flex;align-items:center;gap:8px;">
-          <span style="flex:1;"></span>
-          <button data-jobact="${esc(b.taskId)}" data-jobfail="${st === "failed" ? "1" : ""}" class="${btn("ghost", "sm")}">${esc(actLabel)}</button>
-        </div>
+        ${actRow}
       </div>`;
   }
 
