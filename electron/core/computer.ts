@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { httpBase, UmbraConfig } from "./config";
 import { mt, getMainLocale } from "../i18n";
 import { Confirm, Manifest, Registry, Report } from "./providers/registry";
+import { cursorDisplayBounds, normToGlobal, screencaptureArgs } from "./shared/display";
 import { uploadFile } from "./shared/upload";
 import { run } from "./shared/util";
 
@@ -60,7 +61,8 @@ export async function loadNut(): Promise<any> {
 async function shoot(cfg: UmbraConfig): Promise<unknown> {
   const tmp = path.join(os.tmpdir(), `umbra-cu-${Date.now()}.png`);
   if (process.platform !== "darwin") throw new Error(mt("electron.platformUnsupported", { platform: process.platform }, getMainLocale()));
-  const res = await run("screencapture", ["-x", tmp]);
+  // 多屏：锚定鼠标所在屏（-R 全局矩形），与 click/drag 的换算同一块屏（任务 #61）。
+  const res = await run("screencapture", await screencaptureArgs(tmp));
   if (res.code !== 0) throw new Error(mt("electron.screenshotFailed", { detail: res.output.slice(-200) }, getMainLocale()));
   // 降采样到最长边 ~1440，控制体积（Retina 全屏原图数 MB，视觉模型有大小/分辨率限制）。
   // 归一化坐标(0-1000)与分辨率无关，缩放不影响点击定位。
@@ -117,18 +119,18 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
 
   // 点击/输入/按键/滚动需要辅助功能权限。
   await requireAccessibility();
-  const { mouse, keyboard, Point, Button, Key, screen } = await loadNut();
+  const { mouse, keyboard, Point, Button, Key } = await loadNut();
 
   if (skill === "click") {
     let x = Number(params.x);
     let y = Number(params.y);
-    // 归一化坐标 nx/ny(0-1000，相对屏幕)→ 逻辑坐标。视觉模型输出的是归一化坐标，
-    // 这样可避开 Retina 像素与逻辑点的缩放问题。
+    // 归一化坐标 nx/ny(0-1000，相对截图那块屏)→ 全局逻辑坐标。
+    // 多屏（任务 #61）：换算用**鼠标所在屏**的 bounds —— 截图也锚定同一块屏
+    // （见 shared/display.ts 的口径说明），不再拿 nut-js 的主屏宽高硬算；
+    // 副屏原点非 (0,0)，bounds 偏移一并算进去，nut-js 的全局坐标能落到任意屏。
     if ((Number.isNaN(x) || Number.isNaN(y)) && params.nx != null && params.ny != null) {
-      const w = await screen.width();
-      const h = await screen.height();
-      x = Math.round((w * Number(params.nx)) / 1000);
-      y = Math.round((h * Number(params.ny)) / 1000);
+      const b = await cursorDisplayBounds();
+      ({ x, y } = normToGlobal(b, Number(params.nx), Number(params.ny)));
     }
     if (Number.isNaN(x) || Number.isNaN(y)) throw new Error("click 需要 x,y 或 nx,ny(0-1000)");
     const btn = String(params.button || "left").toLowerCase();
@@ -187,13 +189,17 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
 
   if (skill === "drag") {
     // 按下 → 移动 → 松开。nut-js 的 drag 吃一条路径（Point 数组），两点即「从 A 拖到 B」。
-    // 坐标与 click 一致：给 x/y 是物理像素；给 nx/ny 是 0–1000 的归一化坐标（跨分辨率复用同一套脚本）。
-    const sz = await screen.width().then(async (w: number) => ({ w, h: await screen.height() }));
+    // 坐标与 click 一致：给 x/y 是全局逻辑坐标直点；给 nx/ny 是 0–1000 的归一化坐标，
+    // 按**鼠标所在屏**的 bounds 换算（多屏口径同 click，任务 #61）——起点终点用同一块
+    // 屏的 bounds 一次取齐，不会拖到一半换算基准变了。
     const norm = params.nx !== undefined || params.ny !== undefined;
-    const fx = norm ? Math.round((Number(params.nx) / 1000) * sz.w) : Number(params.x);
-    const fy = norm ? Math.round((Number(params.ny) / 1000) * sz.h) : Number(params.y);
-    const tx = norm ? Math.round((Number(params.tnx) / 1000) * sz.w) : Number(params.tx);
-    const ty = norm ? Math.round((Number(params.tny) / 1000) * sz.h) : Number(params.ty);
+    let fx = Number(params.x); let fy = Number(params.y);
+    let tx = Number(params.tx); let ty = Number(params.ty);
+    if (norm) {
+      const b = await cursorDisplayBounds();
+      ({ x: fx, y: fy } = normToGlobal(b, Number(params.nx), Number(params.ny)));
+      ({ x: tx, y: ty } = normToGlobal(b, Number(params.tnx), Number(params.tny)));
+    }
     if ([fx, fy, tx, ty].some((v) => Number.isNaN(v))) throw new Error("drag 需要 x,y,tx,ty 或 nx,ny,tnx,tny(0-1000)");
     await mouse.setPosition(new Point(fx, fy));
     await mouse.drag([new Point(fx, fy), new Point(tx, ty)]);
@@ -217,7 +223,7 @@ async function doSkill(skill: string, params: Record<string, any>, cfg: UmbraCon
 const SKILLS: Manifest["skills"] = {
   operate: { description: "（v0 占位，未接决策引擎）给自然语言目标自主完成 GUI 操作", params: { goal: "目标描述", app: "可选，限定应用" } },
   open_app: { description: "打开/切换到某应用（可选同时打开网址）", params: { app: "应用名，如 Safari", url: "可选，要打开的网址" } },
-  screenshot: { description: "截屏并返回图片链接", params: {} },
+  screenshot: { description: "截取鼠标所在屏幕并返回图片链接", params: {} },
   click: { description: "在坐标点击", params: { x: "横坐标", y: "纵坐标", button: "left/right/middle，默认 left" } },
   type: { description: "向当前焦点输入文本", params: { text: "要输入的文本" } },
   key: { description: "按下（组合）键", params: { keys: "按键数组，如 [cmd, a]" } },

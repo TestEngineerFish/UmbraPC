@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { screencaptureArgs } from "../shared/display";
 import { run } from "../shared/util";
 import { uploadFile } from "../shared/upload";
 import { httpBase, UmbraConfig } from "../config";
@@ -296,7 +297,10 @@ async function ocrBoxes(imgPath: string): Promise<{ text: string; nx: number; ny
 async function ocrScreen(cfg: UmbraConfig): Promise<unknown> {
   if (process.platform !== "darwin") throw new Error("ocr_screen 仅支持 macOS");
   const tmp = path.join(os.tmpdir(), `umbra-ocrshot-${Date.now()}.png`);
-  const res = await run("screencapture", ["-x", tmp]);
+  // 多屏（任务 #61）：operate 的感知入口。锚定鼠标所在屏，与 computer.click 的
+  // 换算同一块屏（口径见 shared/display.ts）—— 原来这里截默认屏、点击按主屏算，
+  // 两头对不上，操控在副屏上整段点偏。
+  const res = await run("screencapture", await screencaptureArgs(tmp));
   if (res.code !== 0) throw new Error(`截图失败：${res.output.slice(-200)}`);
   const items = await ocrBoxes(tmp);              // 全分辨率 OCR 更准
   await run("sips", ["-Z", "1600", tmp]).catch(() => undefined);  // 下采样再上传/喂视觉
@@ -309,7 +313,9 @@ async function capture(cfg: UmbraConfig): Promise<unknown> {
   const tmp = path.join(os.tmpdir(), `umbra-shot-${Date.now()}.png`);
   const plat = process.platform;
   let res;
-  if (plat === "darwin") res = await run("screencapture", ["-x", tmp]);
+  // 多屏（任务 #61）：macOS 锚定鼠标所在屏（用户喊「截个屏」，指的是他正看着的那块）。
+  // Linux/Windows 维持原行为（scrot 全桌面 / PowerShell 主屏）——多屏口径先只修 mac。
+  if (plat === "darwin") res = await run("screencapture", await screencaptureArgs(tmp));
   else if (plat === "linux") res = await run("scrot", [tmp]);
   else if (plat === "win32") res = await run("powershell", ["-NoProfile", "-Command", `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; $b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; $bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height; $g=[System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); $bmp.Save('${tmp.replace(/\\/g, "\\\\")}')`]);
   else throw new Error(`不支持的平台：${plat}`);
@@ -357,8 +363,8 @@ const FS_SKILLS: Manifest["skills"] = {
   delete_path: { description: "删除工作区内的子目录/文件（移除工作区并清理文件时用；只允许 ~/UmbraWorks 内）", params: { path: "要删除的路径" } },
 };
 const SHOT_SKILLS: Manifest["skills"] = {
-  capture: { description: "截取整个屏幕，上传后返回图片链接", params: {} },
-  ocr_screen: { description: "截屏 + 带坐标 OCR：返回图片链接与每段文字的归一化中心坐标，用于精确定位", params: {} },
+  capture: { description: "截取当前屏幕（多屏取鼠标所在那块），上传后返回图片链接", params: {} },
+  ocr_screen: { description: "截屏（多屏取鼠标所在那块）+ 带坐标 OCR：返回图片链接与每段文字的归一化中心坐标，用于精确定位", params: {} },
 };
 const APP_SKILLS: Manifest["skills"] = {
   // 打开文件/目录/网址：一条命令的事，别让 GUI agent 去 Finder 里翻箱倒柜找图标双击。
