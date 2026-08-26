@@ -16,14 +16,29 @@ import { IconSearch, IconRefresh, IconCheck, IconX, IconClock, IconAlert, IconFo
 // 全局图片预览：任意 Step 图片点击后打开（避免逐层透传 onClick）。
 let openPreview: (src: string, alt?: string) => void = () => {};
 
-// 从步骤结果里取截图 URL（相对路径拼服务端地址）。
-function stepShot(s: TaskStep): string | null {
-  if (!s.result_json) return null;
+// 从步骤结果里收集所有可点的 url（顶层 + device_results 两层；相对路径拼服务端地址）。
+// url 藏两层是服务端的真实形状：技能直回的在顶层，执行轮聚合的设备结果在
+// device_results[]（截图任务的 url 就在这层）——只看顶层等于大多数时候看不见。
+function stepUrls(s: TaskStep): { url: string; name: string }[] {
+  if (!s.result_json) return [];
+  const out: { url: string; name: string }[] = [];
   try {
     const r = JSON.parse(s.result_json);
-    if (r && typeof r.url === "string" && r.url) return r.url.startsWith("http") ? r.url : getServerUrl() + r.url;
+    if (!r || typeof r !== "object") return [];
+    const cands = [...(Array.isArray(r.device_results) ? r.device_results : []), r];
+    for (const d of cands) {
+      if (!d || typeof d.url !== "string" || !d.url) continue;
+      const url = d.url.startsWith("http") ? d.url : getServerUrl() + d.url;
+      if (out.some((x) => x.url === url)) continue;
+      out.push({ url, name: (typeof d.filename === "string" && d.filename) || url.split("/").pop() || "产出" });
+    }
   } catch { /* ignore */ }
-  return null;
+  return out;
+}
+
+// 该步的内联截图：结果里第一个图片类 url。
+function stepShot(s: TaskStep): string | null {
+  return stepUrls(s).find((x) => isImg(x.url))?.url || null;
 }
 
 // 从截图 URL 里抠出文件名给脚注用。带查询串的先切掉 ?，解码失败就用原样 ——
@@ -70,7 +85,9 @@ function StatusIcon({ status, size = 13 }: { status: string; size?: number }) {
 const metaOf = (status: string) => STATUS_META[status] || { key: status, tone: "neutral" as Tone };
 
 function isImg(u: string) {
-  return /\.(png|jpe?g|gif|bmp|webp)(\?|$)/i.test(u);
+  // /files/<id> 是服务端文件接口，通常没有扩展名 —— 截图任务的产出就长这样。
+  // 按图片试渲染；真不是图时内联 <img> 的 onError 会把自己藏起来，不留破图标。
+  return /\.(png|jpe?g|gif|bmp|webp)(\?|$)/i.test(u) || /\/files\//.test(u);
 }
 
 // 里程碑进度百分比。没有 steps_total 的旧任务行按状态兜底（完成=100，其余=0），不编假进度。
@@ -637,8 +654,10 @@ function Step({ s, last }: { s: TaskStep; last: boolean }) {
           // 底下那条脚注是稿 2162-2166 的：文件名 + 「打开」。
           // 光有图的话，图里是什么截图、存到哪儿去了都无从得知——排查时经常要的正是文件名。
           <div className="mt-[8px] max-w-[330px] border border-border rounded-[9px] overflow-hidden">
+            {/* /files/<id> 无扩展名，按图试渲染；真不是图就整块收起（脚注单独留着没意义） */}
             <img src={shot} alt={title} title={`${title} · ${t("tasks.shotOpen")}`} onClick={() => openPreview(shot, title)}
-              className="block w-full cursor-zoom-in" />
+              className="block w-full cursor-zoom-in"
+              onError={(e) => { const box = (e.target as HTMLImageElement).parentElement; if (box) box.style.display = "none"; }} />
             <div className="flex items-center gap-[6px] px-[9px] py-[5px] bg-card border-t border-border">
               <span className="flex-1 min-w-0 text-[10.5px] text-faint truncate" title={shotName(shot)}>{shotName(shot)}</span>
               <button onClick={() => openPreview(shot, title)}
@@ -697,8 +716,9 @@ function Results({ subs }: { subs: TaskStep[] }) {
     }
   }
   for (const s of subs) {
-    if (!s.result_json || s.skill === "plan_step") continue; // 计划步骤的截图已在步骤下方内联显示
-    let r: { url?: string; filename?: string; project_dir?: string; path?: string; changed_files?: string[] };
+    if (!s.result_json) continue;
+    let r: { url?: string; filename?: string; project_dir?: string; path?: string;
+             changed_files?: string[]; device_results?: { url?: string; filename?: string }[] };
     try { r = JSON.parse(s.result_json); } catch { continue; }
     if (!r || typeof r !== "object") continue;
     const path = r.path || r.project_dir || "";
@@ -709,6 +729,14 @@ function Results({ subs }: { subs: TaskStep[] }) {
     } else if (path) {
       const name = path.split("/").filter(Boolean).pop() || path;
       rows.push({ name, path, ext: (name.includes(".") ? name.split(".").pop()! : "DIR").toUpperCase().slice(0, 4) });
+    }
+    // 设备工作结果（执行轮聚合的一层）：截图这类产出的 url 在这层，不在顶层 ——
+    // 只扫顶层等于大多数带 url 的产出都收不到（用户实测：截完图结果区是空的）。
+    for (const d of (Array.isArray(r.device_results) ? r.device_results : [])) {
+      if (!d || typeof d.url !== "string" || !d.url) continue;
+      const url = d.url.startsWith("http") ? d.url : getServerUrl() + d.url;
+      const name = (typeof d.filename === "string" && d.filename) || url.split("/").pop() || t("tasks.downloadResult");
+      rows.push({ name, path: "", url, ext: (name.includes(".") ? name.split(".").pop()! : "IMG").toUpperCase().slice(0, 4) });
     }
     if (Array.isArray(r.changed_files) && r.changed_files.length) {
       notes.push(t("tasks.changedFiles", { count: r.changed_files.length, files: r.changed_files.slice(0, 8).join("、") + (r.changed_files.length > 8 ? " …" : "") }));
