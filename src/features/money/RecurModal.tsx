@@ -6,7 +6,9 @@
 // 不弹确认、月末顺延不跳过、改规则只影响以后、停止和删除分开（删除也保留流水）。
 //
 // 编辑器一期照稿只有 每天/每周/每月/每年 四档（every_n 是服务端备用列，
-// 「每 N 个」等设计补稿再放开）、只建支出规则（稿的分类下拉就没有收入侧）。
+// 「每 N 个」等设计补稿再放开）。批次 004 补上收入侧：编辑器顶部「记在哪边」
+// 切换，切了整组换分类列表、不混排 —— 服务端只校 direction 本身合法，
+// 「分类属于该方向」这道门就由这个选择器挡（界面上不存在混配的可达状态）。
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -91,6 +93,7 @@ type Draft = {
   name: string;
   amount: string;
   merchant: string;
+  dir: "expense" | "income";
   cat: string;
   cycle: "day" | "week" | "month" | "year";
   weekDay: number;
@@ -105,14 +108,14 @@ type Draft = {
 function draftOf(r: MoneyRecur | null): Draft {
   if (!r) {
     return {
-      id: null, name: "", amount: "", merchant: "", cat: "housing", cycle: "month",
+      id: null, name: "", amount: "", merchant: "", dir: "expense", cat: "housing", cycle: "month",
       weekDay: 0, firstDate: todayIso(1), time: "09:00", endsOnDate: false,
       endDate: todayIso(365), everyN: 1, sub: "",
     };
   }
   return {
     id: r.id, name: r.name, amount: (r.cents / 100).toFixed(2), merchant: r.merchant,
-    cat: r.cat, cycle: r.cycle, weekDay: r.week_day, firstDate: r.first_date,
+    dir: r.direction, cat: r.cat, cycle: r.cycle, weekDay: r.week_day, firstDate: r.first_date,
     time: r.time_hhmm, endsOnDate: r.end_kind === "date",
     endDate: r.end_date || todayIso(365), everyN: r.every_n, sub: r.sub,
   };
@@ -135,9 +138,18 @@ export function RecurModal({ cats, rules, initialEditId, onClose, onChanged }: {
   const [busy, setBusy] = useState(false);
 
   const live = rules.filter((r) => !r.paused && r.next_at_ms > 0).length;
-  const expenseCats = cats.filter((c) => c.direction === "expense" && c.enabled);
+  // 分类跟着「记在哪边」整组换（批次 004）：数据驱动，含兜底分类 —— 记一笔的
+  // 选择器就是这个口径，周期编辑器没有理由更窄。
+  const dirCats = cats.filter((c) => c.direction === (draft?.dir || "expense") && c.enabled);
 
   const set = (p: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...p } : d));
+
+  /** 切方向：分类跳到那一侧第一个（服务端顺序，收入首个是「工资」——稿的默认），
+   *  sub 清掉 —— 它挂在旧分类名下，跟过去就是脏数据。 */
+  const switchDir = (d: "expense" | "income") => {
+    const first = cats.find((c) => c.direction === d && c.enabled);
+    set({ dir: d, cat: first ? first.slug : d === "income" ? "other_in" : "other", sub: "" });
+  };
 
   // ── 编辑态的派生值（拦截与预览都要用，稿 8438 的同一批）
   const cents = draft ? amountToCents(draft.amount) : null;
@@ -171,7 +183,7 @@ export function RecurModal({ cats, rules, initialEditId, onClose, onChanged }: {
     const r = await putMoneyRecur(draft.id || crypto.randomUUID(), {
       name: draft.name.trim(),
       cents,
-      direction: "expense",
+      direction: draft.dir,
       cat: draft.cat,
       sub: draft.sub,           // 编辑时保住原规则的 sub —— 表单没画不等于该抹掉
       merchant: draft.merchant.trim(),
@@ -285,6 +297,18 @@ export function RecurModal({ cats, rules, initialEditId, onClose, onChanged }: {
           </button>
         </div>
       }>
+      {/* 记在哪边（批次 004）：形态对齐记一笔的方向切换，选中胶囊同分类/周期一套 */}
+      <div>
+        <div className="text-[11px] font-semibold text-faint mb-[5px]">{t("money.recDir")}</div>
+        <div className="flex gap-[5px]">
+          {([["expense", t("money.expense")], ["income", t("money.income")]] as const).map(([k, label]) => (
+            <button key={k} className={pill(draft.dir === k)} onClick={() => switchDir(k)}>{label}</button>
+          ))}
+        </div>
+        {draft.dir === "income" ? (
+          <div className="mt-[5px] text-[11px] text-faint leading-[1.65]">{t("money.recDirIncomeHint")}</div>
+        ) : null}
+      </div>
       <div className="grid grid-cols-2 gap-[10px]">
         <div>
           <div className="text-[11px] font-semibold text-faint mb-[4px]">{t("money.recName")}</div>
@@ -305,7 +329,7 @@ export function RecurModal({ cats, rules, initialEditId, onClose, onChanged }: {
       <div>
         <div className="text-[11px] font-semibold text-faint mb-[5px]">{t("money.recCat")}</div>
         <div className="flex flex-wrap gap-[5px]">
-          {expenseCats.map((c) => (
+          {dirCats.map((c) => (
             <button key={c.slug} className={pill(draft.cat === c.slug)} onClick={() => set({ cat: c.slug })}>
               {c.name}
             </button>

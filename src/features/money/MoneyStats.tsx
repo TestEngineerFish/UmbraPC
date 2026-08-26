@@ -9,17 +9,19 @@ import { useTranslation } from "react-i18next";
 import type { MoneyEntry, MoneyStats as Stats } from "../../services/server";
 import { IconUp, IconDown, IconArrowRight } from "../../components/icons";
 import { DonutChart, TrendBars, type DonutSeg } from "./charts";
-import { catColor, catIcon, catTint, yuan } from "./moneyKit";
+import { catColor, catTint, yuan } from "./moneyKit";
 
 /** 环形图只画金额前 5 的分类，其余合并为「其他分类」（稿明写的规则）。 */
 const RING_TOP = 5;
 
-export function MoneyStatsView({ stats, entries, catName, catSlot, onGoList }: {
+export function MoneyStatsView({ stats, entries, catName, catSlot, catArt, onGoList }: {
   stats: Stats;
   /** 本月流水（Top 5 从这里现算 —— 统计接口不回明细，两处数据同一次拉取）。 */
   entries: MoneyEntry[];
   catName: (slug: string) => string;
   catSlot: (slug: string) => number;
+  /** 图标 path（存储语义名优先、slug 兜底，批次 004）——查表在 Money.tsx。 */
+  catArt: (slug: string) => string;
   /** 跳到流水页，可带分类筛选（点分类排行的某一行）。 */
   onGoList: (cat: string | null) => void;
 }) {
@@ -145,7 +147,7 @@ export function MoneyStatsView({ stats, entries, catName, catSlot, onGoList }: {
                   {/* 分类色块（批次 003）：排行的图标也进同色 tint 块，色点保留当图例锚。 */}
                   <span className="w-[22px] h-[22px] flex-none rounded-[6px] flex items-center justify-center"
                     style={{ color: r.color, background: `color-mix(in srgb, ${r.color} var(--cat-tint), transparent)` }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(r.slug)} /></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catArt(r.slug)} /></svg>
                   </span>
                   <span className="w-[52px] flex-none text-[12.5px] whitespace-nowrap">{r.name}</span>
                   <span className="flex-1 min-w-[40px] h-[5px] rounded-full bg-track overflow-hidden">
@@ -204,7 +206,7 @@ export function MoneyStatsView({ stats, entries, catName, catSlot, onGoList }: {
                 <div key={e.id} className="flex items-center gap-[10px] py-[7px] border-b border-border-soft last:border-b-0">
                   <span className="w-[26px] h-[26px] flex-none rounded-[7px] flex items-center justify-center"
                     style={{ color: catColor(catSlot(e.cat)), background: catTint(catSlot(e.cat)) }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(e.cat)} /></svg>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catArt(e.cat)} /></svg>
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="text-[12.5px] truncate">{e.merchant || catName(e.cat)}</div>

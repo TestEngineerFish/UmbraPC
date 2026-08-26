@@ -20,7 +20,7 @@ import { AddEntry } from "./AddEntry";
 import { MoneyStatsView } from "./MoneyStats";
 import { MoneyListView } from "./MoneyList";
 import { RecurModal } from "./RecurModal";
-import { ymOf, yuan } from "./moneyKit";
+import { catIcon, ymOf, yuan } from "./moneyKit";
 
 type Phase = "loading" | "error" | "ready";
 
@@ -64,6 +64,9 @@ export function Money() {
   // 而不是让那行流水消失或崩掉。
   const catName = useCallback((slug: string) => cats.find((c) => c.slug === slug)?.name || slug, [cats]);
   const catSlot = useCallback((slug: string) => cats.find((c) => c.slug === slug)?.slot ?? 0, [cats]);
+  // 图标 path：存储的语义名优先（用户新增分类挑的那个，批次 004），slug 兜底。
+  // 流水行 / 排行 / Top5 只有 slug，这里替它们把 icon 查出来。
+  const catArt = useCallback((slug: string) => catIcon(slug, cats.find((c) => c.slug === slug)?.icon), [cats]);
 
   const monthText = t("money.monthLabel", { y: ym.slice(0, 4), m: Number(ym.slice(5)) });
   const isEmpty = phase === "ready" && !entries.length && !!stats && stats.expense === 0 && stats.income === 0;
@@ -146,11 +149,11 @@ export function Money() {
           <div className="flex items-center gap-[10px] mb-[14px]">
             <span className="flex-none px-[12px] py-[4px] border border-border bg-card rounded-[8px] text-[13px] font-semibold whitespace-nowrap">{monthText}</span>
           </div>
-          <MoneyStatsView stats={stats} entries={entries} catName={catName} catSlot={catSlot}
+          <MoneyStatsView stats={stats} entries={entries} catName={catName} catSlot={catSlot} catArt={catArt}
             onGoList={(cat) => { setFilterCat(cat); setView("list"); }} />
         </div>
       ) : (
-        <MoneyListView entries={entries} catName={catName} catSlot={catSlot}
+        <MoneyListView entries={entries} catName={catName} catSlot={catSlot} catArt={catArt}
           cats={cats.filter((c) => c.enabled).map((c) => [c.slug, c.name])}
           filterCat={filterCat} setFilterCat={setFilterCat} monthText={monthText}
           onAdd={() => setAddOpen(true)} onEdit={(e) => setEditEntry(e)} onDelete={(e) => void doDelete(e)}

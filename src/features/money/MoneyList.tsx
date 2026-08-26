@@ -8,16 +8,18 @@ import { useTranslation } from "react-i18next";
 import type { MoneyEntry } from "../../services/server";
 import { ContextMenu, EmptyState } from "../../components/ui";
 import { IconChevronDown, IconPencil, IconSearch, IconTrash } from "../../components/icons";
-import { catColor, catIcon, catTint, groupByDay, SRC_ICON, yuan } from "./moneyKit";
+import { catColor, catTint, groupByDay, SRC_ICON, yuan } from "./moneyKit";
 
 interface Ctx { x: number; y: number; entry: MoneyEntry }
 
-export function MoneyListView({ entries, cats, catName, catSlot, filterCat, setFilterCat, monthText, onAdd, onEdit, onDelete, onOpenRule }: {
+export function MoneyListView({ entries, cats, catName, catSlot, catArt, filterCat, setFilterCat, monthText, onAdd, onEdit, onDelete, onOpenRule }: {
   entries: MoneyEntry[];
   /** 可选分类（含收入侧），给筛选菜单用：[slug, 显示名]。 */
   cats: [string, string][];
   catName: (slug: string) => string;
   catSlot: (slug: string) => number;
+  /** 图标 path（存储语义名优先、slug 兜底，批次 004）——查表在 Money.tsx。 */
+  catArt: (slug: string) => string;
   /** 分类筛选提到 Money.tsx：统计页点某个分类要带着它跳过来。 */
   filterCat: string | null;
   setFilterCat: (slug: string | null) => void;
@@ -143,7 +145,7 @@ export function MoneyListView({ entries, cats, catName, catSlot, filterCat, setF
                   {/* 分类色块（批次 003）：图标底是同色 tint 圆角块，描边取色槽色。 */}
                   <span className="w-[28px] h-[28px] flex-none rounded-[8px] flex items-center justify-center"
                     style={{ color: catColor(catSlot(e.cat)), background: catTint(catSlot(e.cat)) }}>
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(e.cat)} /></svg>
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catArt(e.cat)} /></svg>
                   </span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-[7px]">

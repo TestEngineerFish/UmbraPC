@@ -151,7 +151,32 @@ export function Trash({ onChanged }: { onChanged?: (n: number) => void }) {
     showToast(n ? t(okKey, { count: n }) : t("trash.nothingDone"), { tone: n ? "ok" : "warn" });
   };
 
-  const doRestore = (rows: Row[]) => run(() => dispatch(rows, "restore"), "trash.restored");
+  /** 恢复也过一道确认（批次 004，文案照稿）。**非破坏性**确认 —— 确认键不走红：
+   *  拦的不是危险，是「点错行」；正文顺带说清恢复的后果（回原位、统计跟着回来）。
+   *  单项用条目名，多选说数量；全是保险箱条目时换保险箱那句（回到原来的分组）。 */
+  const doRestore = async (rows: Row[]) => {
+    if (!rows.length) return;
+    const allVault = rows.every((r) => r.zone === "vault");
+    const ok = await askConfirm({
+      title: rows.length === 1
+        ? t("trash.restoreOneTitle", { name: rows[0].title })
+        : t("trash.restoreManyTitle", { count: rows.length }),
+      message: allVault ? t("trash.restoreBodyVault") : t("trash.restoreBody"),
+      confirmText: t("trash.restore"),
+    });
+    if (!ok) return;
+    setBusy(true);
+    const n = await dispatch(rows, "restore");
+    setBusy(false);
+    await reload();
+    setPicked(new Set());
+    // 成了报名字（单项）或条数；一条都没成如实说 —— 比假装成功诚实。
+    showToast(
+      !n ? t("trash.nothingDone")
+        : rows.length === 1 ? t("trash.restoredOne", { name: rows[0].title })
+          : t("trash.restored", { count: n }),
+      { tone: n ? "ok" : "warn" });
+  };
 
   const doPurge = async (rows: Row[]) => {
     if (!rows.length) return;

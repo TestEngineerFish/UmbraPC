@@ -493,9 +493,16 @@ export interface MoneyCat {
   seq: number;
   enabled: boolean;
   locked: boolean;       // other / other_in：兜底分类，不可停用
+  /** 图标语义名（批次 004：新增分类弹窗挑的那个，gift / pet / …）。
+   *  '' 或缺失 = 没挑过，按 slug 兜底 —— 内置分类走的就是这条路。 */
+  icon?: string;
   /** 二级分类（第二批起服务端落库，随分类下发）。可选：老服务端没有这个字段。 */
   subs?: string[];
 }
+
+/** 一个子类（管理页视角）。used 按**全部历史**数 —— 删除确认说的是
+ *  这个子类名下一共有多少账，跟停用分类那句「本月」是两个口径（稿如此）。 */
+export interface MoneySub { label: string; used: number }
 
 export interface MoneyEntry {
   id: string;            // 客户端生成（离线要能先记后同步）
@@ -573,6 +580,26 @@ export async function fetchMoneyCats(includeDisabled = false): Promise<MoneyCat[
     if (!r.ok) return null;
     const d = await r.json();
     return Array.isArray(d) ? (d as MoneyCat[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 新增分类（批次 004 弹窗）。slug 服务端生成；名字全局查重（弹窗里先本地查，
+ *  这里的 null 只兜「并发另一端刚建了同名」这类漏网）。icon 是图标语义名，可空。 */
+export async function createMoneyCat(
+  name: string,
+  direction: "expense" | "income",
+  icon: string,
+): Promise<MoneyCat | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/categories`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, direction, icon }),
+    });
+    if (!r.ok) return null;
+    return (await r.json()) as MoneyCat;
   } catch {
     return null;
   }
@@ -661,9 +688,80 @@ export async function fetchMoneyStats(ym: string, trendMonths = 6): Promise<Mone
   }
 }
 
+// ── 记账 · 子类管理（批次 004：PC 也能就地增删改，服务端 money_subs 是唯一正本）──
+
+/** 某分类的子类 + 各自的在用笔数。展开管理区那一刻拉，别跟着分类列表常驻拉 ——
+ *  with_used 要扫流水，16 个分类页面一开就全扫一遍纯属浪费。 */
+export async function fetchMoneySubs(slug: string): Promise<MoneySub[] | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/categories/${encodeURIComponent(slug)}/subs?with_used=true`);
+    if (!r.ok) return null;
+    const d = await r.json();
+    return Array.isArray(d?.items) ? (d.items as MoneySub[]) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 三个写操作共用一条 POST 通道。都成功后调用方**重新拉一次带 used 的列表**，
+ *  而不是用响应里的 items —— 那份不带 used（服务端默认不算），拿去渲染会把
+ *  「3 笔在用」全变成「未用过」。 */
+async function postMoneySub(slug: string, path: string, body: Record<string, string>): Promise<boolean> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/categories/${encodeURIComponent(slug)}/subs${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+export const addMoneySub = (slug: string, label: string) => postMoneySub(slug, "", { label });
+export const renameMoneySub = (slug: string, old: string, next: string) => postMoneySub(slug, "/rename", { old, new: next });
+export const deleteMoneySub = (slug: string, label: string) => postMoneySub(slug, "/delete", { label });
+
 /** 附件图片的下载地址（GET /files/{id} 不鉴权，file_id 本身即凭证）。 */
 export function moneyFileUrl(fileId: string): string {
   return `${getServerUrl()}/files/${encodeURIComponent(fileId)}`;
+}
+
+/** 传一张图上服务端，回 file_id（挂附件分两步：先传文件、再记引用）。
+ *  /files/upload 是记账链路里唯一带鉴权的接口 —— 桌面端从注册信息里拿 token
+ *  （渲染层的公开配置刻意不含 token，而 getRegisterInfo 本来就带，设备配对页同款来源）；
+ *  Web 版没有 token：服务端没配 assist_token 时照样能传，配了就 401 → 界面按失败提示。 */
+export async function uploadMoneyFile(file: File): Promise<{ file_id: string; filename: string } | null> {
+  try {
+    const headers: Record<string, string> = {};
+    const token = await window.umbra?.getRegisterInfo().then((r) => r.token).catch(() => "");
+    if (token) headers["X-Umbra-Token"] = token;
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    const r = await fetch(`${getServerUrl()}/files/upload`, { method: "POST", body: fd, headers });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return d?.file_id ? { file_id: String(d.file_id), filename: String(d.filename || file.name) } : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 给一笔账挂上已上传的文件。服务端限一笔 4 张，超了回 400 → null。
+ *  成功回这笔账**全量**的附件列表，界面直接用它对齐（别自己往数组里 push）。 */
+export async function addMoneyAtt(entryId: string, fileId: string, label: string): Promise<MoneyAtt[] | null> {
+  try {
+    const r = await fetch(`${getServerUrl()}/money/entries/${encodeURIComponent(entryId)}/atts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_id: fileId, label }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    return Array.isArray(d?.atts) ? (d.atts as MoneyAtt[]) : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 摘一张附件。原图（origin）服务端会拒 —— 界面本来就不给它删除键。 */

@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  deleteMoneyAtt, moneyFileUrl, saveMoneyEntry,
+  addMoneyAtt, deleteMoneyAtt, moneyFileUrl, saveMoneyEntry, uploadMoneyFile,
   type MoneyAtt, type MoneyCat, type MoneyEntry,
 } from "../../services/server";
 import { Modal, ErrorCard, btn } from "../../components/ui";
@@ -74,9 +74,57 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
   const [failed, setFailed] = useState(false);
   /** 附件本地态：initial 是快照，删掉一张后要立刻从界面消失。 */
   const [atts, setAtts] = useState<MoneyAtt[]>(initial?.atts || []);
+  /** 新建这一笔时先攒在本地的图（账还没落库，服务端没地方挂）——
+   *  保存成功后逐张上传挂接。url 是 ObjectURL，撤下时要 revoke，不然内存一直占着。 */
+  const [pending, setPending] = useState<{ key: string; file: File; url: string }[]>([]);
+  const [uploading, setUploading] = useState(false);
   const amountRef = useRef<HTMLInputElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { amountRef.current?.focus(); }, []);
+
+  // ── 附件（批次 004 正式形态：一笔最多 4 张，拖进来或点「加图」）─────────────
+  const attCount = atts.length + pending.length;
+  const attRoom = attCount < 4;
+
+  /** 编辑态：立刻上传 + 挂接（账已存在）。逐张来，哪张失败点名哪张 ——
+   *  批量吞掉失败的话用户只会看到「怎么少了一张」。 */
+  const uploadTo = async (entryId: string, files: File[]) => {
+    setUploading(true);
+    let latest: MoneyAtt[] | null = null;
+    for (const f of files) {
+      const up = await uploadMoneyFile(f);
+      const added = up ? await addMoneyAtt(entryId, up.file_id, f.name) : null;
+      if (!added) { showToast(t("money.attUploadFailed", { name: f.name }), { tone: "warn" }); continue; }
+      latest = added;   // 服务端回全量列表，直接对齐，不自己 push
+    }
+    setUploading(false);
+    if (latest) setAtts(latest);
+  };
+
+  /** 收下一批图（拖入或选择）。只认 image/*；超过 4 张收前几张并说明 ——
+   *  静默丢弃会让「我明明拖了 5 张」变成一个查不出的谜。 */
+  const takeFiles = (files: FileList | File[]) => {
+    const imgs = [...files].filter((f) => f.type.startsWith("image/"));
+    if (!imgs.length) return;
+    const room = 4 - attCount;
+    const use = imgs.slice(0, Math.max(0, room));
+    if (imgs.length > room) showToast(t("money.attFull"), { tone: "warn" });
+    if (!use.length) return;
+    if (initial) {
+      void uploadTo(initial.id, use);
+    } else {
+      setPending((p) => [...p, ...use.map((f) => ({ key: crypto.randomUUID(), file: f, url: URL.createObjectURL(f) }))]);
+    }
+  };
+
+  const dropPending = (key: string) => {
+    setPending((p) => {
+      const hit = p.find((x) => x.key === key);
+      if (hit) URL.revokeObjectURL(hit.url);
+      return p.filter((x) => x.key !== key);
+    });
+  };
 
   const cents = amountToCents(amount);
   const expr = isExpr(amount);
@@ -118,8 +166,9 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
     if (!cents || busy) return;
     setBusy(true);
     setFailed(false);
+    const eid = initial?.id || crypto.randomUUID();
     const r = await saveMoneyEntry({
-      id: initial?.id || crypto.randomUUID(),
+      id: eid,
       cents,
       direction: dir,
       cat,
@@ -133,15 +182,23 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
       order_no: initial?.order_no || "",
       updated_at_ms: Date.now(),
     });
+    if (!r) { setBusy(false); setFailed(true); return; }   // 稿：内容都还在，联网后再点一次保存
+    // 新建时攒下的图此刻才有地方挂：账落库了，逐张上传 + 挂接。
+    // 挂失败只影响那张图（有点名吐司），账本身已经记上 —— 不因图把整次保存判失败。
+    if (pending.length) {
+      await uploadTo(eid, pending.map((p) => p.file));
+      pending.forEach((p) => URL.revokeObjectURL(p.url));
+      setPending([]);
+    }
     setBusy(false);
-    if (!r) { setFailed(true); return; }   // 稿：内容都还在，联网后再点一次保存
     onSaved();
     if (andNext) {
       // 保存并继续：清金额和备注，方向/分类/时间留着 —— 连着记几笔外卖时
-      // 这三样十有八九不变，清掉反而每笔都要重选。
+      // 这三样十有八九不变，清掉反而每笔都要重选。附件是上一笔的，一并清。
       setAmount("");
       setNote("");
       setSub("");
+      setAtts([]);
       setFailed(false);
       amountRef.current?.focus();
     } else {
@@ -240,7 +297,7 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
               return (
                 <button key={slug} onClick={() => { setCat(slug); setSub(""); }}
                   className={`${pillCls(cat === slug)} flex items-center gap-[6px]`}>
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(slug)} /></svg>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(slug, c.icon)} /></svg>
                   {c.name}
                 </button>
               );
@@ -255,7 +312,7 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
                 className={`flex flex-col items-center justify-center gap-[5px] h-[62px] rounded-[10px] text-[11.5px] cursor-pointer border ${
                   on ? "border-orange bg-orange-soft text-orange-text" : "border-border bg-card text-text hover:border-orange"}`}>
                 <span className="flex" style={{ color: on ? "var(--orange-text)" : catColor(c.slot) }}>
-                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(c.slug)} /></svg>
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={catIcon(c.slug, c.icon)} /></svg>
                 </span>
                 <span className="whitespace-nowrap">{c.name}</span>
               </button>
@@ -279,48 +336,75 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
           className="w-full px-[11px] py-[7px] border border-border rounded-[8px] bg-bg text-text text-[12.5px] outline-none focus:border-orange" />
       </div>
 
-      {/* 附件（编辑态，截图快捷记账的原图落在这）。展示位是临时的 ——
-          正式的附件区形态等 ClaudeDesign 出稿（已记回流台账）。这一版保证三件事：
-          图看得到、普通附件删得掉、原图（origin，凭证）没有删除键。 */}
-      {initial && atts.length ? (
-        <div>
-          <div className="text-[11px] font-semibold tracking-[.06em] text-faint mb-[5px]">{t("money.attsLabel")}</div>
-          <div className="flex gap-[8px] flex-wrap">
-            {atts.map((a) => (
-              <div key={a.file_id} className="relative w-[86px]">
-                <a href={moneyFileUrl(a.file_id)} target="_blank" rel="noreferrer"
-                  title={a.origin ? t("money.attOrigin") : a.label}>
-                  <img src={moneyFileUrl(a.file_id)} alt={a.label}
-                    className="w-[86px] h-[86px] object-cover rounded-[8px] border border-border" />
-                </a>
-                {!a.origin ? (
-                  <button
-                    className="absolute top-[3px] right-[3px] w-[18px] h-[18px] rounded-full bg-black/50 text-white text-[11px] leading-[18px] text-center cursor-pointer"
-                    title={t("common.delete")}
-                    onClick={async () => {
-                      const ok = await askConfirm({
-                        title: t("money.attDelTitle"),
-                        message: t("money.attDelBody"),
-                        confirmText: t("common.delete"),
-                        danger: true,
-                      });
-                      if (!ok) return;
-                      const done = await deleteMoneyAtt(initial.id, a.file_id);
-                      showToast(done ? t("money.attDeleted") : t("money.saveFailed"), { tone: done ? "ok" : "warn" });
-                      if (done) setAtts((cur) => cur.filter((x) => x.file_id !== a.file_id));
-                    }}>×</button>
-                ) : null}
-                <div className="mt-[3px] text-[10.5px] text-faint truncate text-center">
-                  {a.origin ? t("money.attOrigin") : (a.label || t("money.attImage"))}
-                </div>
-              </div>
-            ))}
-          </div>
-          <div className="mt-[5px] text-[11px] text-faint">
-            {atts.some((a) => a.origin) ? t("money.attOriginHint") : t("money.attHint")}
-          </div>
+      {/* 附件（批次 004 正式形态）：缩略 72 圆角 9 + 底部标签条 + 非原图右上 ×，
+          「加图」是 72×72 虚线框（满 4 张就收起，不给禁用态），拖进来也行。
+          原始截图 = 凭证，不给删除键；新建时的图先攒本地，保存成功后才上传挂接。 */}
+      <div
+        onDragOver={(e) => { e.preventDefault(); }}
+        onDrop={(e) => { e.preventDefault(); takeFiles(e.dataTransfer.files); }}>
+        <div className="flex items-baseline gap-[8px] mb-[6px]">
+          <span className="flex-none text-[11px] font-semibold tracking-[.06em] text-faint whitespace-nowrap">{t("money.attsLabel")}</span>
+          <span className="flex-none text-[10.5px] text-faint whitespace-nowrap">{attCount} / 4</span>
+          {uploading ? <span className="flex-none text-[10.5px] text-faint whitespace-nowrap">{t("money.attUploading")}</span> : null}
         </div>
-      ) : null}
+        <div className="flex flex-wrap gap-[8px]">
+          {atts.map((a) => (
+            <div key={a.file_id} className="relative flex-none w-[72px] h-[72px] rounded-[9px] border border-border bg-chip overflow-hidden">
+              <a href={moneyFileUrl(a.file_id)} target="_blank" rel="noreferrer"
+                title={a.origin ? t("money.attOrigin") : a.label}>
+                <img src={moneyFileUrl(a.file_id)} alt={a.label} className="w-full h-full object-cover" />
+              </a>
+              <div className="absolute left-0 right-0 bottom-0 px-[5px] py-[2px] bg-[rgba(11,10,9,.62)] text-white text-[10px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis">
+                {a.origin ? t("money.attOrigin") : (a.label || t("money.attImage"))}
+              </div>
+              {!a.origin && initial ? (
+                <button
+                  className="absolute top-[3px] right-[3px] w-[19px] h-[19px] rounded-full bg-[rgba(11,10,9,.6)] text-white cursor-pointer flex items-center justify-center"
+                  title={t("common.delete")}
+                  onClick={async () => {
+                    const ok = await askConfirm({
+                      title: t("money.attDelTitle"),
+                      message: t("money.attDelBody"),
+                      confirmText: t("common.delete"),
+                      danger: true,
+                    });
+                    if (!ok) return;
+                    const done = await deleteMoneyAtt(initial.id, a.file_id);
+                    showToast(done ? t("money.attDeleted") : t("money.saveFailed"), { tone: done ? "ok" : "warn" });
+                    if (done) setAtts((cur) => cur.filter((x) => x.file_id !== a.file_id));
+                  }}>
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+              ) : null}
+            </div>
+          ))}
+          {pending.map((p) => (
+            <div key={p.key} className="relative flex-none w-[72px] h-[72px] rounded-[9px] border border-border bg-chip overflow-hidden">
+              <img src={p.url} alt={p.file.name} className="w-full h-full object-cover" />
+              <div className="absolute left-0 right-0 bottom-0 px-[5px] py-[2px] bg-[rgba(11,10,9,.62)] text-white text-[10px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis">
+                {p.file.name}
+              </div>
+              <button
+                className="absolute top-[3px] right-[3px] w-[19px] h-[19px] rounded-full bg-[rgba(11,10,9,.6)] text-white cursor-pointer flex items-center justify-center"
+                title={t("common.delete")} onClick={() => dropPending(p.key)}>
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </button>
+            </div>
+          ))}
+          {attRoom ? (
+            <button onClick={() => fileRef.current?.click()}
+              className="flex-none w-[72px] h-[72px] rounded-[9px] border border-dashed border-border bg-transparent text-muted cursor-pointer flex flex-col items-center justify-center gap-[4px] hover:border-orange hover:text-orange-text">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="5.5" width="17" height="13" rx="3" /><path d="M7 15l3.5-4 3 3.5 2-2L18 15" /></svg>
+              <span className="text-[11px] font-semibold whitespace-nowrap">{t("money.attAdd")}</span>
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-[6px] text-[11px] text-faint leading-[1.65]">
+          {atts.some((a) => a.origin) ? t("money.attOriginHint") : t("money.attHint")}
+        </div>
+        <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
+          onChange={(e) => { if (e.target.files) takeFiles(e.target.files); e.target.value = ""; }} />
+      </div>
     </Modal>
   );
 }
