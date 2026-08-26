@@ -12,6 +12,7 @@ import { ImageViewer } from "../../components/ImageViewer";
 import { btnGhost, btnDanger, RefreshButton, filterChip, filterChipCount, ErrorCard, EmptyState } from "../../components/ui";
 import { showToast } from "../../components/overlay";
 import { IconSearch, IconRefresh, IconCheck, IconX, IconClock, IconAlert, IconFolder } from "../../components/icons";
+import { mdToHtml } from "../chat/markdown";
 
 // 全局图片预览：任意 Step 图片点击后打开（避免逐层透传 onClick）。
 let openPreview: (src: string, alt?: string) => void = () => {};
@@ -622,9 +623,14 @@ function Step({ s, last }: { s: TaskStep; last: boolean }) {
         {/* 这一步实际干了什么（稿 2155-2157 的 st.note）。服务端一直在回 detail，
             以前步骤类型里压根没声明这个字段，于是整层说明信息在界面上凭空消失 ——
             步骤列表只剩四行光秃秃的标题，「设备不在线，挂起等待」这种话一句看不见。
-            失败步骤不重复显示：下面的错误块已经把话说得更具体了。 */}
+            失败步骤不重复显示：下面的错误块已经把话说得更具体了。
+            按 Markdown 渲染（复用聊天的 mdToHtml，转义在前注入不进来）：执行轮写的
+            结论天然带 **粗体** / [链接](url) / ---，纯文本展示就是裸星号加不可点的
+            长 URL（用户点名）。注意不能再叠 pre-wrap —— mdToHtml 已把换行转成
+            段落/<br>，叠上会双倍空行（聊天气泡踩过同一个坑）。 */}
         {s.detail && !err ? (
-          <div className="text-[11.5px] text-muted mt-[3px] leading-[1.6] whitespace-pre-wrap break-words">{s.detail}</div>
+          <div className="text-[11.5px] text-muted mt-[3px] leading-[1.6] break-words"
+            dangerouslySetInnerHTML={{ __html: mdToHtml(s.detail) }} />
         ) : null}
         {/* 执行设备：server 步没有设备，这一行就不出现 */}
         {s.device_id ? (
