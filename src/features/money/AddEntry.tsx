@@ -19,6 +19,10 @@ import {
 } from "../../services/server";
 import { Modal, ErrorCard, btn } from "../../components/ui";
 import { askConfirm, showToast } from "../../components/overlay";
+import { DateTimeField } from "../../components/DateTimePicker";
+// 日期换算（ms ↔ 'YYYY-MM-DD'/'HH:mm'）的唯一出处在 notify/reminderKit（纯函数层，带 vitest），
+// 跨功能引用刻意为之 —— 再抄一份就会两处漂移。
+import { combineDateTime, toDateInput, toTimeInput } from "../notify/reminderKit";
 import { amountToCents, catIcon, catColor, isExpr, tzOffsetMin, yuan } from "./moneyKit";
 
 const BTN_GHOST = btn("ghost");
@@ -32,25 +36,6 @@ const KEY_ROWS: string[][] = [
   ["0", ".", "⌫", "÷"],
 ];
 
-/** at_ms → 「今天 14:32」/「8月19日 14:32」。 */
-function useFmtAt() {
-  const { t } = useTranslation();
-  return (ms: number) => {
-    const d = new Date(ms);
-    const now = new Date();
-    const hm = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
-    if (sameDay) return t("time.todayAt", { time: hm });
-    return t("time.monthDayAt", { month: d.getMonth() + 1, day: d.getDate(), time: hm });
-  };
-}
-
-/** Date → datetime-local 的取值（本地时区，分钟精度）。 */
-function toLocalInput(ms: number): string {
-  const d = new Date(ms);
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
-}
 
 export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
   cats: MoneyCat[];
@@ -62,14 +47,12 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
   onSaved: () => void;
 }) {
   const { t } = useTranslation();
-  const fmtAt = useFmtAt();
   const [amount, setAmount] = useState(initial ? (initial.cents / 100).toFixed(2) : "");
   const [dir, setDir] = useState<"expense" | "income">(initial?.direction || "expense");
   const [cat, setCat] = useState(initial?.cat || "food");
   const [sub, setSub] = useState(initial?.sub || "");
   const [note, setNote] = useState(initial?.merchant || "");
   const [atMs, setAtMs] = useState(initial?.at_ms || Date.now());
-  const [timeOpen, setTimeOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   /** 附件本地态：initial 是快照，删掉一张后要立刻从界面消失。 */
@@ -274,17 +257,16 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
         </div>
         <span className="flex-1" />
         <span className="flex-none text-[11px] font-semibold tracking-[.06em] text-faint">{t("money.time")}</span>
-        {timeOpen ? (
-          <input type="datetime-local" value={toLocalInput(atMs)} autoFocus
-            onChange={(e) => { const v = new Date(e.target.value).getTime(); if (!isNaN(v)) setAtMs(v); }}
-            onBlur={() => setTimeOpen(false)}
-            className="flex-none px-[9px] py-[4px] border border-border rounded-[8px] bg-card text-text text-[12px] outline-none focus:border-orange" />
-        ) : (
-          <button onClick={() => setTimeOpen(true)}
-            className="flex-none whitespace-nowrap px-[11px] py-[4px] border border-border rounded-[8px] bg-transparent text-text text-[12px] cursor-pointer hover:border-orange hover:text-orange-text">
-            {fmtAt(atMs)}
-          </button>
-        )}
+        {/* 自绘 datetime 字段（通用组件 DateTimeField）：全站最后一个原生 datetime-local
+            在这儿，2026-08-28 换装 —— 记一笔的「什么时候」也是一个瞬间、一个字段，
+            与提醒/iOS 记一笔同一形态。原来的「友好文案按钮 → 原生框」两态收成一个字段。 */}
+        <DateTimeField
+          kind="datetime"
+          className="w-[176px] flex-none"
+          date={toDateInput(atMs)}
+          time={toTimeInput(atMs)}
+          onCommit={({ date, time }) => { const ms = combineDateTime(date, time); if (ms) setAtMs(ms); }}
+        />
       </div>
 
       {/* 分类 */}
