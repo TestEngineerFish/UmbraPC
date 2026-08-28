@@ -94,7 +94,8 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
     let latest: MoneyAtt[] | null = null;
     for (const f of files) {
       const up = await uploadFile(f);
-      const added = up ? await addMoneyAtt(entryId, up.file_id, f.name) : null;
+      // 标签存来源不存文件名（批次 007 答复，tokens.attachment；存量老标签照旧显示）。
+      const added = up ? await addMoneyAtt(entryId, up.file_id, "文件图片") : null;
       if (!added) { showToast(t("money.attUploadFailed", { name: f.name }), { tone: "warn" }); continue; }
       latest = added;   // 服务端回全量列表，直接对齐，不自己 push
     }

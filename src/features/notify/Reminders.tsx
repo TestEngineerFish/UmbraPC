@@ -410,7 +410,9 @@ function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onFail, o
             onFail(`附件「${p.file.name}」没传上（服务端没响应或没鉴权）`);
             return;
           }
-          atts = [...atts, { fileId: up.file_id, label: p.file.name }];
+          // 标签存**来源**不存文件名（批次 007 答复，tokens.attachment）：72 宽的标签条里
+          // 文件名截成「IMG_2026…」没有信息量。PC 的来源只有文件一种；文件名留给预览器标题。
+          atts = [...atts, { fileId: up.file_id, label: "文件图片" }];
           dropPending(p.key);
         }
       } finally {
@@ -563,7 +565,8 @@ function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onFail, o
                   onRemove={() => void dropSaved(a)} />
               ))}
               {pending.map((p) => (
-                <Thumb key={p.key} src={p.url} label={p.file.name} pending
+                // 标签条写来源（文件图片），文件名只进预览器标题（批次 007 答复）。
+                <Thumb key={p.key} src={p.url} label="文件图片" pending
                   onOpen={() => setViewer({ src: p.url, alt: p.file.name })}
                   onRemove={() => dropPending(p.key)} />
               ))}
@@ -610,7 +613,9 @@ function Thumb({ src, label, pending, onOpen, onRemove }: {
 }
 
 // 会跟着内容长高的多行框：最少 minRows 行、最多约 8 行，再多就滚；右下角还能手动拉。
-// 字数快到上限（≥ 80%）时才在右下角显示计数 —— 常态下那个数字只是噪音。
+// 字数快到上限（≥ 80%）时才显示计数 —— 常态下那个数字只是噪音。
+// 计数在**框下右对齐**（批次 007 答复定稿，tokens.charCounter）：框内右下会和滚动条、
+// 光标、滚到底的最后一行文字打架，框外一行不与内容争位，两端也就同一个位置。
 function AutoTextarea({ value, max, placeholder, minRows, onChange }: {
   value: string; max: number; placeholder: string; minRows: number; onChange: (v: string) => void;
 }) {
@@ -623,7 +628,7 @@ function AutoTextarea({ value, max, placeholder, minRows, onChange }: {
   }, [value]);
   const near = value.length >= max * 0.8;
   return (
-    <div className="flex-1 min-w-0 relative">
+    <div className="flex-1 min-w-0">
       <textarea
         ref={ref}
         rows={minRows}
@@ -635,9 +640,10 @@ function AutoTextarea({ value, max, placeholder, minRows, onChange }: {
         style={{ minHeight: minRows * 20 + 14 }}
       />
       {near ? (
-        <span className={`absolute right-[8px] bottom-[6px] text-[10.5px] pointer-events-none ${value.length >= max ? "text-danger" : "text-faint"}`}>
+        <div className={`mt-[2px] text-right text-[11.5px] ${value.length >= max ? "text-danger" : "text-faint"}`}
+          style={{ fontVariantNumeric: "tabular-nums" }}>
           {value.length} / {max}
-        </span>
+        </div>
       ) : null}
     </div>
   );

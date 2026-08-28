@@ -320,11 +320,15 @@ function TimeColumns({ hh, mm, minuteStep, tall, divided, onPick }: {
   if (!mins.includes(mm)) { mins.push(mm); mins.sort(); }
   const hours = Array.from({ length: 24 }, (_, i) => p2(i));
 
-  /** 打开时把选中项滚到第 4 行；行距 28 = 26 行高 + 2 间隙。只在首次挂载做，之后不抢用户的滚动。 */
+  /** 打开时把选中项滚到第 4 行；行距 28 = 26 行高 + 2 间隙。只在首次挂载做，之后不抢用户的滚动。
+   *  rAF 里再落一遍（批次 007 答复顺手修的坑）：面板刚挂上时 scrollTop 会被布局吃掉一次。
+   *  这里的列是点选不是滚选，没有 onScroll 监听，所以不需要 mock 里那把锁。 */
   const initScroll = (idx: number) => (node: HTMLDivElement | null) => {
     if (!node || node.dataset.dtInit) return;
     node.dataset.dtInit = "1";
-    node.scrollTop = Math.max(0, (idx - 3) * 28);
+    const y = Math.max(0, (idx - 3) * 28);
+    node.scrollTop = y;
+    requestAnimationFrame(() => { node.scrollTop = y; });
   };
 
   const col = (head: string, list: string[], cur: string, make: (v: string) => string) => (
