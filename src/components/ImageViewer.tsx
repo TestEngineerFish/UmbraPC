@@ -44,7 +44,9 @@ export function ImageViewer({ src, alt, onClose }: { src: string | null; alt?: s
   const btn = "w-9 h-9 flex items-center justify-center rounded-full bg-white/15 hover:bg-white/25 text-white text-[16px] cursor-pointer select-none";
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80"
+      // 全屏底用 --viewer-bg（设计定稿 #0B0A09，两主题同值，与 iOS 同源）——
+      // 原来是 bg-black/80，既不是 token 也不是定稿值，深浅色审计时对齐。
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-[var(--viewer-bg)]"
       // 主窗口顶部 40px 是标题栏拖拽区（shell.ts 的 -webkit-app-region:drag）。拖拽区吃掉
       // 鼠标事件**不看 z-index**，所以右上角工具条（top-16px、高 36px）的上半截落在 0–40px
       // 里就点不动 —— 验收实锤「按钮只有下半部分能点」。全屏浮层打开时整块声明 no-drag，

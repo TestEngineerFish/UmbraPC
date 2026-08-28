@@ -98,6 +98,9 @@
   /* 分类色块：图标底的同色圆角块用 color-mix(var(--cN) var(--cat-tint), transparent)。 */
   --cat-tint: 13%;
   --shadow: 0 14px 40px rgba(31,35,32,.14);
+  /* 图片预览器的全屏底。两主题同值（看图的底就该是近黑，浅色模式也一样），
+     所以只在 :root 定义一次，深色块里不用重复 —— 值与 iOS UmbraColor.viewerBg 一致（tokens）。 */
+  --viewer-bg: #0B0A09;
 }
 /* 深色下 --nav 比 --bg 更深：一级侧边栏始终是画面里最重的一块，主内容区反而抬高一档。 */
 [data-theme="dark"] {

@@ -243,8 +243,12 @@ function Popover({ kind, date, time, minuteStep, anchor, onClose, onCommit }: {
       </div>
     </>
   );
-  // 挂在窗口根上（稿）：弹窗壳的 overflow:hidden 裁不到它。
-  return createPortal(panel, document.body);
+  // 挂在**窗口根**（.umbra-root）而不是 document.body（稿：「挂在窗口根上」，弹窗壳的
+  // overflow:hidden 照样裁不到它）。为什么不能挂 body：深浅色主题是 App.tsx 在
+  // .umbra-root 上打 data-theme 属性、[data-theme="dark"] 只覆盖那棵子树 ——
+  // portal 到 body 就落在子树**外面**，深色模式下浮层拿到的还是 :root 的浅色变量，
+  // 弹出来一块白（验收实锤：日期浮层不跟深色主题）。
+  return createPortal(panel, document.querySelector(".umbra-root") ?? document.body);
 }
 
 // ── 日历（240 宽，恒 6 行）─────────────────────────────────────────────
