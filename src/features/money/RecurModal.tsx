@@ -16,6 +16,7 @@ import {
   type MoneyCat, type MoneyRecur,
 } from "../../services/server";
 import { Modal, btn } from "../../components/ui";
+import { DateTimeField } from "../../components/DateTimePicker";
 import { askConfirm, showToast } from "../../components/overlay";
 import { amountToCents, yuan } from "./moneyKit";
 
@@ -358,16 +359,17 @@ export function RecurModal({ cats, rules, initialEditId, onClose, onChanged }: {
         ) : draft.cycle !== "day" ? (
           <div>
             <div className="text-[11px] font-semibold text-faint mb-[4px]">{t("money.recFirstDate")}</div>
-            <input type="date" className={field} value={draft.firstDate}
-              onChange={(e) => set({ firstDate: e.target.value || draft.firstDate })} />
+            <DateTimeField kind="date" className="w-full" date={draft.firstDate}
+              onCommit={({ date }) => set({ firstDate: date || draft.firstDate })} />
           </div>
         ) : null}
         <div>
           <div className="text-[11px] font-semibold text-faint mb-[4px]">
             {draft.cycle === "day" ? t("money.recTimeDaily") : t("money.recTime")}
           </div>
-          <input type="time" className={field} value={draft.time}
-            onChange={(e) => set({ time: e.target.value || draft.time })} />
+          {/* 分钟列步进 5（稿默认档）；老规则若存过非 5 倍数的分钟，当前值会按序插进列里。 */}
+          <DateTimeField kind="time" className="w-full" time={draft.time} minuteStep={5}
+            onCommit={({ time }) => set({ time: time || draft.time })} />
         </div>
       </div>
       {draft.cycle === "month" && dayOfFirst >= 29 ? (
@@ -384,8 +386,8 @@ export function RecurModal({ cats, rules, initialEditId, onClose, onChanged }: {
         {draft.endsOnDate ? (
           <div>
             <div className="text-[11px] font-semibold text-faint mb-[4px]">{t("money.recEndDate")}</div>
-            <input type="date" className={field} value={draft.endDate}
-              onChange={(e) => set({ endDate: e.target.value || draft.endDate })} />
+            <DateTimeField kind="date" className="w-full" invalid={endBad} date={draft.endDate}
+              onCommit={({ date }) => set({ endDate: date || draft.endDate })} />
           </div>
         ) : null}
       </div>

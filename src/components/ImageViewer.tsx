@@ -43,7 +43,14 @@ export function ImageViewer({ src, alt, onClose }: { src: string | null; alt?: s
 
   const btn = "w-9 h-9 flex items-center justify-center rounded-full bg-white/15 hover:bg-white/25 text-white text-[16px] cursor-pointer select-none";
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80"
+      // 主窗口顶部 40px 是标题栏拖拽区（shell.ts 的 -webkit-app-region:drag）。拖拽区吃掉
+      // 鼠标事件**不看 z-index**，所以右上角工具条（top-16px、高 36px）的上半截落在 0–40px
+      // 里就点不动 —— 验收实锤「按钮只有下半部分能点」。全屏浮层打开时整块声明 no-drag，
+      // 把自己从拖拽区里抠出来（浮层盖住全窗，本来也不该再从这里拖窗口）。
+      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+      onClick={onClose}>
       {/* 工具条 */}
       <div className="absolute top-4 right-4 flex items-center gap-2 z-[101]" onClick={(e) => e.stopPropagation()}>
         {/* 六个动作原先都是字符（－＋⟲⭳✕）。字符图标的字形、粗细、基线随系统字体走，

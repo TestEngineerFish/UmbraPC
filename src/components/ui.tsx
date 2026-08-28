@@ -182,8 +182,14 @@ export function Modal({ width = 460, title, sub, children, footer, onClose }: {
 }) {
   const { t } = useTranslation();
   return (
-    <div className="fixed inset-0 z-50 bg-[rgba(20,16,12,.42)] flex items-center justify-center p-[24px]" onMouseDown={onClose}>
-      <div className="bg-card border border-border rounded-[12px] shadow-[var(--shadow-modal)] overflow-hidden flex flex-col max-w-full max-h-full"
+    <div
+      className="fixed inset-0 z-50 bg-[rgba(20,16,12,.42)] flex items-center justify-center p-[24px]"
+      // 标题栏 40px 拖拽区吃鼠标事件不看 z-index（同 ImageViewer 的注释）。高弹窗（max-h-full，
+      // 外边距只有 24px）的标题行会探进 0–40px，右上角关闭钮的上半截就点不动了 —— 整块浮层
+      // 声明 no-drag，把自己从拖拽区里抠出来。
+      style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+      onMouseDown={onClose}>
+      <div className="bg-card border border-border rounded-[12px] shadow-[shadow:var(--shadow-modal)] overflow-hidden flex flex-col max-w-full max-h-full"
         style={{ width }} onMouseDown={(e) => e.stopPropagation()}>
         {title ? (
           <div className="flex-none flex items-center gap-[9px] px-[16px] py-[12px] border-b border-border">
@@ -274,7 +280,7 @@ export function ContextMenu({ x, y, items, onClose }: {
   // 4px 内边距 + 行自带 6px 圆角：悬停底是一块**内缩的圆角**，不铺满到边框。
   // 这和之前「不留内边距、高亮铺满」是相反的做法，按设计稿改。
   return (
-    <div ref={boxRef} className="fixed z-50 bg-card border border-border rounded-[9px] shadow-[var(--shadow-floating)] p-[4px]"
+    <div ref={boxRef} className="fixed z-50 bg-card border border-border rounded-[9px] shadow-[shadow:var(--shadow-floating)] p-[4px]"
       style={{ left, top, width: MENU_W }}>
       {items.map((it, i) => {
         if (it.divider) return <div key={i} className="h-[1px] bg-border-soft my-[4px] mx-[6px]" />;

@@ -96,7 +96,7 @@ export function MoneyListView({ entries, cats, catName, catSlot, catArt, filterC
             <IconChevronDown size={12} />
           </button>
           {catMenu ? (
-            <div className="absolute left-0 top-[calc(100%+4px)] z-30 w-[150px] max-h-[260px] overflow-y-auto bg-card border border-border rounded-[9px] shadow-[var(--shadow-floating)] p-[4px]">
+            <div className="absolute left-0 top-[calc(100%+4px)] z-30 w-[150px] max-h-[260px] overflow-y-auto bg-card border border-border rounded-[9px] shadow-[shadow:var(--shadow-floating)] p-[4px]">
               {[[null, t("money.allCats")] as [string | null, string], ...cats].map(([slug, name]) => (
                 <button key={slug ?? "__all"} onClick={() => { setFilterCat(slug); setCatMenu(false); }}
                   className={`flex items-center w-full px-[9px] py-[5px] rounded-[6px] text-[12px] cursor-pointer text-left whitespace-nowrap ${

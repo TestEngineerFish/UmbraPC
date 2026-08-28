@@ -13,6 +13,7 @@ import {
   ConfirmDialog, ErrorCard, Modal, Pill, Segmented, btnGhost, btnPrimary, field, select as selectCls,
   textarea as textareaCls,
 } from "../../components/ui";
+import { DateTimeField } from "../../components/DateTimePicker";
 import { IconImage, IconRepeat } from "../../components/icons";
 import { ImageViewer } from "../../components/ImageViewer";
 import { SyncStamp } from "../../components/SyncStamp";
@@ -458,21 +459,16 @@ function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onFail, o
           />
         </Row>
         <Row label="时间">
-          {/* 日期和时间分成两个原生框（同记账周期规则那页），比一个 datetime-local 好认，
-              也不会出现「日期选了、时间还是 --:--」却能保存的情况：任一边不完整就保留旧值。 */}
-          <input
-            className={`${fieldCard} w-[150px] flex-none`}
-            type="date"
-            value={toDateInput(value.atMs)}
-            onChange={(e) => { const ms = combineDateTime(e.target.value, toTimeInput(value.atMs)); if (ms) set({ atMs: ms }); }}
+          {/* 自绘日期+时间字段（批次 007 稿）：业务上是同一个瞬间，合并成一个字段，
+              浮层左日历右时间列、点「完成」一次落两段 —— 不会再出现「日期选了、时间 --:--」的半拉值。 */}
+          <DateTimeField
+            kind="datetime"
+            className="flex-1 min-w-0"
+            date={toDateInput(value.atMs)}
+            time={toTimeInput(value.atMs)}
+            onCommit={({ date, time }) => { const ms = combineDateTime(date, time); if (ms) set({ atMs: ms }); }}
           />
-          <input
-            className={`${fieldCard} w-[96px] flex-none`}
-            type="time"
-            value={toTimeInput(value.atMs)}
-            onChange={(e) => { const ms = combineDateTime(toDateInput(value.atMs), e.target.value); if (ms) set({ atMs: ms }); }}
-          />
-          <span className="flex-1 min-w-0 truncate text-[11.5px] text-faint">{timeLabel(value.atMs)}</span>
+          <span className="flex-none whitespace-nowrap text-[11.5px] text-faint">{timeLabel(value.atMs)}</span>
         </Row>
         <Row label="重复">
           <select
@@ -520,13 +516,12 @@ function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onFail, o
             />
             {value.repeatEndMs !== null ? (
               <>
-                <input
-                  className={`${fieldCard} w-[150px] flex-none`}
-                  style={endBad ? { borderColor: "var(--danger)" } : undefined}
-                  type="date"
-                  min={toDateInput(Math.max(value.atMs, Date.now()))}
-                  value={toDateInput(value.repeatEndMs)}
-                  onChange={(e) => { const ms = fromDateInput(e.target.value); if (ms) set({ repeatEndMs: endOfDay(ms) }); }}
+                <DateTimeField
+                  kind="date"
+                  className="w-[150px] flex-none"
+                  invalid={!!endBad}
+                  date={toDateInput(value.repeatEndMs)}
+                  onCommit={({ date }) => { const ms = fromDateInput(date); if (ms) set({ repeatEndMs: endOfDay(ms) }); }}
                 />
                 <span className={`flex-1 min-w-0 truncate text-[11.5px] ${endBad ? "text-danger" : "text-faint"}`}>
                   {endBad || "含当天"}

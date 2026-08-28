@@ -60,7 +60,7 @@ interface Tip { x: number; y: number; text: string }
 function TipBox({ tip }: { tip: Tip | null }) {
   if (!tip) return null;
   return (
-    <div className="absolute z-10 pointer-events-none px-[9px] py-[4px] rounded-[7px] bg-card border border-border shadow-[var(--shadow-floating)] text-[11.5px] whitespace-nowrap"
+    <div className="absolute z-10 pointer-events-none px-[9px] py-[4px] rounded-[7px] bg-card border border-border shadow-[shadow:var(--shadow-floating)] text-[11.5px] whitespace-nowrap"
       style={{ left: tip.x, top: tip.y, transform: "translate(-50%, -130%)" }}>
       {tip.text}
     </div>

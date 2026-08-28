@@ -61,6 +61,13 @@
   input[type="datetime-local"]:hover::-webkit-calendar-picker-indicator {
     opacity: 1;
   }
+
+  /* 自绘日期/时间选择器的时间列（批次 007 稿）：58 宽的列里滚动条那条槽要吃掉六分之一，
+     不显示 —— 靠列高刻意露出的半行提示「下面还有」。Firefox 走行内 scrollbar-width:none。 */
+  [data-thin]::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
 }
 
 /* 设计令牌：橙色系 + 浅/深双模式（取自 Claude Design 设计稿）

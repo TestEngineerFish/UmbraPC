@@ -121,7 +121,7 @@ const vTextBtn = "flex-none whitespace-nowrap inline-flex items-center gap-[5px]
 // 卡片内的图标小按钮（复制、显示密码、调序、删除控件）。
 const vIconBtn = "w-[24px] h-[24px] flex-none inline-flex items-center justify-center bg-transparent border-none rounded-[7px] text-muted cursor-pointer hover:bg-hover hover:text-orange-text disabled:text-faint disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-faint";
 // 菜单/下拉的浮层外壳。
-const vPanel = "absolute z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow-floating)]";
+const vPanel = "absolute z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[shadow:var(--shadow-floating)]";
 // 分组小标题。
 const vGroupHead = "text-[10.5px] font-semibold tracking-[.06em] text-faint px-[10px] pt-[4px] pb-[5px]";
 
@@ -172,7 +172,7 @@ function Modal({ width, onClose, children }: { width: number; onClose: () => voi
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40" onMouseDown={onClose}>
       <div
-        className="bg-card border border-border rounded-[12px] p-[18px] shadow-[var(--shadow-floating)] max-h-[82vh] overflow-y-auto"
+        className="bg-card border border-border rounded-[12px] p-[18px] shadow-[shadow:var(--shadow-floating)] max-h-[82vh] overflow-y-auto"
         style={{ width }}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -901,7 +901,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
 
       {/* 记录右键菜单 */}
       {ctx.open && ctxItem ? (
-        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow-floating)] w-[200px] max-h-[calc(100vh-16px)] overflow-y-auto" style={{ ...at(ctx.x, ctx.y), animation: "vPop .14s ease" }}>
+        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[shadow:var(--shadow-floating)] w-[200px] max-h-[calc(100vh-16px)] overflow-y-auto" style={{ ...at(ctx.x, ctx.y), animation: "vPop .14s ease" }}>
           <MenuItem icon={<IconPencil size={14} />} label="编辑记录" onClick={() => { setSelId(ctxItem.id); setAutoEditId(ctxItem.id); closeMenus(); }} />
           <MenuItem icon={<IconStar size={14} />} label={ctxItem.favorite ? "取消收藏" : "加入收藏"} onClick={async () => { closeMenus(); await toggleFav(ctxItem); }} />
           <div className="h-px bg-border-soft my-[5px]" />
@@ -930,7 +930,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
 
       {/* 分组右键菜单 */}
       {tctx.open && tctxType ? (
-        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[var(--shadow-floating)] w-[168px]" style={{ ...at(tctx.x, tctx.y), animation: "vPop .14s ease" }}>
+        <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[shadow:var(--shadow-floating)] w-[168px]" style={{ ...at(tctx.x, tctx.y), animation: "vPop .14s ease" }}>
           <MenuItem icon={<IconPencil size={14} />} label="重命名分组" onClick={() => { setRenaming(tctxType.id); closeMenus(); }} />
           <MenuItem icon={<IconTrash size={14} />} label="删除分组" danger onClick={() => askDeleteType(tctxType.id)} />
         </div>
