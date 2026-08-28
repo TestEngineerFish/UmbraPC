@@ -37,11 +37,6 @@
     "dragToReorder": "Drag to reorder",
     "phraseSyncNow": "Sync now",
     "phraseSyncOff": "No server configured — local only",
-    "phraseSyncing": "Syncing…",
-    "phraseSyncFailed": "Sync failed: {{err}}",
-    "phraseSyncNever": "Not synced yet",
-    "phraseSyncJustNow": "Synced just now",
-    "phraseSyncAgo": "Synced {{n}}m ago",
     "groupEnv": "Environment",
     "runtime": "Runtimes",
     "runtimeDesc": "See which Java / Python versions are installed, which one is active, and what's misconfigured."
@@ -157,7 +152,13 @@
     "reset": "Reset",
     "done": "Done",
     "undo": "Undo",
-    "retry": "Retry"
+    "retry": "Retry",
+    "syncNow": "Sync now",
+    "syncOff": "No server configured — local only",
+    "syncing": "Syncing…",
+    "syncFailed": "Sync failed: {{err}}",
+    "syncNever": "Not synced yet",
+    "syncedAgo": "Synced {{when}}"
   },
   "time": {
     "yesterday": "Yesterday",

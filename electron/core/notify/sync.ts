@@ -7,7 +7,7 @@
 // 偏偏同步不行」。详见那个文件的注释。
 import { httpBase, type ConfigStore } from "../config";
 import { httpFetch } from "../http";
-import type { Reminder, ReminderTomb } from "./types";
+import { MAX_ATTS, type Reminder, type ReminderAtt, type ReminderTomb } from "./types";
 
 // 网络超时：同步是后台行为，卡太久不如早点放弃等下一轮。
 const TIMEOUT_MS = 15_000;
@@ -29,6 +29,23 @@ interface WireReminder {
   tz: string;
   updated_at_ms: number;
   deleted: boolean;
+  // 附件。**推送时永远带上这个键**（哪怕是 []）：服务端把「没这个键」当「没提附件、
+  // 保留库里那份」，PC 想清空附件就必须明确发 []。
+  atts?: WireAtt[];
+}
+
+interface WireAtt { file_id: string; label: string }
+
+/** 服务端 → 本地的附件列表。file_id 空的丢掉、超上限截掉：这两种只可能是协议出了岔子，
+ *  兜成保守值比让整条提醒解析失败强。 */
+function attsFromWire(list: unknown): ReminderAtt[] {
+  if (!Array.isArray(list)) return [];
+  const out: ReminderAtt[] = [];
+  for (const a of list as Partial<WireAtt>[]) {
+    const fileId = String(a?.file_id || "").trim();
+    if (fileId && !out.some((x) => x.fileId === fileId)) out.push({ fileId, label: String(a?.label || "") });
+  }
+  return out.slice(0, MAX_ATTS);
 }
 
 interface WireTomb { id: string; deleted_at_ms: number }
@@ -56,6 +73,7 @@ function fromWire(w: WireReminder): Reminder {
     tz: String(w.tz || ""),
     updatedAtMs: Number(w.updated_at_ms) || 0,
     dirty: false,           // 服务端来的一定是「干净的」
+    atts: attsFromWire(w.atts),
   };
 }
 
@@ -76,6 +94,7 @@ function toWire(r: Reminder): WireReminder {
     tz: r.tz || Intl.DateTimeFormat().resolvedOptions().timeZone || "",
     updated_at_ms: r.updatedAtMs,
     deleted: false,
+    atts: (r.atts || []).slice(0, MAX_ATTS).map((a) => ({ file_id: a.fileId, label: a.label || "" })),
   };
 }
 

@@ -13,6 +13,16 @@ export type CustomFreq = "hour" | "day" | "week" | "month" | "year";
 // 提醒来源：谁建的。只做记录，不影响行为。
 export type ReminderSource = "manual" | "chat" | "task";
 
+// 一张附件的引用。文件本体在服务端 /files/{fileId}，这里只记 id 和给人看的标签。
+// 附件跟着整条提醒 last-write-wins 同步（服务端是行内 JSON），不单独走同步。
+export interface ReminderAtt {
+  fileId: string;
+  label: string;
+}
+
+// 一条提醒最多几张附件。与记账同一个数（服务端 reminders.MAX_ATTS 也是 4），多传会被 400。
+export const MAX_ATTS = 4;
+
 // 一条提醒。
 export interface Reminder {
   id: string;              // 客户端生成的稳定 id（离线也能建，联网后 upsert）
@@ -29,6 +39,7 @@ export interface Reminder {
   tz: string;              // 创建时的时区（如 Asia/Shanghai）
   updatedAtMs: number;     // 跨端合并靠它比大小
   dirty: boolean;          // 本地改过、还没成功推给服务端
+  atts: ReminderAtt[];     // 附件（≤ MAX_ATTS）。老落盘数据没有这个键，读盘时补成 []
 }
 
 // 一条删除墓碑。没有它，这台机器删掉的提醒会被别的设备一推又复活。
@@ -63,5 +74,6 @@ export function blankReminder(id: string, atMs: number): Reminder {
     tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "",
     updatedAtMs: 0,
     dirty: true,
+    atts: [],
   };
 }

@@ -5,6 +5,7 @@
 // 样式统一走 Tailwind + CSS 变量（vault-entry 已引入 index.css，独立窗口里同样生效）；
 // inline style 只留给真正动态的值：右键菜单坐标、monogram 尺寸、强度条百分比、动画延迟。
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatAgo, useNow } from "../../services/relativeTime";
 import type { ComponentType, CSSProperties, ReactNode, SVGProps } from "react";
 import { Pill, btnGhost, btnPrimary, selectBox, fieldFlex, EmptyState } from "../../components/ui";
 // 附件删除走全局的确认弹窗与吐司：保险箱自己那套 setConfirm / flash 挂在 Main 上，
@@ -472,16 +473,17 @@ function Unlock({ onDone, st }: { onDone: () => Promise<void>; st: VStatus }) {
 
 // 解锁后的主界面：顶栏 + 三栏（分组 196 / 列表 302 / 详情自适应）。
 // 同步状态一句话。没配服务器就直说，别让用户对着一个不动的字猜。
-function syncLabel(st: VStatus): string {
+// now 由调用方用 useNow() 给（30s 一跳），不然这行字只在状态变化时算一次，会永远停在「刚刚」。
+function syncLabel(st: VStatus, now: number): string {
   if (!st.syncConfigured) return "未配置同步";
   if (st.syncing) return "同步中…";
   if (st.syncError) return `同步失败：${st.syncError}`;
   if (!st.syncAt) return "等待同步";
-  const min = Math.floor((Date.now() - st.syncAt) / 60000);
-  return min < 1 ? "刚刚已同步" : `${min} 分钟前同步`;
+  return `${formatAgo(st.syncAt, now, "zh-CN")}同步`;
 }
 
 function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>; st: VStatus; onStatus: () => Promise<void>; embedded: boolean }) {
+  const now = useNow();
   // ── 唤起快捷键 / 独立窗口 ────────────────────────────────────────────────
   // 这两个控件原先在外面一层的 VaultTool 里，占了一条独立的 50px 顶栏 —— 于是主窗口里
   // 两条 50px 栏上下叠着，而稿（3660-3672）画的保险箱只有一条。
@@ -707,7 +709,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
         <span className="flex-none whitespace-nowrap text-[11.5px] text-faint">{st.autoLockMin} 分钟无操作自动锁定</span>
         {/* 自动同步状态：改完自己会同步，这里只是让用户看得见它在动、失败了也知道 */}
         <span className={`flex-none whitespace-nowrap text-[11.5px] ${st.syncError ? "text-danger" : "text-faint"}`}
-          title={st.syncError || undefined}>{syncLabel(st)}</span>
+          title={st.syncError || undefined}>{syncLabel(st, now)}</span>
         <button className={btnPrimary} onClick={() => void addRecord()}><IconPlus size={13} className="inline-block align-[-2px] mr-[4px]" />添加记录</button>
         <button className={btnGhost} onClick={() => void onLock()}>锁定</button>
         <div className="relative flex-none">

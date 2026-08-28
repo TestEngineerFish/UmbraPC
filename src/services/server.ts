@@ -723,16 +723,15 @@ export const addMoneySub = (slug: string, label: string) => postMoneySub(slug, "
 export const renameMoneySub = (slug: string, old: string, next: string) => postMoneySub(slug, "/rename", { old, new: next });
 export const deleteMoneySub = (slug: string, label: string) => postMoneySub(slug, "/delete", { label });
 
-/** 附件图片的下载地址（GET /files/{id} 不鉴权，file_id 本身即凭证）。 */
-export function moneyFileUrl(fileId: string): string {
+/** 附件图片的下载地址（GET /files/{id} 不鉴权，file_id 本身即凭证）。记账与提醒共用。 */
+export function fileUrl(fileId: string): string {
   return `${getServerUrl()}/files/${encodeURIComponent(fileId)}`;
 }
-
-/** 传一张图上服务端，回 file_id（挂附件分两步：先传文件、再记引用）。
- *  /files/upload 是记账链路里唯一带鉴权的接口 —— 桌面端从注册信息里拿 token
+/** 传一张图上服务端，回 file_id（挂附件分两步：先传文件、再记引用）。记账与提醒共用。
+ *  /files/upload 是这条链路里唯一带鉴权的接口 —— 桌面端从注册信息里拿 token
  *  （渲染层的公开配置刻意不含 token，而 getRegisterInfo 本来就带，设备配对页同款来源）；
  *  Web 版没有 token：服务端没配 assist_token 时照样能传，配了就 401 → 界面按失败提示。 */
-export async function uploadMoneyFile(file: File): Promise<{ file_id: string; filename: string } | null> {
+export async function uploadFile(file: File): Promise<{ file_id: string; filename: string } | null> {
   try {
     const headers: Record<string, string> = {};
     const token = await window.umbra?.getRegisterInfo().then((r) => r.token).catch(() => "");
@@ -747,7 +746,6 @@ export async function uploadMoneyFile(file: File): Promise<{ file_id: string; fi
     return null;
   }
 }
-
 /** 给一笔账挂上已上传的文件。服务端限一笔 4 张，超了回 400 → null。
  *  成功回这笔账**全量**的附件列表，界面直接用它对齐（别自己往数组里 push）。 */
 export async function addMoneyAtt(entryId: string, fileId: string, label: string): Promise<MoneyAtt[] | null> {

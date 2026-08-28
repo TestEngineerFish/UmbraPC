@@ -55,7 +55,11 @@ export class NotifyStore {
 
   loadItems(): Reminder[] {
     const list = this.read<Reminder[]>(this.itemsFile, []);
-    return Array.isArray(list) ? list.slice().sort((a, b) => a.atMs - b.atMs) : [];
+    if (!Array.isArray(list)) return [];
+    // atts 是后加的字段：升级前落盘的行没有这个键，不补成 [] 的话渲染层 .length 直接炸。
+    return list
+      .map((r) => ({ ...r, atts: Array.isArray(r.atts) ? r.atts : [] }))
+      .sort((a, b) => a.atMs - b.atMs);
   }
 
   saveItems(items: Reminder[]): void {

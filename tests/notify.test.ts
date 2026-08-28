@@ -22,7 +22,7 @@ function r(patch: Partial<Reminder> = {}): Reminder {
     id: "r1", text: "吃药", note: "", atMs: Date.now() + HOUR,
     repeatRule: "none", customFreq: "day", customN: 1, repeatEndMs: null,
     aheadMinutes: 0, done: false, source: "manual", tz: "Asia/Shanghai",
-    updatedAtMs: Date.now(), dirty: false, ...patch,
+    updatedAtMs: Date.now(), dirty: false, atts: [], ...patch,
   };
 }
 

@@ -14,7 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  addMoneyAtt, deleteMoneyAtt, moneyFileUrl, saveMoneyEntry, uploadMoneyFile,
+  addMoneyAtt, deleteMoneyAtt, fileUrl, saveMoneyEntry, uploadFile,
   type MoneyAtt, type MoneyCat, type MoneyEntry,
 } from "../../services/server";
 import { Modal, ErrorCard, btn } from "../../components/ui";
@@ -93,7 +93,7 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
     setUploading(true);
     let latest: MoneyAtt[] | null = null;
     for (const f of files) {
-      const up = await uploadMoneyFile(f);
+      const up = await uploadFile(f);
       const added = up ? await addMoneyAtt(entryId, up.file_id, f.name) : null;
       if (!added) { showToast(t("money.attUploadFailed", { name: f.name }), { tone: "warn" }); continue; }
       latest = added;   // 服务端回全量列表，直接对齐，不自己 push
@@ -350,9 +350,9 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
         <div className="flex flex-wrap gap-[8px]">
           {atts.map((a) => (
             <div key={a.file_id} className="relative flex-none w-[72px] h-[72px] rounded-[9px] border border-border bg-chip overflow-hidden">
-              <a href={moneyFileUrl(a.file_id)} target="_blank" rel="noreferrer"
+              <a href={fileUrl(a.file_id)} target="_blank" rel="noreferrer"
                 title={a.origin ? t("money.attOrigin") : a.label}>
-                <img src={moneyFileUrl(a.file_id)} alt={a.label} className="w-full h-full object-cover" />
+                <img src={fileUrl(a.file_id)} alt={a.label} className="w-full h-full object-cover" />
               </a>
               <div className="absolute left-0 right-0 bottom-0 px-[5px] py-[2px] bg-[rgba(11,10,9,.62)] text-white text-[10px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis">
                 {a.origin ? t("money.attOrigin") : (a.label || t("money.attImage"))}

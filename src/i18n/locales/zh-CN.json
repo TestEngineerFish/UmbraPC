@@ -37,11 +37,6 @@
     "dragToReorder": "按住拖拽调整顺序",
     "phraseSyncNow": "立即同步",
     "phraseSyncOff": "未配置服务器，仅本机",
-    "phraseSyncing": "同步中…",
-    "phraseSyncFailed": "同步失败：{{err}}",
-    "phraseSyncNever": "尚未同步",
-    "phraseSyncJustNow": "刚刚同步",
-    "phraseSyncAgo": "{{n}} 分钟前同步",
     "groupEnv": "环境",
     "runtime": "运行时环境",
     "runtimeDesc": "看清这台机器上装了哪些 Java / Python、谁在生效、哪里不对。"
@@ -157,7 +152,13 @@
     "reset": "重置",
     "done": "完成",
     "undo": "撤销",
-    "retry": "重试"
+    "retry": "重试",
+    "syncNow": "立即同步",
+    "syncOff": "未配置服务器，仅本机",
+    "syncing": "同步中…",
+    "syncFailed": "同步失败：{{err}}",
+    "syncNever": "还没同步过",
+    "syncedAgo": "{{when}}同步"
   },
   "time": {
     "yesterday": "昨天",

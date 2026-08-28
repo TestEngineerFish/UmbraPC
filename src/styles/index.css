@@ -45,6 +45,22 @@
     color: var(--muted);
     opacity: 1;
   }
+
+  /* 原生日期 / 时间框右侧的日历 / 时钟小图标。UA 默认是实心黑（深色主题靠 color-scheme
+     会翻成白），但一律 100% 不透明，比旁边 12.5px 的灰字重得多，一行里最扎眼的反而是它。
+     压到 .55 让它退到和 --muted 同一档，悬停再亮回来。
+     真正的自绘日期选择器要等设计稿（回流台账已登记），这里只是把原生件收拾整齐。 */
+  input[type="date"]::-webkit-calendar-picker-indicator,
+  input[type="time"]::-webkit-calendar-picker-indicator,
+  input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+    opacity: 0.55;
+    cursor: pointer;
+  }
+  input[type="date"]:hover::-webkit-calendar-picker-indicator,
+  input[type="time"]:hover::-webkit-calendar-picker-indicator,
+  input[type="datetime-local"]:hover::-webkit-calendar-picker-indicator {
+    opacity: 1;
+  }
 }
 
 /* 设计令牌：橙色系 + 浅/深双模式（取自 Claude Design 设计稿）

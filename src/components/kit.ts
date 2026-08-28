@@ -101,6 +101,13 @@ export function field(bg: "bg" | "card" = "bg", size?: BtnSize): string {
   return `${FIELD_BASE} ${b} ${s}`;
 }
 
+/** 多行输入框：与 field 同一套描边 / 聚焦态，但**不钉高度**（高度由内容或 rows 决定）。
+ *  单独一个工厂而不是 `field() + h-auto`：h-[32px] 与 h-auto 同属性，靠 className 顺序覆盖不可靠。 */
+export function textarea(bg: "bg" | "card" = "bg"): string {
+  const b = bg === "card" ? "bg-card" : "bg-bg";
+  return `${FIELD_BASE.replace("h-[32px] ", "")} ${b} py-[6px] leading-[20px] block resize-y`;
+}
+
 /** 占满剩余宽度的输入框（表单行右半区）。min-w-0 不能省：不加的话内容一长就把整行撑破。 */
 export function fieldFlex(bg: "bg" | "card" = "bg", size?: BtnSize): string {
   return `flex-1 ${field(bg, size)}`;

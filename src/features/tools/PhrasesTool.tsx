@@ -3,8 +3,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  ContextMenu, Pill, RefreshButton, btnGhost, btnPrimary, inputHotkey, inputSmall,
+  ContextMenu, Pill, btnGhost, btnPrimary, inputHotkey, inputSmall,
 } from "../../components/ui";
+import { SyncStamp } from "../../components/SyncStamp";
 import { HotkeyButton, HotkeyConflictBanner, useHotkeyConflict } from "./hotkeys";
 import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
 import { IconGrip } from "../../components/icons";
@@ -15,17 +16,6 @@ const DEFAULT_PHRASES_SHORTCUT = "Command+Alt+V";
 // 拖拽重排的动画时长。再长就显得拖沓，再短又看不出「让位」的过程。
 const FLIP_MS = 180;
 
-// 同步状态一句话。没配服务器就直说，别让用户对着一个不动的按钮猜。
-function syncLabel(s: PhraseSyncState | null, t: (k: string, o?: Record<string, unknown>) => string): string {
-  if (!s) return "";
-  if (!s.configured) return t("tools.phraseSyncOff");
-  if (s.syncing) return t("tools.phraseSyncing");
-  if (s.lastError) return t("tools.phraseSyncFailed", { err: s.lastError });
-  if (!s.lastAt) return t("tools.phraseSyncNever");
-  const min = Math.floor((Date.now() - s.lastAt) / 60000);
-  return min < 1 ? t("tools.phraseSyncJustNow") : t("tools.phraseSyncAgo", { n: min });
-}
-
 // 同步状态 + 立即同步按钮。单独导出是因为它要摆在页面标题行的右上角（见 Tools.tsx），
 // 而标题行由 Tools.tsx 统一渲染，不在本组件的树里。
 export function PhrasesSyncStatus() {
@@ -35,21 +25,16 @@ export function PhrasesSyncStatus() {
   const refresh = () => { void api.phrasesSyncState().then(setSync).catch(() => {}); };
   useEffect(() => {
     refresh();
-    // 同步完成会广播常用语变更，借它顺带刷新状态；再加一个低频轮询让「N 分钟前」自己往上走。
+    // 同步完成会广播常用语变更，借它顺带刷新状态。
     const off = api.onPhrasesChanged(() => refresh());
-    const timer = window.setInterval(refresh, 30_000);
-    return () => { off(); window.clearInterval(timer); };
+    return () => { off(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  // 文案与「N 分钟前」的心跳都在 SyncStamp 里（提醒页同一块），这里不再自己格式化、也不再轮询。
   return (
-    <div className="flex-none flex items-center gap-[8px]">
-      <span className={`whitespace-nowrap text-[11.5px] ${sync?.lastError ? "text-danger" : "text-faint"}`}
-        title={sync?.lastError || undefined}>
-        {syncLabel(sync, t)}
-      </span>
-      <RefreshButton title={t("tools.phraseSyncNow")} spinning={!!sync?.syncing}
-        onClick={async () => { await api.phrasesSyncNow(); refresh(); }} />
-    </div>
+    <SyncStamp state={sync ? { ...sync, offText: t("tools.phraseSyncOff") } : null}
+      title={t("tools.phraseSyncNow")}
+      onSync={async () => { await api.phrasesSyncNow(); refresh(); }} />
   );
 }
 

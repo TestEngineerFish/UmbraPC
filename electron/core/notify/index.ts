@@ -14,7 +14,7 @@ import type { ConfigStore } from "../config";
 import { NotifyStore } from "./store";
 import { NotifyApi, syncFailureReason } from "./sync";
 import { advance, mergeRemote, plan, pruneFired, pendingCount } from "./scanner";
-import type { NotifySyncState, Reminder, ReminderTomb } from "./types";
+import { MAX_ATTS, type NotifySyncState, type Reminder, type ReminderTomb } from "./types";
 
 // 扫描周期。60s 是「到点感觉准」与「别空转」的折中：提醒的心理预期是分钟级，
 // 60s 的边界误差可以接受。**不要**为了更准就缩到几秒 —— 那是拿电池换心理安慰。
@@ -217,7 +217,13 @@ export class NotifyManager {
   }
 
   save(r: Reminder): void {
-    this.commit(r);
+    // 附件在这里兜一次形状：渲染层传什么都行，落盘的永远是 ≤ MAX_ATTS 的干净数组，
+    // 否则推送时服务端 400，这条提醒会一直 dirty 推不上去。
+    const atts = (Array.isArray(r.atts) ? r.atts : [])
+      .filter((a) => a && typeof a.fileId === "string" && a.fileId.trim())
+      .slice(0, MAX_ATTS)
+      .map((a) => ({ fileId: a.fileId.trim(), label: String(a.label || "") }));
+    this.commit({ ...r, atts });
   }
 
   remove(id: string): void {
