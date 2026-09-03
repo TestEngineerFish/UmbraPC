@@ -11,7 +11,7 @@
 // 挂 .umbra-root 而不是 body 的原因同 DateTimePicker：主窗口的深色主题只作用在那棵子树上。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { IconMinus, IconPlus, IconRefresh, IconDownload, IconX, IconChevronLeft, IconChevronRight } from "./icons";
+import { IconDownload, IconX, IconChevronLeft, IconChevronRight } from "./icons";
 
 export interface ViewerItem { src: string; alt?: string }
 
@@ -39,10 +39,16 @@ export function ImageViewer({ src, alt, items, onClose }: {
   }, [src, list]);
 
   const canNav = list.length > 1;
+  // 不循环（批次 009 定稿）：循环会让「我看完了没」失去边界。到头时 go 不动，
+  // 两侧钮转 30% 不可点。
   const go = (d: number) => {
     if (!canNav) return;
-    setCur((c) => (c + d + list.length) % list.length);
-    reset();
+    setCur((c) => {
+      const next = c + d;
+      if (next < 0 || next >= list.length) return c;
+      reset();
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -77,47 +83,49 @@ export function ImageViewer({ src, alt, items, onClose }: {
     } catch { /* ignore */ }
   };
 
-  const btn = "w-9 h-9 flex items-center justify-center rounded-full bg-white/15 hover:bg-white/25 text-white text-[16px] cursor-pointer select-none";
-  // 两侧的切换钮：比工具条的大一号（44），停在遮罩左右边缘中线上；单图不画。
-  const navBtn = "absolute top-1/2 -translate-y-1/2 w-11 h-11 flex items-center justify-center rounded-full bg-white/15 hover:bg-white/25 text-white cursor-pointer select-none z-[101]";
+  // 工具条按批次 009 定稿（token imageViewerPc）收成两件：34 下载 + 34 关闭，左侧文件名、
+  // 右侧「N / M」计数。缩放钮组撤了 —— 缩放保留为**隐性交互**（滚轮、+/- 键，双击重置），
+  // 这条偏离已在批次 010 通报（sam 验收过放大功能，能力不能随工具条一起撤）。
+  const btn = "w-[34px] h-[34px] flex items-center justify-center rounded-full bg-white/15 hover:bg-white/25 text-white cursor-pointer select-none";
+  // 两侧 44 圆钮（稿：rgba(255,255,255,.07) 底 + .16 描边）；到头 30% 不可点。
+  const navBtn = "absolute top-1/2 -translate-y-1/2 w-11 h-11 flex items-center justify-center rounded-full bg-[rgba(255,255,255,.07)] border border-[rgba(255,255,255,.16)] text-white select-none z-[101]";
+  const navState = (ok: boolean) => (ok ? "cursor-pointer hover:bg-[rgba(255,255,255,.14)]" : "opacity-30 pointer-events-none");
   const node = (
     <div
       // 全屏底用 --viewer-bg（设计定稿 #0B0A09，两主题同值，与 iOS 同源）。
       className="fixed inset-0 z-[100] flex items-center justify-center bg-[var(--viewer-bg)]"
-      // 主窗口顶部 40px 是标题栏拖拽区（shell.ts 的 -webkit-app-region:drag）。拖拽区吃掉
-      // 鼠标事件**不看 z-index**，所以右上角工具条的上半截落在 0–40px 里就点不动 ——
+      // 主窗口顶部 40px 是标题栏拖拽区（shell.ts 的 -webkit-app-region:drag)。拖拽区吃掉
+      // 鼠标事件**不看 z-index**，所以工具条的上半截落在 0–40px 里就点不动 ——
       // 验收实锤「按钮只有下半部分能点」。全屏浮层打开时整块声明 no-drag。
       style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       onClick={onClose}>
-      {/* 工具条 */}
-      <div className="absolute top-4 right-4 flex items-center gap-2 z-[101]" onClick={(e) => e.stopPropagation()}>
-        {canNav ? <span className="text-white/80 text-[12px] mr-1 select-none whitespace-nowrap">{cur + 1} / {list.length}</span> : null}
-        {/* 六个动作原先都是字符（－＋⟲⭳✕）。字符图标的字形、粗细、基线随系统字体走，
-            六个摆一排会明显参差；换成同一套线性描边图标之后尺寸和光学重心才对得齐。 */}
-        <button className={btn} title="缩小" onClick={() => zoom(-0.25)}><IconMinus size={15} /></button>
-        <span className="text-white/80 text-[12px] w-12 text-center select-none">{Math.round(scale * 100)}%</span>
-        <button className={btn} title="放大" onClick={() => zoom(0.25)}><IconPlus size={15} /></button>
-        <button className={btn} title="重置" onClick={reset}><IconRefresh size={15} /></button>
+      {/* 工具条（高 52）：左文件名 · 右计数 + 下载 + 关闭。 */}
+      <div className="absolute top-0 left-0 right-0 h-[52px] px-4 flex items-center gap-2 z-[101]" onClick={(e) => e.stopPropagation()}>
+        <div className="flex-1 min-w-0 truncate text-[rgba(255,255,255,.78)] text-[12px] font-mono select-none">{item.alt || ""}</div>
+        {canNav ? <span className="flex-none text-white/80 text-[12px] select-none whitespace-nowrap">{cur + 1} / {list.length}</span> : null}
         <button className={btn} title="下载" onClick={download}><IconDownload size={15} /></button>
-        <button className={btn} title="关闭" onClick={onClose}><IconX size={15} /></button>
+        <button className={btn} title="关闭（Esc）" onClick={onClose}><IconX size={15} /></button>
       </div>
-      {/* 文件名：左上角，和工具条同一行。多图切换时靠它认现在看的是哪张。 */}
-      {item.alt ? (
-        <div className="absolute top-4 left-4 max-w-[40vw] truncate text-white/80 text-[12.5px] select-none z-[101]" onClick={(e) => e.stopPropagation()}>{item.alt}</div>
-      ) : null}
       {canNav ? (
         <>
-          <button className={`${navBtn} left-4`} title="上一张（←）" onClick={(e) => { e.stopPropagation(); go(-1); }}><IconChevronLeft size={18} /></button>
-          <button className={`${navBtn} right-4`} title="下一张（→）" onClick={(e) => { e.stopPropagation(); go(1); }}><IconChevronRight size={18} /></button>
+          <button className={`${navBtn} left-4 ${navState(cur > 0)}`} title="上一张（←）" onClick={(e) => { e.stopPropagation(); go(-1); }}><IconChevronLeft size={18} /></button>
+          <button className={`${navBtn} right-4 ${navState(cur < list.length - 1)}`} title="下一张（→）" onClick={(e) => { e.stopPropagation(); go(1); }}><IconChevronRight size={18} /></button>
         </>
       ) : null}
-      {/* 图片（可拖动、滚轮缩放）。key 跟着 src 走：切图时让 <img> 重建，别让上一张的尺寸撑着过渡。 */}
+      {/* 底部脚注（稿定文案）。 */}
+      <div className="absolute bottom-4 left-0 right-0 text-center text-[11.5px] text-[rgba(255,255,255,.45)] select-none z-[101]" onClick={(e) => e.stopPropagation()}>
+        {canNav ? "← → 切换 · Esc 或点空白关闭" : "Esc 或点空白关闭"}
+      </div>
+      {/* 图片：contain 居中、不放大超过原尺寸（<img> 天然不超原尺寸，max 约束只缩不放）。
+          滚轮缩放 / 拖动 / 双击重置是隐性交互（工具条上没有钮，见上）。
+          key 跟着 src 走：切图时让 <img> 重建，别让上一张的尺寸撑着过渡。 */}
       <img
         key={item.src}
         src={item.src}
         alt={item.alt || ""}
         draggable={false}
         onClick={(e) => e.stopPropagation()}
+        onDoubleClick={reset}
         onWheel={(e) => { zoom(e.deltaY < 0 ? 0.2 : -0.2); }}
         onPointerDown={(e) => {
           (e.target as HTMLElement).setPointerCapture(e.pointerId);

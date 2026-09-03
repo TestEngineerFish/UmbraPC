@@ -12,7 +12,7 @@ import { Pill, btnGhost, btnPrimary, selectBox, fieldFlex, EmptyState } from "..
 // 而附件在组件树很深的 Gallery 里，够不着。overlay 是模块级单例，独立窗口也已经挂了 OverlayHost。
 import { askConfirm, showToast } from "../../components/overlay";
 import { ImageViewer } from "../../components/ImageViewer";
-import { CAT_ICON, PICK_ICONS } from "../money/moneyKit";
+import { CAT_ICON, CAT_LABEL, PICK_ICONS } from "../money/moneyKit";
 import { IconPickerPop, IconThumb, compressIcon, type IconOption } from "../../components/IconPicker";
 import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
 import { displayAccel } from "../../components/hotkey";
@@ -77,24 +77,41 @@ const api = (window as unknown as { umbraVault: VaultAPI }).umbraVault;
 // 可添加的控件类型。图标一律用线性 outline（原先是彩色 emoji，跨平台字形与基线对不齐）。
 type IconComp = ComponentType<Omit<SVGProps<SVGSVGElement>, "width" | "height"> & { size?: number }>;
 
-// 分组 / 记录的图标（验收 #3，2026-09-03）：线性图标复用记账那批 —— 批次 004 ClaudeDesign
-// 给记账画的 8 个可选图标 + 内置分类的 14 个，语义名（gift / housing / …）落进
-// VType.icon / Item.icon，和记账分类的契约同一种存法（存语义名不存路径），iOS 拿同名的
-// MoneyCatArt 就能画。记录还可以用自定义图片（上传 / 拖入 / 粘贴 / 网址，存压缩后的
-// data URL）—— 显示与选择都走通用的 IconThumb / IconPickerPop（components/IconPicker）。
-// 新建分组时随机给一个线性图标（优先没被别的分组用过的）；icon 为空 → 首字 monogram 兜底。
-const CAT_LABEL: Record<string, string> = {
-  housing: "住房", food: "餐饮", shopping: "购物", transport: "出行", fun: "娱乐", daily: "日用",
-  medical: "医疗", study: "学习", social: "人情", salary: "工资", bonus: "奖金", parttime: "兼职",
-  invest: "投资", reimburse: "报销",
-};
-const GROUP_ICONS: IconOption[] = [
-  ...PICK_ICONS,
-  ...Object.entries(CAT_LABEL).map(([k, label]) => ({ k, label, d: CAT_ICON[k] })),
+// 分组 / 记录的图标（批次 009 定稿）：保险箱用**专属 16 个**（umbra-icons.json 的
+// vaultSet，其中 10 个是这批新画的，group:"vault"）—— 餐饮 / 出行 / 工资挂在密码分组上
+// 是错的语义，用户第一反应是自己点错了。语义名落 VType.icon / Item.icon；自定义图片存
+// 压缩后的 data URL；显示与选择都走通用的 IconThumb / IconPickerPop（components/IconPicker）。
+// d 是整段 svg 内部标记（这批图标带 circle/rect），照 icons.json 的 body 抄，别改画。
+const VAULT_ICONS: IconOption[] = [
+  { k: "key", label: "钥匙", d: '<path d="M7.5 12.9a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2M10.1 14 20 4.1M16.4 7.7l2.4 2.4M13.5 10.6l2.1 2.1"/>' },
+  { k: "credit-card", label: "银行卡", d: '<path d="M4.5 5.5h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-15a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2M2.5 10h19M6 14.5h4"/>' },
+  { k: "id-card", label: "证件", d: '<path d="M4.5 5h15a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-15a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2M8.6 9a2.1 2.1 0 1 0 0 4.2 2.1 2.1 0 0 0 0-4.2M5.4 16.4c.5-1.4 1.8-2.2 3.2-2.2s2.7.8 3.2 2.2M15 9.6h4M15 13h3"/>' },
+  { k: "wallet", label: "钱包", d: '<path d="M4 9.5h16a1.6 1.6 0 0 1 1.6 1.6v6.8A1.6 1.6 0 0 1 20 19.5H4a1.6 1.6 0 0 1-1.6-1.6v-6.8A1.6 1.6 0 0 1 4 9.5M6.4 9.5l9.2-4.8a1 1 0 0 1 1.4.5l1.4 3.3M17 14.6h.01"/>' },
+  { k: "membership-card", label: "会员卡", d: '<path d="M4.5 5.5h15a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-15a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2M7.6 9.4l1.2 2.4 2.7.4-2 1.9.5 2.6-2.4-1.3-2.4 1.3.5-2.6-2-1.9 2.7-.4zM14.5 11.3h4.5M14.5 14.4h3"/>' },
+  { k: "server", label: "服务器", d: '<path d="M5 4h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2M5 13h14a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2M6.8 7.5h.01M6.8 16.5h.01M10.5 7.5h3.5M10.5 16.5h3.5"/>' },
+  { k: "wifi", label: "Wi-Fi", d: '<path d="M2.6 9.4a13.2 13.2 0 0 1 18.8 0M6.1 13.1a8.1 8.1 0 0 1 11.8 0M9.5 16.8a3.7 3.7 0 0 1 5 0M12 20.4h.01"/>' },
+  { k: "cloud", label: "云服务", d: '<path d="M7.2 19a4.6 4.6 0 0 1-.6-9.1 6.1 6.1 0 0 1 11.6 1.5A4 4 0 0 1 17.4 19z"/>' },
+  { k: "globe", label: "网站", d: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 3 2.5 15 0 18M12 3c-2.5 3-2.5 15 0 18"/>' },
+  { k: "mail", label: "邮箱", d: '<path d="M4.5 5h15a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-15a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2M3.4 7.6 12 13.3l8.6-5.7"/>' },
+  { k: "device-phone", label: "手机", d: '<rect x="6" y="2.5" width="12" height="19" rx="3"/><path d="M10.5 5.5h3"/>' },
+  { k: "device-mac", label: "电脑", d: '<rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M2 20h20"/>' },
+  { k: "building", label: "机构", d: '<path d="M4 20.5V5a1.5 1.5 0 0 1 1.5-1.5h8A1.5 1.5 0 0 1 15 5v15.5M15 10h3.5A1.5 1.5 0 0 1 20 11.5v9M2.5 20.5h19M7.5 7.5h1M11 7.5h1M7.5 11.5h1M11 11.5h1M8.4 20.5V16h2.2v4.5"/>' },
+  { k: "shield", label: "安全", d: '<path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6z"/>' },
+  { k: "lock", label: "密码", d: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>' },
+  { k: "folder", label: "分组", d: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>' },
+];
+// **显示解析**用大集：专属 16 个 + 记账那批（上一轮存量数据里可能已经挑了 gift / housing
+// 这类语义名，换候选集不能让它们一夜之间变回 monogram）。**弹层候选**只传 VAULT_ICONS。
+const RESOLVE_ICONS: IconOption[] = [
+  ...VAULT_ICONS,
+  ...PICK_ICONS.filter((o) => !VAULT_ICONS.some((v) => v.k === o.k)),
+  ...Object.entries(CAT_LABEL)
+    .filter(([k]) => CAT_ICON[k] && !VAULT_ICONS.some((v) => v.k === k))
+    .map(([k, label]) => ({ k, label, d: CAT_ICON[k] })),
 ];
 const randomGroupIcon = (used: string[]): string => {
-  const free = GROUP_ICONS.filter((o) => !used.includes(o.k));
-  const pool = free.length ? free : GROUP_ICONS;
+  const free = VAULT_ICONS.filter((o) => !used.includes(o.k));
+  const pool = free.length ? free : VAULT_ICONS;
   return pool[Math.floor(Math.random() * pool.length)].k;
 };
 const CTLS: { type: string; name: string; Icon: IconComp }[] = [
@@ -507,19 +524,31 @@ function Unlock({ onDone, st }: { onDone: () => Promise<void>; st: VStatus }) {
         </div>
         {err ? <div className="flex items-center gap-[7px] bg-danger-soft text-danger rounded-[8px] px-[12px] py-[9px] text-[12px]"><span className="flex-none"><IconAlert size={14} /></span>{err}</div> : null}
         <button className={vBtnWide} disabled={busy || !mp} onClick={() => void submit()}>{busy ? "解锁中…" : "解锁保险箱"}</button>
-        {canBio ? (
-          <button
-            className="w-full inline-flex items-center justify-center gap-[7px] whitespace-nowrap px-[15px] py-[9px] border border-border bg-card text-text rounded-[7px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
-            onClick={() => void touchId()}
-          ><IconTouchId size={15} />使用 Touch ID 解锁</button>
-        ) : offerBio ? (
-          <label className="flex items-center justify-center gap-[7px] text-[12px] text-muted cursor-pointer select-none">
-            <input type="checkbox" className="accent-[var(--orange)]" checked={wantBio} onChange={(e) => setWantBio(e.target.checked)} />
-            <IconTouchId size={13} />这次解锁后启用 Touch ID 快速解锁
-          </label>
-        ) : !st.biometric ? (
-          <div className="text-center text-[11px] text-faint">此设备当前没有可用的 Touch ID（外接键盘 / 合盖时也会不可用）</div>
-        ) : null}
+        {/* Touch ID 三态共用这一块 min-height:52px 的位置（批次 009 定稿）：切换时整页高度
+            不动，锁图标和标题不跳。不可用态**顶替按钮的位置**而不是另加一行 —— 它是
+            「为什么这里没有按钮」的答案，不是噪音。 */}
+        <div className="min-h-[52px] flex flex-col justify-center gap-[6px]">
+          {canBio ? (
+            <>
+              <button
+                className="w-full inline-flex items-center justify-center gap-[7px] whitespace-nowrap px-[14px] py-[7px] border border-border bg-card text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
+                onClick={() => void touchId()}
+              ><IconTouchId size={15} />用 Touch ID 解锁</button>
+              <div className="text-center text-[11px] text-faint">进这一页会自动弹一次指纹；点了取消就用主密码，不算失败</div>
+            </>
+          ) : offerBio ? (
+            // 左对齐、checkbox 在最左、允许折两行、不加指纹图标（上面按钮已承担这个语义）——
+            // 380 宽里一行居中的长文案读起来像脚注，但它是个可操作的开关（稿定）。
+            <label className="flex items-start gap-[8px] text-[12px] text-muted leading-[1.6] cursor-pointer select-none">
+              <input type="checkbox" className="accent-[var(--orange)] mt-[3px] flex-none" checked={wantBio} onChange={(e) => setWantBio(e.target.checked)} />
+              <span>这次解锁后启用 Touch ID 快速解锁。主密码通过就顺手启用，以后仍可以用主密码。</span>
+            </label>
+          ) : (
+            <div className="flex items-center justify-center gap-[6px] text-[11.5px] text-faint">
+              <IconTouchId size={13} />此设备当前没有可用的 Touch ID（外接键盘 / 合盖时也会不可用）
+            </div>
+          )}
+        </div>
         <button className={`${vTextBtn} self-center`} onClick={() => { setUseSk(!useSk); setErr(""); }}>
           {useSk ? "← 本机解锁" : "换了新设备？输入 Secret Key"}
         </button>
@@ -909,7 +938,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
                       onChange={() => toggleCheck(it.id)}
                     />
                   ) : null}
-                  <IconThumb value={it.icon} icons={GROUP_ICONS} size={30} radius={9} on={on}
+                  <IconThumb value={it.icon} icons={RESOLVE_ICONS} size={30} radius={9} on={on}
                     fallback={<Mono text={it.title} size={30} radius={9} font={12} plain={!on} />} />
                   <div className="flex-1 min-w-0">
                     <div className={`text-[13px] truncate ${on ? "font-semibold text-orange-text" : ""}`}>{it.title}</div>
@@ -982,7 +1011,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
             types.length ? (
               <div className="max-h-[176px] overflow-y-auto">
                 {types.map((t) => (
-                  <MenuItem key={t.id} icon={<IconThumb value={t.icon} icons={GROUP_ICONS} size={18} radius={5} fallback={<Mono text={t.name} size={18} radius={5} font={10} plain />} />} label={t.name} hint={t.id === ctxItem.typeId ? "当前" : undefined} onClick={() => void doMove(ctxItem.id, t.id)} />
+                  <MenuItem key={t.id} icon={<IconThumb value={t.icon} icons={RESOLVE_ICONS} size={18} radius={5} fallback={<Mono text={t.name} size={18} radius={5} font={10} plain />} />} label={t.name} hint={t.id === ctxItem.typeId ? "当前" : undefined} onClick={() => void doMove(ctxItem.id, t.id)} />
                 ))}
               </div>
             ) : (
@@ -1006,7 +1035,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
       {/* 分组「换图标」：通用 IconPickerPop（线性图标 + 自定义图片），锚定右键位置，选完即存。 */}
       {iconPop ? (
         <IconPickerPop
-          x={iconPop.x} y={iconPop.y} title={iconPop.type.name} value={iconPop.type.icon} icons={GROUP_ICONS}
+          x={iconPop.x} y={iconPop.y} title={iconPop.type.name} value={iconPop.type.icon} icons={VAULT_ICONS}
           onClose={() => setIconPop(null)}
           onPick={async (v) => {
             const tp = iconPop.type;
@@ -1076,7 +1105,7 @@ function NavRow({ label, Icon, iconValue, mono, count, active, onClick, onContex
     >
       {Icon ? (
         <span className={`w-[22px] h-[22px] rounded-[6px] flex-none inline-flex items-center justify-center ${active ? "bg-orange text-white" : "bg-chip text-muted"}`}><Icon size={13} /></span>
-      ) : <IconThumb value={iconValue} icons={GROUP_ICONS} size={22} radius={6} on={active}
+      ) : <IconThumb value={iconValue} icons={RESOLVE_ICONS} size={22} radius={6} on={active}
              fallback={<Mono text={mono || label} size={22} radius={6} font={11} plain={!active} />} />}
       <span className="flex-1 min-w-0 truncate">{label}</span>
       <span className="flex-none whitespace-nowrap text-[11px] text-faint">{count}</span>
@@ -1194,16 +1223,20 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
     try { const v = await compressIcon(f); setDraft((d) => ({ ...d, icon: v })); }
     catch (e) { showToast(ipcErr(e), { tone: "fail" }); }
   };
-  const bigIcon = <IconThumb value={model.icon} icons={GROUP_ICONS} size={40} radius={11}
+  const bigIcon = <IconThumb value={model.icon} icons={RESOLVE_ICONS} size={40} radius={11}
     fallback={<Mono text={model.title} size={40} radius={11} font={16} />} />;
 
   return (
     <div className="max-w-[600px] flex flex-col gap-[16px]" style={{ animation: "vDetailIn .22s ease" }}>
-      {/* 标题区 */}
+      {/* 标题区。记录大图标的「可换」提示按批次 009 定稿：**不挂常驻角标**（40 上挂 16 的
+          角标吃掉六分之一面积，还和图片内容打架）——编辑态常驻 1px 虚线描边当静态提示
+          （和选择器落点同一套语言），hover 才压 rgba(0,0,0,.42) 遮罩 + 14 铅笔；
+          图片拖上来时转 2px 橙描边 + 橙软底；查看态实线描边、不可点。 */}
       <div className="flex items-center gap-[12px]">
         {edit ? (
           <button
-            className={`relative flex-none p-0 bg-transparent border-none cursor-pointer rounded-[11px] group/icon ${iconOver ? "shadow-[shadow:0_0_0_2px_var(--orange)]" : ""}`}
+            className={`relative flex-none p-0 bg-transparent cursor-pointer rounded-[11px] overflow-hidden group/icon ${
+              iconOver ? "border-2 border-orange bg-orange-soft" : "border border-dashed border-border"}`}
             title="换图标：点一下选，或把图片拖到这里"
             onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setIconPop({ x: r.left, y: r.bottom + 6 }); }}
             onDragEnter={(e) => { e.preventDefault(); setIconOver(true); }}
@@ -1212,12 +1245,13 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
             onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setIconOver(false); void dropIcon(e.dataTransfer.files[0]); }}
           >
             {bigIcon}
-            {/* 编辑态给一个小角标提示「可换」——不然 40 的方块看着和查看态一模一样，没人知道能点。 */}
-            <span className="absolute -right-[4px] -bottom-[4px] w-[16px] h-[16px] rounded-full bg-card border border-border text-muted flex items-center justify-center group-hover/icon:text-orange-text group-hover/icon:border-orange">
-              <IconPencil size={9} />
+            <span className="absolute inset-0 hidden group-hover/icon:flex items-center justify-center bg-[rgba(0,0,0,.42)] text-white rounded-[10px]">
+              <IconPencil size={14} />
             </span>
           </button>
-        ) : bigIcon}
+        ) : (
+          <span className="flex-none rounded-[11px] border border-border overflow-hidden">{bigIcon}</span>
+        )}
         <div className="flex-1 min-w-0 flex flex-col gap-[5px]">
           {edit ? (
             <input className={vInput} value={draft.title} placeholder="记录名称" onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} />
@@ -1280,7 +1314,7 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
 
       {iconPop ? (
         <IconPickerPop
-          x={iconPop.x} y={iconPop.y} title={draft.title || "这条记录"} value={draft.icon} icons={GROUP_ICONS}
+          x={iconPop.x} y={iconPop.y} title={draft.title || "这条记录"} value={draft.icon} icons={VAULT_ICONS}
           onClose={() => setIconPop(null)}
           onPick={(v) => setDraft((d) => ({ ...d, icon: v }))}
         />
@@ -1613,10 +1647,15 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded, onAttRemo
   const viewerItems = atts.filter((aid) => urls[aid]).map((aid) => ({ src: urls[aid], alt: nameOf(aid) }));
 
   return (
+    // 三态描边（批次 009 定稿，token attachmentZone）：平时透明（外层 BlockCard 已是
+    // 1px --border + --card 的卡）；选中 = 1px --orange + --focus-ring（单靠 3px 橙软在
+    // 白卡上读不出来，token 点名必须配 1px 橙描边）；拖入 = 2px --orange + 橙软底。
+    // 圆角统一 12 跟卡片 —— 拖入时整块视觉尺寸不该变。
     <div
       tabIndex={edit ? 0 : -1}
-      className={`flex flex-col gap-[9px] rounded-[10px] outline-none transition-[box-shadow] duration-[120ms] ${
-        dragging ? "shadow-[shadow:0_0_0_2px_var(--orange)]" : selected ? "shadow-[shadow:var(--focus-ring)]" : ""}`}
+      className={`flex flex-col gap-[9px] rounded-[12px] outline-none transition-[box-shadow] duration-[120ms] ${
+        dragging ? "shadow-[shadow:0_0_0_2px_var(--orange)] bg-orange-soft"
+        : selected ? "shadow-[shadow:0_0_0_1px_var(--orange),var(--focus-ring)]" : ""}`}
       onFocusCapture={() => { if (edit) setSelected(true); }}
       onBlurCapture={(e) => {
         // 焦点在本块内部挪动（缩略图 → 删除钮）不算离开；跑到外面才取消选中。
@@ -1628,6 +1667,14 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded, onAttRemo
       onDragOver={(e) => { if (edit) e.preventDefault(); }}
       onDrop={onDrop}
     >
+      {/* 区头右侧的提示行（稿定：不塞进 96 宽的钮里，会挤成三行）。选中态换这行文案；
+          拖入时整行让位给描边，不抢注意力。 */}
+      {edit && !dragging ? (
+        <div className={`text-right text-[11px] ${selected ? "text-orange-text" : "text-faint"}`}>
+          {selected ? "现在 ⌘V 会贴到这里"
+            : `${atts.length ? `${atts.length} ${kind === "image" ? "张" : "个"} · ` : ""}拖入或 ⌘V 粘贴`}
+        </div>
+      ) : null}
       {kind === "image" ? (
         <div className="flex flex-wrap gap-[9px]">
           {atts.map((aid) => (
@@ -1673,11 +1720,10 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded, onAttRemo
       {!atts.length && !edit ? <div className="text-[12.5px] text-faint">（空）</div> : null}
       {edit ? (
         <>
+          {/* 钮里只写「+ 添加图片」（稿定）：提示句在区头右侧，塞进钮里会挤成三行。 */}
           <button className={`${vDash} ${dragging ? "border-orange text-orange-text" : ""}`} onClick={() => fileRef.current?.click()}>
-            {kind === "image" ? <IconImage size={13} /> : <IconFile size={13} />}
-            {dragging ? "松开就放进来"
-              : selected ? (kind === "image" ? "添加图片 · 现在 ⌘V 会贴到这里" : "添加文件 · 现在 ⌘V 会贴到这里")
-              : kind === "image" ? "添加图片 · 也可拖入或 ⌘V 粘贴" : "添加文件 · 也可拖入或 ⌘V 粘贴"}
+            <IconPlus size={12} />
+            {dragging ? "松开就放进来" : kind === "image" ? "添加图片" : "添加文件"}
           </button>
           <input
             ref={fileRef}

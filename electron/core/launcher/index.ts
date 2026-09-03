@@ -594,6 +594,49 @@ export class LauncherManager {
     return "";
   }
 
+  // ── 秘书可达性 +「/」功能菜单的发送通道（批次 009）───────────────────────
+  //
+  // 「/」菜单的内容统一发给秘书整理后入库，所以发送前要先知道服务端通不通 ——
+  // 通就转发聊天页（离开面板后的失败用户看不见，必须在面板里拦住）；
+  // 不通就把三段式错误卡交给渲染层画，内容留在输入框不丢（稿定）。
+  // 探测走 /health（无鉴权、只回一个 ok），1.5s 超时；结果缓存 8s ——
+  // 菜单每次打开都问一次，别让每个键击都去 ping。
+  private onlineCache: { at: number; ok: boolean } = { at: 0, ok: false };
+  private async assistantOnline(): Promise<boolean> {
+    const c = this.cfg.get();
+    if (!c.serverUrl || !c.token) return false;   // 没配服务端 = 离线，不用发包
+    if (Date.now() - this.onlineCache.at < 8_000) return this.onlineCache.ok;
+    let ok = false;
+    try {
+      const { httpFetch } = await import("../http");
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 1_500);
+      const r = await httpFetch(`${String(c.serverUrl).replace(/\/+$/, "")}/health`, { signal: ctl.signal });
+      clearTimeout(timer);
+      ok = r.ok;
+    } catch { ok = false; }
+    this.onlineCache = { at: Date.now(), ok };
+    return ok;
+  }
+
+  // kind → 发给秘书的句式。带上意图前缀，秘书才会选对工具（add_money_entry /
+  // add_phrase / save_inspiration / create_reminder）；裸内容它得先猜这是要干嘛。
+  private static readonly SLASH_PREFIX: Record<string, string> = {
+    insp: "记一条灵感：",
+    money: "记一笔：",
+    phrase: "加一条常用语：",
+    rem: "提醒我：",
+  };
+  private async slashSend(kind: string, text: string): Promise<{ ok: boolean }> {
+    const t = (text || "").trim();
+    const prefix = LauncherManager.SLASH_PREFIX[kind];
+    if (!t || !prefix || !this.chatSender) return { ok: false };
+    if (!(await this.assistantOnline())) return { ok: false };
+    this.chatSender(prefix + t);
+    // 不在这里 hide：渲染层要先闪一帧「已交给秘书」再收起（稿定，收起本身就是反馈）。
+    return { ok: true };
+  }
+
   // 返回：空字符串=已隐藏窗口(无需提示)；非空=提示文案(渲染层弹 toast 后再隐藏)。
   // mod：回车分支修饰键（""=回车，"cmd"/"alt"…），仅工作流结果用。
   private async runResult(id: string, mod = ""): Promise<string> {
@@ -685,6 +728,9 @@ export class LauncherManager {
     ipcMain.handle("launcher:query", (_e, q: string) => this.query(q));
     ipcMain.handle("launcher:run", (_e, id: string, mod?: string) => this.runResult(id, mod || ""));
     ipcMain.handle("launcher:sendAssistant", (_e, text: string) => this.sendAssistant(text));
+    // 「/」功能菜单（批次 009）：发送 + 可达性探测（菜单态与「问秘书」兜底项的离线灰都靠它）。
+    ipcMain.handle("launcher:slashSend", (_e, kind: string, text: string) => this.slashSend(String(kind || ""), String(text || "")));
+    ipcMain.handle("launcher:assistantOnline", () => this.assistantOnline());
     // ⌘Y 预览（W3 的 quicklookurl）：http(s) 交给默认浏览器，其余当作路径交给系统默认程序打开。
     // 面板不收起 —— 预览的意义就是「看一眼再决定选哪个」。
     ipcMain.handle("launcher:quicklook", async (_e, target: string) => {

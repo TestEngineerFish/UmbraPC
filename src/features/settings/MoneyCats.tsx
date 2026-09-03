@@ -24,7 +24,8 @@ import {
 } from "../../services/server";
 import { askConfirm, showToast } from "../../components/overlay";
 import { Modal, EmptyState, btn } from "../../components/ui";
-import { catColor, catIcon, catTint, PICK_ICONS } from "../money/moneyKit";
+import { catColor, catIcon, catTint, MONEY_ICON_SET, PICK_ICONS } from "../money/moneyKit";
+import { IconPickerPop } from "../../components/IconPicker";
 
 const BTN_S = "flex-none whitespace-nowrap px-[9px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-orange hover:text-orange-text";
 const BTN_S_WARN = "flex-none whitespace-nowrap px-[9px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-warning hover:text-warning";
@@ -371,33 +372,24 @@ export function MoneyCats() {
         })}
       </div>
 
-      {/* 「改图标」小弹层（批次 006）：184 宽、锚定点击位置、点空白关、选完即存。
-          网格与新建弹窗同一张（PICK_ICONS 模块级共用，稿点名别各写一遍）。 */}
+      {/* 「改图标」：批次 006 那个 184 宽八格小弹层已从稿里删掉（批次 009），换成通用
+          IconPickerPop。候选集 23 个（8 个可选 + 内置分类自带的，按 path 去重）——只给
+          8 个的话，内置分类（餐饮 / 购物…）的当前图标不在里面，打开弹层看不到选中项。
+          一期不开图片来源（allowImage=false）：记账的显示点（统计 / 流水 / 记一笔）和 iOS
+          都还只认语义名，等保险箱那批 iOS 跟完、显示点一起改造后再开 —— 已在批次 010 通报。 */}
       {iconPop ? (
-        <>
-          <div className="fixed inset-0 z-[69]" onClick={() => setIconPop(null)} />
-          <div className="fixed z-[70] w-[184px] bg-card border border-border rounded-[9px] px-[10px] pt-[9px] pb-[8px]"
-            style={{ left: iconPop.x, top: iconPop.y, boxShadow: "0 8px 24px rgba(0,0,0,.18)" }}>
-            <div className="flex items-baseline gap-[7px] px-[3px] pt-[1px] pb-[8px]">
-              <span className="flex-none text-[10.5px] font-semibold tracking-[.06em] text-faint whitespace-nowrap">{t("money.iconPopTitle")}</span>
-              <span className="flex-1 min-w-0 text-[11px] text-text truncate">{iconPop.cat.name}</span>
-            </div>
-            <div className="flex flex-wrap gap-[7px]">
-              {PICK_ICONS.map((o) => {
-                const on = (iconPop.cat.icon || "") === o.k;
-                return (
-                  <button key={o.k} title={o.label} disabled={busy}
-                    onClick={() => void pickIcon(iconPop.cat, o.k, o.label)}
-                    className={`w-[32px] h-[32px] flex-none flex items-center justify-center rounded-[8px] cursor-pointer border ${
-                      on ? "border-orange bg-orange-soft text-orange-text" : "border-border bg-card text-muted hover:border-orange"}`}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d={o.d} /></svg>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="px-[3px] pt-[9px] pb-[1px] text-[10.5px] text-faint leading-[1.65]">{t("money.iconChangeHint")}</div>
-          </div>
-        </>
+        <IconPickerPop
+          x={iconPop.x} y={iconPop.y} title={iconPop.cat.name}
+          value={iconPop.cat.icon || ""} icons={MONEY_ICON_SET} allowImage={false}
+          notePrefix={t("money.iconChangeHint")}
+          onClose={() => setIconPop(null)}
+          onPick={(v) => {
+            // 清除（v=""）= 恢复默认：分类按 slug 兜回自带图标，和保险箱「回落 monogram」同义。
+            if (!v) { void pickIcon(iconPop.cat, "", "默认"); return; }
+            const o = MONEY_ICON_SET.find((i) => i.k === v);
+            if (o) void pickIcon(iconPop.cat, o.k, o.label);
+          }}
+        />
       ) : null}
 
       {/* 改名弹窗 */}

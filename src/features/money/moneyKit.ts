@@ -46,6 +46,29 @@ export const PICK_ICONS: { k: string; label: string; d: string }[] = [
 ];
 const PICK_BY_NAME: Record<string, string> = Object.fromEntries(PICK_ICONS.map((o) => [o.k, o.d]));
 
+// 内置分类的中文名（批次 009 起「改图标」弹层要显示它们的 title；保险箱那边解析
+// 存量语义名也用这张表）。other / other_in 共用三个点的图形，label 只留一个「其他」。
+export const CAT_LABEL: Record<string, string> = {
+  housing: "住房", food: "餐饮", shopping: "购物", transport: "出行", fun: "娱乐", daily: "日用",
+  medical: "医疗", study: "学习", social: "人情", other: "其他",
+  salary: "工资", bonus: "奖金", parttime: "兼职", invest: "投资", reimburse: "报销",
+};
+
+/** 记账「改图标」弹层的候选集（批次 009 定稿）：8 个可选 + 内置分类自带的那批，
+ *  按 path 去重后 23 个。只给 8 个不行 —— 内置分类（餐饮 / 购物…）的当前图标不在
+ *  那 8 个里，打开弹层看不到选中项（设计侧原型也踩过同一个坑）。 */
+export const MONEY_ICON_SET: { k: string; label: string; d: string }[] = (() => {
+  const out = [...PICK_ICONS];
+  const seen = new Set(out.map((o) => o.d));
+  for (const [k, label] of Object.entries(CAT_LABEL)) {
+    const d = CAT_ICON[k];
+    if (!d || seen.has(d)) continue;
+    seen.add(d);
+    out.push({ k, label, d });
+  }
+  return out;
+})();
+
 /** 分类图标：**存储的语义名优先**（用户挑的要跨端一致），slug 兜底（内置分类），
  *  再兜不到用「其他」。icon 不传就是老调用方，行为与从前一致。 */
 export const catIcon = (slug: string, icon?: string): string =>

@@ -117,6 +117,9 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   query: (q: string) => ipcRenderer.invoke("launcher:query", q),
   run: (id: string, mod?: string) => ipcRenderer.invoke("launcher:run", id, mod || ""),
   sendAssistant: (text: string) => ipcRenderer.invoke("launcher:sendAssistant", text),
+  // 「/」功能菜单：内容统一发给秘书（先探服务端可达，离线在面板里报三段式卡）。
+  slashSend: (kind: string, text: string) => ipcRenderer.invoke("launcher:slashSend", kind, text),
+  assistantOnline: () => ipcRenderer.invoke("launcher:assistantOnline"),
   hide: () => ipcRenderer.invoke("launcher:hide"),
   getSettings: () => ipcRenderer.invoke("launcher:getSettings"),
   setEnabled: (enabled: boolean) => ipcRenderer.invoke("launcher:setEnabled", enabled),
