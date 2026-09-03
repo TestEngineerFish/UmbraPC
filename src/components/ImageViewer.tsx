@@ -112,9 +112,12 @@ export function ImageViewer({ src, alt, items, onClose }: {
           <button className={`${navBtn} right-4 ${navState(cur < list.length - 1)}`} title="下一张（→）" onClick={(e) => { e.stopPropagation(); go(1); }}><IconChevronRight size={18} /></button>
         </>
       ) : null}
-      {/* 底部脚注（稿定文案）。 */}
+      {/* 底部脚注三态（批次 010 答复）：放大后换成「怎么回去」的提示 —— 隐性交互的代价
+          不是进不去（滚轮是本能），是出不来；这句只在有人真需要它时出现，平时不占位。 */}
       <div className="absolute bottom-4 left-0 right-0 text-center text-[11.5px] text-[rgba(255,255,255,.45)] select-none z-[101]" onClick={(e) => e.stopPropagation()}>
-        {canNav ? "← → 切换 · Esc 或点空白关闭" : "Esc 或点空白关闭"}
+        {scale > 1 ? "拖动平移 · 双击回到适应窗口"
+          : canNav ? "← → 切换 · 滚轮缩放 · Esc 或点空白关闭"
+          : "滚轮缩放 · Esc 或点空白关闭"}
       </div>
       {/* 图片：contain 居中、不放大超过原尺寸（<img> 天然不超原尺寸，max 约束只缩不放）。
           滚轮缩放 / 拖动 / 双击重置是隐性交互（工具条上没有钮，见上）。

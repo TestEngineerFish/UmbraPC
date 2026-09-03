@@ -93,12 +93,16 @@ export async function compressIcon(src: Blob | string): Promise<string> {
 }
 
 // ── 锚定弹层 ────────────────────────────────────────────────────────────────
-export function IconPickerPop({ x, y, title, value, icons, allowImage = true, notePrefix, onPick, onClose }: {
+export function IconPickerPop({ x, y, title, value, icons, allowImage = true, notePrefix, clearLabel = "清除", onPick, onClose }: {
   x: number; y: number; title: string; value?: string; icons?: IconOption[];
   /** 是否开放「用一张图片」那一段（上传 / 拖入 / 粘贴 / 网址）。 */
   allowImage?: boolean;
   /** 底部说明前面多写的一句（记账场景传「只换样子，名字和已记的账不动。」）。 */
   notePrefix?: string;
+  /** 头行右侧那颗回落钮的措辞（批次 010）：保险箱回落 monogram 是「清除」；
+   *  记账没有 monogram 态、兜回 slug 自带图标，叫「恢复默认」—— 同一颗钮不能在
+   *  两处说不同的实话，措辞跟着场景走。两边都不做二次确认：它不删数据。 */
+  clearLabel?: string;
   onPick: (v: string) => void; onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -170,7 +174,7 @@ export function IconPickerPop({ x, y, title, value, icons, allowImage = true, no
           <span className="flex-none text-[10.5px] font-semibold tracking-[.06em] text-faint whitespace-nowrap">换图标</span>
           <span className="flex-1 min-w-0 text-[11px] text-text truncate">{title}</span>
           {/* 清除不算破坏性操作、不做二次确认 —— 它只是回落首字 monogram，不删数据（稿定）。 */}
-          {value ? <button className="flex-none text-[11px] text-muted hover:text-orange-text bg-transparent border-none cursor-pointer p-0" onClick={() => pick("")}>清除</button> : null}
+          {value ? <button className="flex-none text-[11px] text-muted hover:text-orange-text bg-transparent border-none cursor-pointer p-0" onClick={() => pick("")}>{clearLabel}</button> : null}
         </div>
         {icons?.length ? (
           <div className="grid grid-cols-6 gap-[6px]">

@@ -39,8 +39,15 @@ const SLASH_FUNCS: SlashFunc[] = [
   { k: "rem", label: "提醒", sample: "/提醒 明天十点打给张伟", d: "M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" },
 ];
 
+// 面板**锁深色**、不跟系统浅深（批次 010 答复，token launcherSlash.theme）：
+// 快捷入口和左侧导航（--nav 两种主题下都是深色）是同一类常驻壳层，不是内容区；
+// 它又浮在任意桌面内容上，深底在浅深两种环境里都立得住，跟着系统翻反而会在
+// 浅色下糊成一块白板。原来的浅色适配整段删除。
 const CSS = `
-:root{color-scheme:light;--bg:rgba(246,245,242,.98);--card:#FFF;--border:#E6E3DC;--text:#1F2320;--muted:#6B716B;--orange:#E8590C;--sel:#FFF1E6;}
+:root{color-scheme:dark;--bg:rgba(30,27,24,.98);--card:#26221E;--border:#3A342E;--text:#F2EFEA;--muted:#A79E93;--orange:#E8590C;--sel:#3a2a1c;
+  --slash-fg:#F0A878;--slash-chipbg:rgba(232,89,12,.2);--chipbg:#ffffff10;
+  --ok-bg:rgba(58,132,86,.18);--ok-fg:#9FD6AE;
+  --err-bg:rgba(198,64,42,.14);--err-bd:rgba(198,64,42,.38);--err-bd2:rgba(240,160,142,.5);--err-fg:#F0A08E;}
 *{box-sizing:border-box;}
 html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;color:var(--text);}
 .wrap{height:100vh;padding:10px;}
@@ -55,7 +62,7 @@ html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,
 .list:empty{display:none;}
 .row{display:flex;align-items:center;gap:12px;padding:9px 12px;border-radius:10px;cursor:pointer;}
 .row.sel{background:var(--sel);}
-.ico{width:30px;height:30px;flex:none;display:flex;align-items:center;justify-content:center;font-size:20px;border-radius:7px;overflow:hidden;background:#0000000a;}
+.ico{width:30px;height:30px;flex:none;display:flex;align-items:center;justify-content:center;font-size:20px;border-radius:7px;overflow:hidden;background:#ffffff10;}
 .ico img{width:30px;height:30px;object-fit:contain;}
 .meta{flex:1;min-width:0;}
 .title{font-size:14.5px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -95,13 +102,6 @@ html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,
 .offline .oa button{flex:none;padding:4px 11px;border:1px solid var(--err-bd2);background:transparent;color:var(--err-fg);border-radius:7px;font-size:11.5px;cursor:pointer;font-family:inherit;white-space:nowrap;}
 .row.offdim{opacity:.42;}
 .offbadge{flex:none;font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:999px;padding:1px 7px;white-space:nowrap;}
-:root{--slash-fg:#9A3412;--slash-chipbg:rgba(232,89,12,.14);--chipbg:#0000000a;
-  --ok-bg:rgba(58,132,86,.14);--ok-fg:#2E7D4F;
-  --err-bg:rgba(198,64,42,.09);--err-bd:rgba(198,64,42,.32);--err-bd2:rgba(198,64,42,.45);--err-fg:#B42318;}
-@media (prefers-color-scheme:dark){:root{color-scheme:dark;--bg:rgba(30,27,24,.98);--card:#26221E;--border:#3A342E;--text:#F2EFEA;--muted:#A79E93;--sel:#3a2a1c;
-  --slash-fg:#F0A878;--slash-chipbg:rgba(232,89,12,.2);--chipbg:#ffffff10;
-  --ok-bg:rgba(58,132,86,.18);--ok-fg:#9FD6AE;
-  --err-bg:rgba(198,64,42,.14);--err-bd:rgba(198,64,42,.38);--err-bd2:rgba(240,160,142,.5);--err-fg:#F0A08E;}.ico{background:#ffffff10;}}
 `;
 
 export function Launcher() {

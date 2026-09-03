@@ -381,6 +381,7 @@ export function MoneyCats() {
         <IconPickerPop
           x={iconPop.x} y={iconPop.y} title={iconPop.cat.name}
           value={iconPop.cat.icon || ""} icons={MONEY_ICON_SET} allowImage={false}
+          clearLabel="恢复默认"
           notePrefix={t("money.iconChangeHint")}
           onClose={() => setIconPop(null)}
           onPick={(v) => {
