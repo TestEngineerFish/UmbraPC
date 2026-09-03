@@ -327,6 +327,44 @@ function registerIpc(): void {
     return await shell.openPath(target);
   });
 
+  // 按网址取一张图（通用图标选择器的「填网址」入口，2026-09-03 验收第二轮）。
+  // 为什么在主进程：渲染层 fetch 第三方站点会撞 CORS，主进程的 net.fetch 没有这层限制。
+  // 给的不是图片 URL（比如就填了个 github.com）时，退回去拿那个站的 favicon ——
+  // 用户填网址十有八九就是想要「那个网站的图标」。返回 data URL；压缩交给渲染层的 canvas。
+  ipcMain.handle("umbra:fetchImage", async (_e, url: string): Promise<{ ok: boolean; dataUrl?: string; error?: string }> => {
+    let raw = String(url || "").trim();
+    if (!raw) return { ok: false, error: "网址是空的" };
+    if (!/^https?:\/\//i.test(raw)) raw = "https://" + raw;
+    let u: URL;
+    try { u = new URL(raw); } catch { return { ok: false, error: "网址格式不对" }; }
+    const { httpFetch } = await import("./core/http");
+    const grab = async (target: string): Promise<string | null> => {
+      try {
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 8000);
+        const r = await httpFetch(target, { signal: ctl.signal, headers: { "user-agent": "Mozilla/5.0 (Umbra)" } });
+        clearTimeout(timer);
+        const ct = r.headers.get("content-type") || "";
+        if (!r.ok || !/^image\//i.test(ct)) return null;
+        const buf = Buffer.from(await r.arrayBuffer());
+        if (!buf.length || buf.length > 5 * 1024 * 1024) return null;   // 5MB 封顶，图标不该更大
+        return `data:${ct.split(";")[0]};base64,${buf.toString("base64")}`;
+      } catch { return null; }
+    };
+    // 依次试：网址本身 → 该站根目录的 favicon.ico → 两个公共 favicon 服务（国内外各一路兜底）。
+    const candidates = [
+      u.toString(),
+      `${u.origin}/favicon.ico`,
+      `https://icons.duckduckgo.com/ip3/${u.hostname}.ico`,
+      `https://www.google.com/s2/favicons?domain=${u.hostname}&sz=128`,
+    ];
+    for (const c of candidates) {
+      const got = await grab(c);
+      if (got) return { ok: true, dataUrl: got };
+    }
+    return { ok: false, error: "这个网址取不到图片（也没找到它的站点图标）" };
+  });
+
   // 列一个目录的顶层内容（工作区详情页的「目录内容」）。
   // 只读顶层、不递归：这一栏是「让人认出这是哪个目录」，不是文件浏览器。
   // 返回排好序的前 limit 项（目录在前、再按名字）+ total 供「共 N 项」用；目录不存在返回 total=-1。

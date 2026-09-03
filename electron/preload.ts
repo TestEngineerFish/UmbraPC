@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld("umbra", {
   // 开机自启：只写；当前状态从 getConfig().openAtLogin 读（系统设置才是唯一真相）。
   setLoginItem: (on: boolean) => ipcRenderer.invoke("umbra:setLoginItem", on),
   openPath: (path: string) => ipcRenderer.invoke("umbra:openPath", path),
+  // 按网址取图（通用图标选择器）：主进程 net.fetch，没有 CORS；取不到图就退回站点 favicon。
+  fetchImage: (url: string) => ipcRenderer.invoke("umbra:fetchImage", url),
   // 列目录顶层内容（工作区详情页的「目录内容」栏）。
   listDir: (path: string, limit?: number) => ipcRenderer.invoke("umbra:listDir", path, limit),
   // computer-use 紧急停止
@@ -241,6 +243,12 @@ contextBridge.exposeInMainWorld("umbraLarge", {
     const l = (_e: unknown, text: string) => cb(text);
     ipcRenderer.on("largetype:text", l);
     return () => ipcRenderer.removeListener("largetype:text", l);
+  },
+  // 收起时主进程让渲染层清空内容（防再显示时先闪出上次的字）。
+  onClear: (cb: () => void) => {
+    const l = () => cb();
+    ipcRenderer.on("largetype:clear", l);
+    return () => ipcRenderer.removeListener("largetype:clear", l);
   },
 });
 

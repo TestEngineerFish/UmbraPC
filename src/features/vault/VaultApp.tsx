@@ -11,6 +11,9 @@ import { Pill, btnGhost, btnPrimary, selectBox, fieldFlex, EmptyState } from "..
 // 附件删除走全局的确认弹窗与吐司：保险箱自己那套 setConfirm / flash 挂在 Main 上，
 // 而附件在组件树很深的 Gallery 里，够不着。overlay 是模块级单例，独立窗口也已经挂了 OverlayHost。
 import { askConfirm, showToast } from "../../components/overlay";
+import { ImageViewer } from "../../components/ImageViewer";
+import { CAT_ICON, PICK_ICONS } from "../money/moneyKit";
+import { IconPickerPop, IconThumb, compressIcon, type IconOption } from "../../components/IconPicker";
 import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
 import { displayAccel } from "../../components/hotkey";
 import { useHotkeyConflict, OWNER_LABEL } from "../tools/hotkeys";
@@ -73,6 +76,27 @@ const api = (window as unknown as { umbraVault: VaultAPI }).umbraVault;
 
 // 可添加的控件类型。图标一律用线性 outline（原先是彩色 emoji，跨平台字形与基线对不齐）。
 type IconComp = ComponentType<Omit<SVGProps<SVGSVGElement>, "width" | "height"> & { size?: number }>;
+
+// 分组 / 记录的图标（验收 #3，2026-09-03）：线性图标复用记账那批 —— 批次 004 ClaudeDesign
+// 给记账画的 8 个可选图标 + 内置分类的 14 个，语义名（gift / housing / …）落进
+// VType.icon / Item.icon，和记账分类的契约同一种存法（存语义名不存路径），iOS 拿同名的
+// MoneyCatArt 就能画。记录还可以用自定义图片（上传 / 拖入 / 粘贴 / 网址，存压缩后的
+// data URL）—— 显示与选择都走通用的 IconThumb / IconPickerPop（components/IconPicker）。
+// 新建分组时随机给一个线性图标（优先没被别的分组用过的）；icon 为空 → 首字 monogram 兜底。
+const CAT_LABEL: Record<string, string> = {
+  housing: "住房", food: "餐饮", shopping: "购物", transport: "出行", fun: "娱乐", daily: "日用",
+  medical: "医疗", study: "学习", social: "人情", salary: "工资", bonus: "奖金", parttime: "兼职",
+  invest: "投资", reimburse: "报销",
+};
+const GROUP_ICONS: IconOption[] = [
+  ...PICK_ICONS,
+  ...Object.entries(CAT_LABEL).map(([k, label]) => ({ k, label, d: CAT_ICON[k] })),
+];
+const randomGroupIcon = (used: string[]): string => {
+  const free = GROUP_ICONS.filter((o) => !used.includes(o.k));
+  const pool = free.length ? free : GROUP_ICONS;
+  return pool[Math.floor(Math.random() * pool.length)].k;
+};
 const CTLS: { type: string; name: string; Icon: IconComp }[] = [
   { type: "account", name: "账号", Icon: IconUser },
   { type: "secret", name: "密文", Icon: IconKey },
@@ -115,6 +139,14 @@ const vBtnWide = "w-full inline-flex items-center justify-center gap-[6px] white
 // 等分的次要按钮（Secret Key 页的复制 / 下载）。不能复用 btnGhost：它带 flex-none，和 flex-1 是同一个属性会互相盖。
 const vBtnSplit = "flex-1 inline-flex items-center justify-center gap-[6px] whitespace-nowrap px-[12px] py-[7px] border border-border bg-card text-text rounded-[7px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text";
 // 虚线的「新建」按钮（新建分组 / 添加控件 / 添加附件）。
+// 主进程抛过来的错误经 IPC 会被套成 "Error invoking remote method 'vault:xxx': Error: 正文"。
+// 界面上只该出现「正文」—— 前面那串是 Electron 的内部措辞，用户看不懂也不该看。
+const ipcErr = (e: unknown): string =>
+  String(e instanceof Error ? e.message : e)
+    .replace(/^Error invoking remote method '[^']*':\s*/, "")
+    .replace(/^Error:\s*/, "")
+    .trim();
+
 const vDash = "w-full inline-flex items-center justify-center gap-[6px] whitespace-nowrap border border-dashed border-border bg-transparent text-muted rounded-[7px] py-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text";
 // 纯文字的小按钮（多选、切换解锁方式这类）。
 const vTextBtn = "flex-none whitespace-nowrap inline-flex items-center gap-[5px] bg-transparent border-none p-0 text-[11.5px] text-muted cursor-pointer hover:text-orange-text disabled:text-faint disabled:cursor-not-allowed disabled:hover:text-faint";
@@ -409,15 +441,34 @@ function Unlock({ onDone, st }: { onDone: () => Promise<void>; st: VStatus }) {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const canBio = st.quickUnlock && st.biometric;
+  // 验收 #2（2026-09-03）：Touch ID 解锁的底层一直都在（quickUnlock），但开关只藏在
+  // 「创建时的勾选」和 ⚙︎ 菜单里，解锁页本身既不能开、也不说明为什么没有 —— 用户就会
+  // 以为「不支持指纹」。现在：本机有 Touch ID 但还没启用时，解锁页直接给一个
+  // 「这次解锁后启用 Touch ID」的勾（默认勾上），主密码通过就顺手把 AUK 存进 safeStorage，
+  // 下次进来自动弹指纹。没有 Touch ID 的机器则明说。
+  const [wantBio, setWantBio] = useState(true);
+  const offerBio = st.biometric && !st.quickUnlock;
   const submit = async () => {
     setBusy(true);
-    try { await api.unlock(mp, useSk ? sk : undefined); await onDone(); }
-    catch (e) { setErr(String(e).replace("Error: ", "")); } finally { setBusy(false); }
+    try {
+      await api.unlock(mp, useSk ? sk : undefined);
+      if (offerBio && wantBio) {
+        try { await api.enableQuickUnlock(); showToast("已启用 Touch ID 快速解锁", { tone: "ok" }); }
+        catch { /* 用户取消了系统授权：不影响这次解锁，下次还会再问 */ }
+      }
+      await onDone();
+    }
+    catch (e) { setErr(ipcErr(e)); } finally { setBusy(false); }
   };
   const touchId = async () => {
     setErr("");
     try { await api.quickUnlock(); await onDone(); }
-    catch (e) { setErr(String(e).replace("Error: ", "") || "Touch ID 未通过"); }
+    catch (e) {
+      const m = ipcErr(e);
+      // 用户自己点的「取消」不是错误：不弹红条，把光标交回主密码框就行。
+      if (m.includes("TOUCHID_CANCELED")) return;
+      setErr(m || "Touch ID 未通过");
+    }
   };
   useEffect(() => { if (canBio) void touchId(); /* 进入即尝试 Touch ID */ }, []); // eslint-disable-line
 
@@ -461,6 +512,13 @@ function Unlock({ onDone, st }: { onDone: () => Promise<void>; st: VStatus }) {
             className="w-full inline-flex items-center justify-center gap-[7px] whitespace-nowrap px-[15px] py-[9px] border border-border bg-card text-text rounded-[7px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
             onClick={() => void touchId()}
           ><IconTouchId size={15} />使用 Touch ID 解锁</button>
+        ) : offerBio ? (
+          <label className="flex items-center justify-center gap-[7px] text-[12px] text-muted cursor-pointer select-none">
+            <input type="checkbox" className="accent-[var(--orange)]" checked={wantBio} onChange={(e) => setWantBio(e.target.checked)} />
+            <IconTouchId size={13} />这次解锁后启用 Touch ID 快速解锁
+          </label>
+        ) : !st.biometric ? (
+          <div className="text-center text-[11px] text-faint">此设备当前没有可用的 Touch ID（外接键盘 / 合盖时也会不可用）</div>
         ) : null}
         <button className={`${vTextBtn} self-center`} onClick={() => { setUseSk(!useSk); setErr(""); }}>
           {useSk ? "← 本机解锁" : "换了新设备？输入 Secret Key"}
@@ -510,6 +568,8 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
   const [imp, setImp] = useState({ open: false, mp: "", sk: "", err: "" });
   const [ctx, setCtx] = useState<{ open: boolean; x: number; y: number; itemId?: string }>({ open: false, x: 0, y: 0 });
   const [tctx, setTctx] = useState<{ open: boolean; x: number; y: number; typeId?: string }>({ open: false, x: 0, y: 0 });
+  // 分组「换图标」弹层（验收 #3）：锚在右键位置。
+  const [iconPop, setIconPop] = useState<{ x: number; y: number; type: VType } | null>(null);
   // 记录右键菜单里的「移动到…」是否已展开。默认收起，点一下才列出分组，
   // 免得分组一多菜单就被撑得老长。
   const [moveOpen, setMoveOpen] = useState(false);
@@ -773,6 +833,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
               <NavRow
                 key={t.id}
                 label={t.name}
+                iconValue={t.icon}
                 mono={t.name}
                 count={counts[t.id] || 0}
                 active={cat === t.id}
@@ -782,7 +843,11 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
             )))}
             <button
               className={`${vDash} mt-[8px]`}
-              onClick={async () => { const id = await api.addType(vid, "新分组", ""); await refresh(); setRenaming(id); }}
+              onClick={async () => {
+                // 随机给一个图标（优先没被用过的），建完直接进改名态。
+                const id = await api.addType(vid, "新分组", randomGroupIcon(types.map((t) => t.icon)));
+                await refresh(); setRenaming(id);
+              }}
             ><IconFolder size={13} />新建分组</button>
           </div>
         </nav>
@@ -844,7 +909,8 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
                       onChange={() => toggleCheck(it.id)}
                     />
                   ) : null}
-                  <Mono text={it.title} size={30} radius={9} font={12} plain={!on} />
+                  <IconThumb value={it.icon} icons={GROUP_ICONS} size={30} radius={9} on={on}
+                    fallback={<Mono text={it.title} size={30} radius={9} font={12} plain={!on} />} />
                   <div className="flex-1 min-w-0">
                     <div className={`text-[13px] truncate ${on ? "font-semibold text-orange-text" : ""}`}>{it.title}</div>
                     <div className="text-[11px] text-faint truncate font-mono">{sub || "—"}</div>
@@ -916,7 +982,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
             types.length ? (
               <div className="max-h-[176px] overflow-y-auto">
                 {types.map((t) => (
-                  <MenuItem key={t.id} icon={<Mono text={t.name} size={18} radius={5} font={10} plain />} label={t.name} hint={t.id === ctxItem.typeId ? "当前" : undefined} onClick={() => void doMove(ctxItem.id, t.id)} />
+                  <MenuItem key={t.id} icon={<IconThumb value={t.icon} icons={GROUP_ICONS} size={18} radius={5} fallback={<Mono text={t.name} size={18} radius={5} font={10} plain />} />} label={t.name} hint={t.id === ctxItem.typeId ? "当前" : undefined} onClick={() => void doMove(ctxItem.id, t.id)} />
                 ))}
               </div>
             ) : (
@@ -932,8 +998,22 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
       {tctx.open && tctxType ? (
         <div className="z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[shadow:var(--shadow-floating)] w-[168px]" style={{ ...at(tctx.x, tctx.y), animation: "vPop .14s ease" }}>
           <MenuItem icon={<IconPencil size={14} />} label="重命名分组" onClick={() => { setRenaming(tctxType.id); closeMenus(); }} />
+          <MenuItem icon={<IconGrid size={14} />} label="换图标…" onClick={() => { setIconPop({ x: tctx.x, y: tctx.y, type: tctxType }); closeMenus(); }} />
           <MenuItem icon={<IconTrash size={14} />} label="删除分组" danger onClick={() => askDeleteType(tctxType.id)} />
         </div>
+      ) : null}
+
+      {/* 分组「换图标」：通用 IconPickerPop（线性图标 + 自定义图片），锚定右键位置，选完即存。 */}
+      {iconPop ? (
+        <IconPickerPop
+          x={iconPop.x} y={iconPop.y} title={iconPop.type.name} value={iconPop.type.icon} icons={GROUP_ICONS}
+          onClose={() => setIconPop(null)}
+          onPick={async (v) => {
+            const tp = iconPop.type;
+            await api.updateType(vid, tp.id, { icon: v }); await refresh();
+            showToast(v ? `「${tp.name}」图标已换` : `「${tp.name}」已清除图标`, { tone: "ok" });
+          }}
+        />
       ) : null}
 
       {manageOpen ? (
@@ -983,9 +1063,9 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
   );
 }
 
-// 左栏的一行：要么给线性图标（快速访问），要么给首字 monogram（分组）。
-function NavRow({ label, Icon, mono, count, active, onClick, onContextMenu }: {
-  label: string; Icon?: IconComp; mono?: string; count: number; active: boolean;
+// 左栏的一行：线性图标（快速访问）/ 分组图标值（有 icon 的分组）/ 首字 monogram（老分组兜底）。
+function NavRow({ label, Icon, iconValue, mono, count, active, onClick, onContextMenu }: {
+  label: string; Icon?: IconComp; iconValue?: string; mono?: string; count: number; active: boolean;
   onClick: () => void; onContextMenu?: (e: React.MouseEvent) => void;
 }) {
   return (
@@ -996,7 +1076,8 @@ function NavRow({ label, Icon, mono, count, active, onClick, onContextMenu }: {
     >
       {Icon ? (
         <span className={`w-[22px] h-[22px] rounded-[6px] flex-none inline-flex items-center justify-center ${active ? "bg-orange text-white" : "bg-chip text-muted"}`}><Icon size={13} /></span>
-      ) : <Mono text={mono || label} size={22} radius={6} font={11} plain={!active} />}
+      ) : <IconThumb value={iconValue} icons={GROUP_ICONS} size={22} radius={6} on={active}
+             fallback={<Mono text={mono || label} size={22} radius={6} font={11} plain={!active} />} />}
       <span className="flex-1 min-w-0 truncate">{label}</span>
       <span className="flex-none whitespace-nowrap text-[11px] text-faint">{count}</span>
     </button>
@@ -1103,11 +1184,40 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
   const addBlock = (type: string) => { setDraft((d) => ({ ...d, blocks: [...d.blocks, newBlock(type)] })); setAddOpen(false); };
   const model = edit ? draft : item;
 
+  // 记录图标（sam 第二轮）：编辑态点大图标开通用选择器（线性图标 / 上传 / 拖入 / 粘贴 / 网址），
+  // 直接把图片拖到图标上也行；值随「保存」一起落库（item.icon）。
+  const [iconPop, setIconPop] = useState<{ x: number; y: number } | null>(null);
+  const [iconOver, setIconOver] = useState(false);
+  const dropIcon = async (f: File | undefined) => {
+    if (!f) return;
+    if (!f.type.startsWith("image/")) { showToast("只能用图片文件", { tone: "fail" }); return; }
+    try { const v = await compressIcon(f); setDraft((d) => ({ ...d, icon: v })); }
+    catch (e) { showToast(ipcErr(e), { tone: "fail" }); }
+  };
+  const bigIcon = <IconThumb value={model.icon} icons={GROUP_ICONS} size={40} radius={11}
+    fallback={<Mono text={model.title} size={40} radius={11} font={16} />} />;
+
   return (
     <div className="max-w-[600px] flex flex-col gap-[16px]" style={{ animation: "vDetailIn .22s ease" }}>
       {/* 标题区 */}
       <div className="flex items-center gap-[12px]">
-        <Mono text={model.title} size={40} radius={11} font={16} />
+        {edit ? (
+          <button
+            className={`relative flex-none p-0 bg-transparent border-none cursor-pointer rounded-[11px] group/icon ${iconOver ? "shadow-[shadow:0_0_0_2px_var(--orange)]" : ""}`}
+            title="换图标：点一下选，或把图片拖到这里"
+            onClick={(e) => { const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); setIconPop({ x: r.left, y: r.bottom + 6 }); }}
+            onDragEnter={(e) => { e.preventDefault(); setIconOver(true); }}
+            onDragOver={(e) => { e.preventDefault(); }}
+            onDragLeave={() => setIconOver(false)}
+            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); setIconOver(false); void dropIcon(e.dataTransfer.files[0]); }}
+          >
+            {bigIcon}
+            {/* 编辑态给一个小角标提示「可换」——不然 40 的方块看着和查看态一模一样，没人知道能点。 */}
+            <span className="absolute -right-[4px] -bottom-[4px] w-[16px] h-[16px] rounded-full bg-card border border-border text-muted flex items-center justify-center group-hover/icon:text-orange-text group-hover/icon:border-orange">
+              <IconPencil size={9} />
+            </span>
+          </button>
+        ) : bigIcon}
         <div className="flex-1 min-w-0 flex flex-col gap-[5px]">
           {edit ? (
             <input className={vInput} value={draft.title} placeholder="记录名称" onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))} />
@@ -1167,6 +1277,14 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
           ><IconTrash size={12} />删除记录</button>
         ) : null}
       </div>
+
+      {iconPop ? (
+        <IconPickerPop
+          x={iconPop.x} y={iconPop.y} title={draft.title || "这条记录"} value={draft.icon} icons={GROUP_ICONS}
+          onClose={() => setIconPop(null)}
+          onPick={(v) => setDraft((d) => ({ ...d, icon: v }))}
+        />
+      ) : null}
 
       {addOpen ? (
         <Modal width={320} onClose={() => setAddOpen(false)}>
@@ -1432,30 +1550,95 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded, onAttRemo
     onAttRemoved(aid);
     showToast("已删除附件", { tone: "ok" });
   };
-  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    for (const f of Array.from(e.target.files || [])) {
+  // 一批文件进保险箱：文件选择框 / 拖进来 / 粘贴 三条路都汇到这里。
+  // 图片块只收 image/*（拖一个 PDF 到图片区就当没拖，不报错也不收 —— 收错地方比不收更糟）。
+  // 粘贴来的截图没有文件名（clipboard 给的是 image.png 这种占位名），补一个带时间的名字，
+  // 不然三张截图全叫 image.png，列表里分不出谁是谁。
+  const addFiles = async (list: FileList | File[]) => {
+    let n = 0;
+    for (const f of Array.from(list)) {
+      if (kind === "image" && !f.type.startsWith("image/")) continue;
       const buf = await f.arrayBuffer();
       let bin = "";
       const bytes = new Uint8Array(buf);
       for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-      const att = await api.addAttachment(vid, itemId, f.name, f.type || "application/octet-stream", btoa(bin));
+      const name = f.name && f.name !== "image.png" ? f.name : `粘贴图片 ${new Date().toLocaleString("zh-CN", { hour12: false }).replace(/\//g, "-")}.png`;
+      const att = await api.addAttachment(vid, itemId, name, f.type || "application/octet-stream", btoa(bin));
       onAttAdded(att);
+      n++;
     }
+    return n;
+  };
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    await addFiles(e.target.files || []);
     e.target.value = "";
   };
 
+  // 拖拽（验收 #1，2026-09-03）：整块附件区都是落点，只在编辑态收。
+  // dragenter/leave 成对计数 —— 子元素之间穿梭会连发 leave/enter，直接用布尔会闪。
+  const [dragDepth, setDragDepth] = useState(0);
+  const dragging = edit && dragDepth > 0;
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragDepth(0);
+    if (!edit) return;
+    void addFiles(e.dataTransfer.files).then((n) => {
+      if (n) showToast(`已添加 ${n} 个附件`, { tone: "ok" });
+      else if (kind === "image") showToast("这里只收图片", { tone: "fail" });
+    });
+  };
+
+  // 粘贴（验收 #1）：截图 ⌘V 直接进图片块。监听挂在 document 上 —— 附件区不是可聚焦
+  // 元素，paste 事件到不了它。一条记录可能同时有图片块和文件块，两个 Gallery 都在听：
+  // 靠 pasteTargets 做一次分发（图片归图片块、其余归文件块），不然一张截图会被收两遍。
+  // 选中态（sam 第二轮：粘贴前得知道贴到哪块）：编辑态的附件区可聚焦（点它任何地方，
+  // 包括缩略图和「添加」钮，焦点都落进来），聚焦 = 选中，画一圈 --focus-ring；
+  // 粘贴分发优先给选中的那块，其次才按「图片归图片块」的兜底规则。
+  const [selected, setSelected] = useState(false);
+  const selRef = useRef(false);
+  selRef.current = selected;
+  useEffect(() => {
+    if (!edit) return;
+    const target = { kind, take: (files: File[]) => addFiles(files), selected: () => selRef.current };
+    pasteTargets.add(target);
+    return () => { pasteTargets.delete(target); };
+    // addFiles 每次渲染都是新函数，但只用到 kind/vid/itemId 这几个稳定值，按它们依赖即可。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [edit, kind, vid, itemId]);
+  useEffect(() => { if (!edit) setSelected(false); }, [edit]);
+
+  // 点缩略图看大图（验收 #1）：通用 ImageViewer，把本块所有已解密的图一并交给它，
+  // 预览器里 ← → 就能在这一组里切（第二轮要求）。文件名进预览器标题。
+  const [viewer, setViewer] = useState<{ src: string; alt: string } | null>(null);
+  const viewerItems = atts.filter((aid) => urls[aid]).map((aid) => ({ src: urls[aid], alt: nameOf(aid) }));
+
   return (
-    <div className="flex flex-col gap-[9px]">
+    <div
+      tabIndex={edit ? 0 : -1}
+      className={`flex flex-col gap-[9px] rounded-[10px] outline-none transition-[box-shadow] duration-[120ms] ${
+        dragging ? "shadow-[shadow:0_0_0_2px_var(--orange)]" : selected ? "shadow-[shadow:var(--focus-ring)]" : ""}`}
+      onFocusCapture={() => { if (edit) setSelected(true); }}
+      onBlurCapture={(e) => {
+        // 焦点在本块内部挪动（缩略图 → 删除钮）不算离开；跑到外面才取消选中。
+        const next = e.relatedTarget as Node | null;
+        if (!next || !e.currentTarget.contains(next)) setSelected(false);
+      }}
+      onDragEnter={(e) => { if (!edit) return; e.preventDefault(); setDragDepth((d) => d + 1); }}
+      onDragLeave={() => { if (edit) setDragDepth((d) => Math.max(0, d - 1)); }}
+      onDragOver={(e) => { if (edit) e.preventDefault(); }}
+      onDrop={onDrop}
+    >
       {kind === "image" ? (
         <div className="flex flex-wrap gap-[9px]">
           {atts.map((aid) => (
             // 编辑态时右上角浮一颗删除钮。只在编辑态出现 —— 查看态是「看」，
             // 一颗常驻的删除钮贴在缩略图上，划过去就容易点错。
             <div key={aid} className="relative w-[120px] h-[80px] flex-none group">
-              <div
-                className="w-full h-full rounded-[10px] overflow-hidden border border-border"
+              <button
+                className="w-full h-full rounded-[10px] overflow-hidden border border-border p-0 block cursor-zoom-in"
                 style={urls[aid] ? { backgroundImage: `url(${urls[aid]})`, backgroundSize: "cover", backgroundPosition: "center" } : { background: "linear-gradient(135deg,#c7b8a3,#9a8b73)" }}
                 title={nameOf(aid)}
+                onClick={() => { if (urls[aid]) setViewer({ src: urls[aid], alt: nameOf(aid) }); }}
               />
               {edit ? (
                 <button
@@ -1490,9 +1673,11 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded, onAttRemo
       {!atts.length && !edit ? <div className="text-[12.5px] text-faint">（空）</div> : null}
       {edit ? (
         <>
-          <button className={vDash} onClick={() => fileRef.current?.click()}>
+          <button className={`${vDash} ${dragging ? "border-orange text-orange-text" : ""}`} onClick={() => fileRef.current?.click()}>
             {kind === "image" ? <IconImage size={13} /> : <IconFile size={13} />}
-            {kind === "image" ? "添加图片" : "添加文件"}
+            {dragging ? "松开就放进来"
+              : selected ? (kind === "image" ? "添加图片 · 现在 ⌘V 会贴到这里" : "添加文件 · 现在 ⌘V 会贴到这里")
+              : kind === "image" ? "添加图片 · 也可拖入或 ⌘V 粘贴" : "添加文件 · 也可拖入或 ⌘V 粘贴"}
           </button>
           <input
             ref={fileRef}
@@ -1504,6 +1689,40 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded, onAttRemo
           />
         </>
       ) : null}
+      <ImageViewer src={viewer?.src || null} alt={viewer?.alt} items={viewerItems} onClose={() => setViewer(null)} />
     </div>
   );
 }
+
+// 粘贴分发（见 Gallery 里的说明）。document 级只装一个监听器：
+// ① 有选中（聚焦）的附件块 → 全部交给它（图片块只收图片，贴了别的就提示）；
+// ② 没有选中 → 剪贴板里有图片就交给正在编辑的图片块（有多个就第一个），没有图片块才落到
+//    文件块；其余文件归文件块；
+// ③ 剪贴板里没有文件（纯文本粘贴）→ 什么都不做，让输入框正常粘贴文字。
+const pasteTargets = new Set<{ kind: "image" | "file"; take: (files: File[]) => Promise<number>; selected: () => boolean }>();
+document.addEventListener("paste", (e) => {
+  if (!pasteTargets.size) return;
+  const files = Array.from(e.clipboardData?.files || []);
+  if (!files.length) return;
+  const list = [...pasteTargets];
+  const chosen = list.find((t) => t.selected());
+  if (chosen) {
+    e.preventDefault();
+    void chosen.take(files).then((n) => {
+      if (n) showToast(`已粘贴 ${n} 个附件`, { tone: "ok" });
+      else showToast(chosen.kind === "image" ? "这里只收图片" : "剪贴板里没有可用的文件", { tone: "fail" });
+    });
+    return;
+  }
+  const images = files.filter((f) => f.type.startsWith("image/"));
+  const others = files.filter((f) => !f.type.startsWith("image/"));
+  const imgTarget = list.find((t) => t.kind === "image");
+  const fileTarget = list.find((t) => t.kind === "file");
+  let taken = false;
+  if (images.length && (imgTarget || fileTarget)) { void (imgTarget || fileTarget)!.take(images); taken = true; }
+  if (others.length && fileTarget) { void fileTarget.take(others); taken = true; }
+  if (taken) {
+    e.preventDefault();   // 消费掉了就别再让输入框把文件名当文字贴进去
+    showToast("已粘贴到附件", { tone: "ok" });
+  }
+});

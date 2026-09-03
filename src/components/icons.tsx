@@ -228,6 +228,15 @@ export function IconChevronRight(p: IconProps) {
     </svg>
   );
 }
+// 图片预览器的「上一张」。和 ChevronRight 镜像，别用 transform 翻——描边图标翻转后
+// 抗锯齿边缘会和正向那颗不一样，并排放时看得出来。
+export function IconChevronLeft(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="m14.5 5.5-6.5 6.5 6.5 6.5" />
+    </svg>
+  );
+}
 export function IconChevronDown(p: IconProps) {
   return (
     <svg {...base(p)}>

@@ -164,7 +164,18 @@ export class VaultManager {
     await this.loadMeta();
     if (!this.meta?.quickUnlockEnc) throw new Error("未启用 Touch ID");
     const { systemPreferences } = await import("electron");
-    await systemPreferences.promptTouchID("解锁密码保险箱"); // 失败会抛错
+    // 系统弹窗的失败原因是英文（"Authentication canceled." 这种），且经 IPC 到渲染层还会再
+    // 套一层 "Error invoking remote method"。在这里翻成中文；用户自己点的取消不算错误，
+    // 给一个固定标记让渲染层静默处理（验收 #2 第二轮，2026-09-03）。
+    try {
+      await systemPreferences.promptTouchID("解锁密码保险箱");
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      if (/cancel/i.test(m)) throw new Error("TOUCHID_CANCELED");
+      if (/not available|no fingers|not enrolled/i.test(m)) throw new Error("此设备当前没有可用的 Touch ID，请用主密码解锁");
+      if (/lock ?out|too many/i.test(m)) throw new Error("Touch ID 尝试次数过多已被系统锁定，请先用主密码解锁");
+      throw new Error("Touch ID 验证未通过，请重试或用主密码解锁");
+    }
     const auk = unb64(await this.decSecret(this.meta.quickUnlockEnc));
     if (verifierOf(authHash(auk, unb64(this.meta.salt))) !== this.meta.verifier) throw new Error("快速解锁校验失败，请用主密码");
     this.vaultKeys.clear(); this.vdata.clear();

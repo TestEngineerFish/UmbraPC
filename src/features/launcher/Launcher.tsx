@@ -124,7 +124,10 @@ export function Launcher() {
       ptr.current = null;
       setResults(r);
       setSel(0);
-    }, 120);
+    // 防抖从 120 压到 60：主进程那头 Spotlight 已经改成后台补充（见 launcher/index.ts
+    // searchApps），一次查询只剩内存匹配，再留 120ms 就纯粹是在等自己。
+    // 60 仍然够把一串连击合并成一次查询（连打的键间隔通常 <50ms）。
+    }, 60);
     return () => window.clearTimeout(timer.current);
   }, [q]);
 

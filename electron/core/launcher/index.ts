@@ -195,6 +195,7 @@ export class LauncherManager {
       const [w] = win.getSize();
       win.setPosition(Math.round(wa.x + (wa.width - w) / 2), Math.round(wa.y + wa.height * 0.22));
     } catch { win.center(); }
+    this.panelBounds = win.getBounds();   // 大字显示等浮层据此认「当前屏幕」（见 currentDisplay）
     this.shownAt = Date.now();
     // show()/focus() 会顺带激活整个 app，触发 main.ts 的 app.on("activate")。
     // 那个回调是给「点 Dock 图标」用的，跑到这里只会 dock.show() + 把主窗口拽到前台抢焦点。
@@ -209,6 +210,9 @@ export class LauncherManager {
   private async hide(returnFocus = false): Promise<void> {
     // 面板一收起，脚本要求的自动重查就没意义了，定时器要跟着停掉。
     if (this.rerunTimer) { clearTimeout(this.rerunTimer); this.rerunTimer = undefined; }
+    // Spotlight 结果只在一次面板会话内复用（见 spotlightLater）。
+    this.spotlightCache.clear();
+    this.spotlightSeq++;
     // 顺序要紧：先 app.hide() 再 panel.hide()。
     // 反过来的话，面板一收起 macOS 就把同一个 app 的下一个窗口（主窗口）顶到前台，
     // 等下一行 app.hide() 执行时主窗口已经画出来了 —— 肉眼就是「闪一下主窗口再一起消失」。
@@ -217,7 +221,10 @@ export class LauncherManager {
       const { app } = await import("electron");
       app.hide();
     }
-    if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) this.panel.hide();
+    if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) {
+      this.panelHiddenAt = Date.now();
+      this.panel.hide();
+    }
   }
 
   // ── 全局快捷键（只注册自身；清理由 main.ts 统一做）──
@@ -357,16 +364,54 @@ export class LauncherManager {
   //
   // 现在两条腿走路：mdfind 多字段查（拿 Spotlight 索引到的别名/包名）
   // + **直接扫应用目录**（文件名是什么就能搜到什么，中文名 100% 命中）。合并去重。
+  //
+  // ⚠️ 速度（sam 验收：打 wechat 要等 2 秒，系统搜索框却是瞬出）：
+  // 病根是这里原来 **同步等 mdfind**。Spotlight 对全盘索引做四个字段的 `*q*` 模糊查，
+  // 冷的时候几百毫秒到两秒都有，而本地目录扫描（缓存 + 内存匹配）只要几毫秒 ——
+  // 一个毫秒级的结果被一个秒级的结果拖着一起出。现在两条腿**分开走**：
+  //   · 扫描结果立刻返回（这是 99% 的命中来源，中文名 / 展示名 / 拼音都在里面）；
+  //   · Spotlight 在后台跑，回来后**只有真的补出了扫描没命中的应用**才把列表再推一次
+  //     （复用 rerun 那条 launcher:results 通道），否则什么都不动，列表不闪。
+  // 第二个慢点是图标：前 8 名原来是 for-await 串行取，首次命中的应用要各走一次
+  // createThumbnailFromPath，8 个串起来又是几百毫秒。改成并行，并在启动建索引时
+  // 就把全部应用的图标预热进缓存 —— 查询路径上不再有第一次。
   private async searchApps(q: string): Promise<LauncherResult[]> {
     if (process.platform !== "darwin" || q.length < 1) return [];
-    const [byIndex, byScan] = await Promise.all([
-      this.mdfindApps(q).catch(() => [] as string[]),
-      this.scanApps(q).catch(() => [] as string[]),
-    ]);
+    const byScan = await this.scanApps(q).catch(() => [] as string[]);
+    // 本轮面板会话里 Spotlight 已经回来过的词直接用；没有就后台去查，别让这次查询等它。
+    const cached = this.spotlightCache.get(q);
+    const byIndex = cached ?? [];
+    if (!cached) this.spotlightLater(q, byScan);
+    return this.rankApps(q, byScan, byIndex);
+  }
+
+  // Spotlight 结果缓存：查询词 → 路径列表。面板收起就清（一次会话内够用，跨会话还是要重查，
+  // 用户可能刚装了新应用）。
+  private spotlightCache = new Map<string, string[]>();
+  private spotlightSeq = 0;
+  private spotlightLater(q: string, byScan: string[]): void {
+    const seq = ++this.spotlightSeq;
+    void this.mdfindApps(q).catch(() => [] as string[]).then(async (idx) => {
+      this.spotlightCache.set(q, idx);
+      // 用户已经改词、面板已经收起、或又发起了新的 Spotlight 查询：这份结果只进缓存，不推。
+      if (seq !== this.spotlightSeq || this.lastQuery !== q) return;
+      if (!this.panel || this.panel.isDestroyed() || !this.panel.isVisible()) return;
+      // 扫描已经命中的一个不少 → Spotlight 没带来新东西，不重推（重推会让列表无谓地闪一下）。
+      const scanned = new Set(byScan);
+      if (!idx.some((p) => !scanned.has(p))) return;
+      const results = await this.queryOnce(q).catch(() => null);
+      if (!results || this.lastQuery !== q || !this.panel || this.panel.isDestroyed()) return;
+      this.panel.webContents.send("launcher:results", { q, results });
+    });
+  }
+
+  // 打分 + 截断 + 取图标。byIndex 是 Spotlight 命中的路径（可能为空），
+  // 它认的一律放行 —— 见下面 fromSpotlight 的说明。
+  private async rankApps(q: string, byScan: string[], byIndex: string[]): Promise<LauncherResult[]> {
     // 候选池要够大：以前这里直接 slice(0,6)，而 scanApps 是按「前缀优先 + 名字短优先」排的，
     // 于是打一个 s，Safari / Slack / Siri 这些短名字先把 6 个位置占满，
     // SourceTree 连进入打分环节的机会都没有 —— 「常用的软件打首字母排第一」自然永远做不到。
-    // 现在放到 40 个候选，先用模糊匹配 + 使用习惯排完序，再只给前 8 名取图标（取图标才是慢的那步）。
+    // 现在放到 40 个候选，先用模糊匹配 + 使用习惯排完序，再只给前 8 名取图标。
     const paths = [...new Set([...byScan, ...byIndex])].slice(0, 40);
 
     const ql = q.toLowerCase();
@@ -394,17 +439,28 @@ export class LauncherManager {
       || b.match - a.match
       || a.name.localeCompare(b.name));
 
-    const out: LauncherResult[] = [];
-    for (const it of scored.slice(0, 8)) {
-      let icon = "";
-      try { icon = await getAppIcon(it.p); } catch { /* 图标失败不阻塞 */ }
-      out.push({
-        id: `app:${it.p}`, title: it.name, subtitle: it.p, icon: icon || "📦", source: "app",
-        score: it.base, match: it.match,
-        action: { kind: "open_app", payload: { path: it.p } },
-      });
+    // 图标并行取（缓存命中时是同步返回，预热过之后这里基本不等）。
+    const top = scored.slice(0, 8);
+    const icons = await Promise.all(top.map((it) => getAppIcon(it.p).catch(() => "")));
+    return top.map((it, i): LauncherResult => ({
+      id: `app:${it.p}`, title: it.name, subtitle: it.p, icon: icons[i] || "📦", source: "app",
+      score: it.base, match: it.match,
+      action: { kind: "open_app", payload: { path: it.p } },
+    }));
+  }
+
+  // 图标预热：索引建好后在后台把全部应用的图标读进 getAppIcon 的缓存。
+  // 每次 4 个、批与批之间让出事件循环 —— 主进程还要响应快捷键和 IPC，别把它堵死。
+  // 同一份索引只预热一次；索引重建（5 分钟）时新出现的应用会被补上，老的直接缓存命中。
+  private iconWarmAt = 0;
+  private async prewarmIcons(paths: string[], at: number): Promise<void> {
+    if (process.platform !== "darwin" || this.iconWarmAt === at) return;
+    this.iconWarmAt = at;
+    for (let i = 0; i < paths.length; i += 4) {
+      if (this.appDirCache.at !== at) return;   // 索引又重建了，交给下一轮
+      await Promise.all(paths.slice(i, i + 4).map((p) => getAppIcon(p).catch(() => "")));
+      await new Promise((r) => setTimeout(r, 0));
     }
-    return out;
   }
 
   // Spotlight：多字段一起查（显示名 / 文件名 / 别名 / bundle id），别只押一个字段。
@@ -486,6 +542,7 @@ export class LauncherManager {
       }
     }
     this.appDirCache = { at: now, paths: found, info: await this.readAllBundleNames(found) };
+    void this.prewarmIcons(found, now);
     return found;
   }
 
@@ -757,10 +814,12 @@ export class LauncherManager {
     ipcMain.handle("largetype:rendered", () => {
       if (!this.largeWin || this.largeWin.isDestroyed()) return;
       if (this.largeBounds) this.largeWin.setBounds(this.largeBounds);
+      // 只 showInactive、不 focus：大字窗是给人**看**的，不该把焦点从用户正在用的
+      // 应用手里抢走；抢了焦点又会引出下面那串「失焦就消失」的连锁反应。
       this.largeWin.showInactive();
-      this.largeWin.focus();
+      this.armLargeEscape(true);
     });
-    ipcMain.handle("largetype:close", () => { if (this.largeWin && !this.largeWin.isDestroyed()) this.largeWin.hide(); });
+    ipcMain.handle("largetype:close", () => this.hideLargeType());
     // 文本视图浮层：同样是「渲染层 ready 索取内容 → 画好回调 rendered → 主进程才显示」，避免闪出上次内容。
     ipcMain.handle("textview:ready", () => this.pendingText);
     ipcMain.handle("textview:rendered", () => {
@@ -802,34 +861,94 @@ export class LauncherManager {
     this.wfWin = win;
   }
 
-  // 大字显示：全屏透明浮层，居中放大显示内容（点击/Esc 关闭）。
+  // 大字显示：全屏透明浮层，居中放大显示内容，**常驻到 Esc 或点击为止**。
   // 窗口先隐藏，渲染层把新内容画好后回调 largetype:rendered 再显示，避免先闪出上次内容。
+  //
+  // ⚠️ 两个验收实锤（sam，2026-09-03）：「触发时跳到别的屏幕」「过一会儿自己消失」。
+  // 病根是同一个：这个窗原来 focus() 抢焦点 + 监听 blur 自动收起。工作流从快捷入口
+  // 触发时面板随即收起，macOS 就把本 app 的下一个窗口（主窗口）顶到前台 —— 主窗口在
+  // 哪个 Space/屏幕，画面就切到哪（「跳屏」）；主窗口一到前台大字窗就失焦（「消失」）。
+  // 现在：① 窗口是**非激活面板**（type: panel + focusable: false），显示、点击都不会
+  // 把本 app 激活，用户正在用的应用一直握着焦点，Space 不会切；② 不再监听 blur；
+  // ③ Esc 走**全局快捷键**（只在可见期间注册，收起即注销 —— 窗口不拿焦点，键盘事件
+  // 到不了它，只能这么接）；④ 点击浮层任意处关闭（渲染层的 click → largetype:close）。
+  //
+  // 「先闪一下上次的内容再换成这次的」（sam 第二轮）：hide 只是把窗口藏起来，DOM 里还是
+  // 上次的字；再显示时 macOS 会先把旧的那帧合成上去，新帧要等渲染层下一次绘制。
+  // 两头一起堵：收起时就让渲染层把内容清空（largetype:clear，见 hideLargeType），
+  // 渲染层画完新内容后等两帧 rAF 再回调 rendered（见 largetype-entry.ts）—— 显示的那一刻
+  // 屏幕上一定是这次的字，最坏也只是空白，不会是上次的。
   async showLargeType(text: string): Promise<void> {
     const t = (text || "").trim();
     if (!t) return;
-    this.pendingLarge = t;
     const { BrowserWindow, screen } = await import("electron");
-    this.largeBounds = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+    // 上次的窗还开着 → 先收（顺带清空内容），再当新的一次显示。
+    if (this.largeWin && !this.largeWin.isDestroyed() && this.largeWin.isVisible()) this.hideLargeType();
+    this.pendingLarge = t;
+    this.largeBounds = this.currentDisplay(screen).workArea;
     if (!this.largeWin || this.largeWin.isDestroyed()) {
       const win = new BrowserWindow({
         x: this.largeBounds.x, y: this.largeBounds.y, width: this.largeBounds.width, height: this.largeBounds.height,
         frame: false, transparent: true, resizable: false, movable: false,
         skipTaskbar: true, show: false, fullscreenable: false, hasShadow: false,
+        // macOS：NSPanel + 非激活掩码。点它不会激活本 app、不会把主窗口拽到前台。
+        // focusable:false 让 showInactive 也不可能被系统顺手给焦点；acceptFirstMouse
+        // 让「第一下点击」直接算点击（否则非激活窗的第一下会被吃成激活动作）。
+        type: process.platform === "darwin" ? "panel" : undefined,
+        focusable: false,
+        acceptFirstMouse: true,
         backgroundColor: "#00000000",
-        webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
+        // backgroundThrottling:false —— 这个窗大部分时间藏着，渲染层要在**藏着的时候**把
+        // 新内容画好再显示（见 largetype-entry.ts 的两帧 rAF）；节流一开，隐藏页的 rAF
+        // 根本不跑，窗口就永远等不到 rendered。
+        webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
       });
       win.setAlwaysOnTop(true, "screen-saver");
       win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-      win.on("blur", () => { if (this.largeWin && !this.largeWin.isDestroyed()) this.largeWin.hide(); });
-      win.webContents.on("before-input-event", (_e, input) => { if (input.type === "keyDown" && input.key === "Escape") win.hide(); });
       if (this.opts.devUrl) win.loadURL(`${this.opts.devUrl}/largetype.html`).catch(() => {});
       else win.loadFile(path.join(this.opts.distDir, "largetype.html")).catch(() => {});
       win.webContents.on("did-finish-load", () => win.webContents.send("largetype:text", this.pendingLarge));
+      win.on("closed", () => { this.armLargeEscape(false); this.largeWin = null; });
       this.largeWin = win;
     } else {
-      if (this.largeWin.isVisible()) this.largeWin.hide();  // 先藏起旧内容，等渲染完再显
       this.largeWin.webContents.send("largetype:text", this.pendingLarge);
     }
+  }
+
+  // 收起：注销 Esc、藏窗、清空待显示文本，并让渲染层把 DOM 里的字也清掉（见 showLargeType 的说明）。
+  private hideLargeType(): void {
+    this.armLargeEscape(false);
+    this.pendingLarge = "";
+    if (!this.largeWin || this.largeWin.isDestroyed()) return;
+    if (this.largeWin.isVisible()) this.largeWin.hide();
+    this.largeWin.webContents.send("largetype:clear");
+  }
+
+  // 大字窗可见期间接管 Esc。全局快捷键是系统级的，注册着就会把别的应用的 Esc 也吃掉，
+  // 所以必须「显示才注册、收起立刻注销」，一刻都不能多占。
+  private largeEscArmed = false;
+  private armLargeEscape(on: boolean): void {
+    if (on === this.largeEscArmed) return;
+    this.largeEscArmed = on;
+    void import("electron").then(({ globalShortcut }) => {
+      try {
+        if (on) globalShortcut.register("Escape", () => this.hideLargeType());
+        else globalShortcut.unregister("Escape");
+      } catch { /* 注册不上就只剩点击关闭，不影响显示 */ }
+    });
+  }
+
+  // 「当前屏幕」：快捷入口面板开着、或**刚刚**才收起（工作流是 showLargeType 与
+  // hide 紧挨着调的，等 import 回来时面板已经藏了）就用面板所在的屏 —— 用户正对着它
+  // 敲的回车；否则用鼠标所在的屏，和面板唤起时的定位规则一致。
+  private panelBounds: Electron.Rectangle | null = null;
+  private panelHiddenAt = 0;
+  private currentDisplay(screen: Electron.Screen): Electron.Display {
+    const visible = !!this.panel && !this.panel.isDestroyed() && this.panel.isVisible();
+    if (this.panelBounds && (visible || Date.now() - this.panelHiddenAt < 1500)) {
+      try { return screen.getDisplayMatching(this.panelBounds); } catch { /* 回落到鼠标 */ }
+    }
+    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   }
 
   // 文本视图：居中浮层，用来摊开长文/Markdown（大字显示放不下的场景），也是「问秘书」的等待与展示界面。

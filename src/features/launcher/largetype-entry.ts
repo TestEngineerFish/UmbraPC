@@ -1,5 +1,9 @@
 // 大字显示浮层：把内容放大居中显示在半透明浮层里；自动适配字号，超长可滚动；点击/Esc 关闭。
-interface LargeAPI { ready(): Promise<string>; rendered(): Promise<void>; close(): Promise<void>; onText(cb: (t: string) => void): () => void }
+interface LargeAPI {
+  ready(): Promise<string>; rendered(): Promise<void>; close(): Promise<void>;
+  onText(cb: (t: string) => void): () => void;
+  onClear(cb: () => void): () => void;
+}
 const api = (window as unknown as { umbraLarge: LargeAPI }).umbraLarge;
 
 const style = document.createElement("style");
@@ -33,9 +37,23 @@ function fit(): void {
   txt.style.fontSize = Math.floor(best) + "px";
 }
 
-function show(text: string): void { txt.textContent = text || ""; fit(); void api.rendered(); }
+// 画好之后**等两帧**再告诉主进程可以显示了：textContent 一改 DOM 就更新，但合成器
+// 手里那帧还是旧的（或者空的）。第一帧 rAF 排布局，第二帧才是真的画上去 ——
+// 主进程在这之前 show 窗口，屏幕上先出现的就是上次的字（sam 第二轮实锤）。
+// 窗口此刻是藏着的，rAF 在不可见页面上可能不跑（主进程已把这个窗设成不节流，但仍给一条
+// 60ms 的保底定时器，谁先到谁算 —— 宁可偶尔多等一帧，也不能让窗永远不显示）。
+function show(text: string): void {
+  txt.textContent = text || "";
+  fit();
+  let done = false;
+  const fire = () => { if (done) return; done = true; void api.rendered(); };
+  requestAnimationFrame(() => requestAnimationFrame(fire));
+  setTimeout(fire, 60);
+}
 
 api.onText(show);
+// 收起时清空：下次显示前 DOM 里不留上次的字，最坏也只闪一下空白。
+api.onClear(() => { txt.textContent = ""; });
 void api.ready().then((t) => { if (t) show(t); });
 window.addEventListener("resize", fit);
 window.addEventListener("keydown", (e) => { if (e.key === "Escape") void api.close(); });

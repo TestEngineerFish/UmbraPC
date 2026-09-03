@@ -20,6 +20,7 @@ import {
 import { Modal, ErrorCard, btn } from "../../components/ui";
 import { askConfirm, showToast } from "../../components/overlay";
 import { DateTimeField } from "../../components/DateTimePicker";
+import { ImageViewer } from "../../components/ImageViewer";
 // 日期换算（ms ↔ 'YYYY-MM-DD'/'HH:mm'）的唯一出处在 notify/reminderKit（纯函数层，带 vitest），
 // 跨功能引用刻意为之 —— 再抄一份就会两处漂移。
 import { combineDateTime, toDateInput, toTimeInput } from "../notify/reminderKit";
@@ -63,6 +64,12 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
   const [uploading, setUploading] = useState(false);
   const amountRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // 图片预览：通用 ImageViewer，已挂接的 + 待上传的合成一组，预览器里可以左右切。
+  const [viewer, setViewer] = useState<string | null>(null);
+  const viewerItems = [
+    ...atts.map((a) => ({ src: fileUrl(a.file_id), alt: a.origin ? t("money.attOrigin") : a.label })),
+    ...pending.map((p) => ({ src: p.url, alt: p.file.name })),
+  ];
 
   useEffect(() => { amountRef.current?.focus(); }, []);
 
@@ -333,10 +340,13 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
         <div className="flex flex-wrap gap-[8px]">
           {atts.map((a) => (
             <div key={a.file_id} className="relative flex-none w-[72px] h-[72px] rounded-[9px] border border-border bg-chip overflow-hidden">
-              <a href={fileUrl(a.file_id)} target="_blank" rel="noreferrer"
-                title={a.origin ? t("money.attOrigin") : a.label}>
+              {/* 原来是 <a target=_blank> 在新窗口开原图 —— 现在和提醒 / 保险箱一样走通用
+                  ImageViewer（sam 第二轮：图片预览要一个通用弹框，能左右切）。 */}
+              <button className="w-full h-full p-0 block bg-transparent border-none cursor-zoom-in"
+                title={a.origin ? t("money.attOrigin") : a.label}
+                onClick={() => setViewer(fileUrl(a.file_id))}>
                 <img src={fileUrl(a.file_id)} alt={a.label} className="w-full h-full object-cover" />
-              </a>
+              </button>
               <div className="absolute left-0 right-0 bottom-0 px-[5px] py-[2px] bg-[rgba(11,10,9,.62)] text-white text-[10px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis">
                 {a.origin ? t("money.attOrigin") : (a.label || t("money.attImage"))}
               </div>
@@ -363,7 +373,9 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
           ))}
           {pending.map((p) => (
             <div key={p.key} className="relative flex-none w-[72px] h-[72px] rounded-[9px] border border-border bg-chip overflow-hidden">
-              <img src={p.url} alt={p.file.name} className="w-full h-full object-cover" />
+              <button className="w-full h-full p-0 block bg-transparent border-none cursor-zoom-in" title={p.file.name} onClick={() => setViewer(p.url)}>
+                <img src={p.url} alt={p.file.name} className="w-full h-full object-cover" />
+              </button>
               <div className="absolute left-0 right-0 bottom-0 px-[5px] py-[2px] bg-[rgba(11,10,9,.62)] text-white text-[10px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis">
                 {p.file.name}
               </div>
@@ -388,6 +400,7 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
         <input ref={fileRef} type="file" accept="image/*" multiple className="hidden"
           onChange={(e) => { if (e.target.files) takeFiles(e.target.files); e.target.value = ""; }} />
       </div>
+      <ImageViewer src={viewer} items={viewerItems} onClose={() => setViewer(null)} />
     </Modal>
   );
 }

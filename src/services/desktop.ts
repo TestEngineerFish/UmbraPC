@@ -59,6 +59,8 @@ interface UmbraBridge {
   openPrivacy(target: string): Promise<unknown>;
   setLoginItem(on: boolean): Promise<boolean>;
   openPath(path: string): Promise<string>;
+  // 按网址取图（通用图标选择器的「填网址」入口）。取不到图片会退回该站 favicon；都没有 → ok:false。
+  fetchImage(url: string): Promise<{ ok: boolean; dataUrl?: string; error?: string }>;
   listDir(path: string, limit?: number): Promise<{ items: DirEntry[]; total: number }>;
   computerStop(): Promise<unknown>;
   pauseShortcuts(): Promise<void>;

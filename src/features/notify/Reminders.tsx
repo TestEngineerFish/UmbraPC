@@ -586,7 +586,12 @@ function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onFail, o
           </div>
         </Row>
       </div>
-      <ImageViewer src={viewer?.src || null} alt={viewer?.alt} onClose={() => setViewer(null)} />
+      {/* 已存的 + 待上传的合成一组交给预览器，里面可以 ← → 切（通用预览器，第三轮验收）。 */}
+      <ImageViewer src={viewer?.src || null} alt={viewer?.alt} onClose={() => setViewer(null)}
+        items={[
+          ...(value.atts || []).map((a) => ({ src: fileUrl(a.fileId), alt: a.label || "图片" })),
+          ...pending.map((p) => ({ src: p.url, alt: p.file.name })),
+        ]} />
     </Modal>
   );
 }
