@@ -202,6 +202,12 @@ contextBridge.exposeInMainWorld("umbraVault", {
     ipcRenderer.on("vault:syncState", l);
     return () => ipcRenderer.removeListener("vault:syncState", l);
   },
+  // 「主动打开保险箱窗口」事件（复用已开窗口时）：锁定页据此允许自动弹一次 Touch ID。
+  onOpened: (cb: () => void) => {
+    const l = () => cb();
+    ipcRenderer.on("vault:opened", l);
+    return () => ipcRenderer.removeListener("vault:opened", l);
+  },
   setShortcut: (acc: string) => ipcRenderer.invoke("vault:setShortcut", acc),
   exportBackup: () => ipcRenderer.invoke("vault:exportBackup"),
   exportPlain: () => ipcRenderer.invoke("vault:exportPlain"),

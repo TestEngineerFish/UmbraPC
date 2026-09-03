@@ -56,6 +56,29 @@ export async function writeToClipboard(it: ClipItem): Promise<void> {
   clipboard.writeText(it.content);
 }
 
+// ── System Events 保活（2026-09-03 验收第四轮，sam：工作流热键要等 2~3 秒）─────
+//
+// simulateCopy / simulatePaste / 工作流的前台应用查询全走 osascript 的
+// "System Events"。这个系统进程**空闲几分钟就自动退出**，下一次 AppleEvent 得先把它
+// 冷启动起来 —— 实测一次 keystroke 冷的时候 1~2 秒，这就是「热键按下去等半天」的大头
+// （剩下的是 osascript 进程本身 ~0.2s，省不掉）。
+// 保活：每 4 分钟发一个最便宜的查询（count processes，不需要辅助功能授权），
+// 让它一直热着。代价是每 4 分钟一次 ~10ms 的系统调用，可忽略。
+// 失败静默 —— 保活挂了只是回到「第一下慢」，不是故障。
+let seAliveTimer: NodeJS.Timeout | undefined;
+export function keepSystemEventsAlive(): void {
+  if (process.platform !== "darwin" || seAliveTimer) return;
+  const ping = () => {
+    try {
+      execFile("osascript", ["-e", 'tell application "System Events" to count processes'],
+        { timeout: 5000 }, () => { /* 结果不重要，把它叫醒就行 */ });
+    } catch { /* 静默 */ }
+  };
+  ping();
+  seAliveTimer = setInterval(ping, 4 * 60_000);
+  seAliveTimer.unref?.();   // 别拦着进程退出
+}
+
 // 模拟 Cmd/Ctrl+C（W4 Universal Action）：让前台应用把当前选中的东西写进剪贴板。
 // 和 simulatePaste 一样依赖辅助功能授权，未授权/非 mac/win 一律返回 false，由调用方决定怎么兜底。
 export async function simulateCopy(): Promise<boolean> {

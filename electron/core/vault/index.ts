@@ -107,7 +107,13 @@ export class VaultManager {
   // 独立窗口（带原生标题栏）。关闭时锁定（清内存密钥）。
   async openWindow(): Promise<void> {
     const { BrowserWindow } = await import("electron");
-    if (this.win && !this.win.isDestroyed()) { this.win.show(); this.win.focus(); return; }
+    if (this.win && !this.win.isDestroyed()) {
+      this.win.show(); this.win.focus();
+      // 告诉渲染层「这是一次主动进入」：锁定页收到后允许自动弹一次 Touch ID。
+      // 只有复用已开窗口才需要发 —— 新建窗口的首次挂载本身就是主动进入（渲染层默认）。
+      this.win.webContents.send("vault:opened");
+      return;
+    }
     const win = new BrowserWindow({
       width: 1080, height: 720, minWidth: 900, minHeight: 600, title: "密码保险箱",
       backgroundColor: "#15110E",

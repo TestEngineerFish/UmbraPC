@@ -2422,10 +2422,11 @@ export class WorkflowEngine {
     const before = `${prevText}\u0000${readClipboardFiles(clipboard).join("\u0000")}`;
 
     if (!(await simulateCopy())) return { text: "", files: [] };   // 没授权/不支持 → 抓不到
-    // 等前台应用真的把选区写进剪贴板，最多等 600ms（每 60ms 看一眼）。
+    // 等前台应用真的把选区写进剪贴板，最多等 600ms（每 40ms 看一眼 ——
+    // 大多数应用 <100ms 就写好了，密一点平均能早 20-30ms 拿到；上限不变）。
     let text = "", files: string[] = [];
-    for (let i = 0; i < 10; i++) {
-      await new Promise((r) => setTimeout(r, 60));
+    for (let i = 0; i < 15; i++) {
+      await new Promise((r) => setTimeout(r, 40));
       const t = clipboard.readText(), f = readClipboardFiles(clipboard);
       if (`${t}\u0000${f.join("\u0000")}` !== before) { text = t; files = f; break; }
     }

@@ -44,6 +44,7 @@ interface VaultAPI {
   copy(text: string): Promise<void>;
   syncNow(): Promise<{ ok: boolean; rev: number; pulled: boolean }>;
   onSyncState(cb: (s: { syncing: boolean; lastAt: number; lastError: string; pulled: boolean }) => void): () => void;
+  onOpened(cb: () => void): () => void;
   exportBackup(): Promise<{ ok: boolean; path?: string }>;
   exportPlain(): Promise<{ ok: boolean; path?: string }>;
   importPick(): Promise<{ ok: boolean; needPassword: boolean }>;
@@ -276,7 +277,21 @@ export function VaultApp({ embedded = false }: { embedded?: boolean }) {
   const [ready, setReady] = useState(false);
   const [st, setSt] = useState<VStatus>({ exists: false, unlocked: false, autoLockMin: 10, quickUnlock: false, biometric: false, shortcut: "", syncConfigured: false, syncRev: 0, syncing: false, syncAt: 0, syncError: "" });
   useEffect(() => { void api.status().then((s) => { setSt(s); setReady(true); }); }, []);
-  const refresh = useCallback(async () => setSt(await api.status()), []);
+  // 自动弹 Touch ID 的门票（验收第四轮：**只有主动进入才弹**）。>0 = 锁定页可以自动弹
+  // 一次（值变一次弹一次）；0 = 不弹（自动锁定 / 点「锁定」后出现的锁定页，指纹弹框
+  // 抢焦点，用户可能根本不在这个窗口上）。首次挂载 = 主动打开窗口，给一张票。
+  const [bioTok, setBioTok] = useState(() => Date.now());
+  const wasUnlocked = useRef(false);
+  const refresh = useCallback(async () => {
+    const s = await api.status();
+    // 解锁 → 锁定的翻转发生在 refresh 里 = 不是用户主动打开（主动打开走 vault:opened /
+    // 首次挂载），多半是自动锁定或别处收走了会话：收掉门票。
+    if (wasUnlocked.current && !s.unlocked) setBioTok(0);
+    wasUnlocked.current = s.unlocked;
+    setSt(s);
+  }, []);
+  // 复用已开窗口再次「打开保险箱」= 又一次主动进入，重新发票。
+  useEffect(() => api.onOpened(() => setBioTok(Date.now())), []);
   // 独立窗口时跟随主窗口的主题：storage 事件负责实时跟随，focus 兜底一次
   // （窗口被隐藏期间浏览器可能压掉事件）。嵌入主窗口时整棵树继承外层的 data-theme，什么都不用做。
   useEffect(() => {
@@ -304,8 +319,8 @@ export function VaultApp({ embedded = false }: { embedded?: boolean }) {
     >
       <style>{CSS}</style>
       {!ready ? null : !st.exists ? <Setup onDone={refresh} />
-        : !st.unlocked ? <Unlock onDone={refresh} st={st} />
-          : <Main onLock={async () => { await api.lock(); await refresh(); }} st={st} onStatus={refresh} embedded={embedded} />}
+        : !st.unlocked ? <Unlock onDone={refresh} st={st} promptToken={bioTok} />
+          : <Main onLock={async () => { setBioTok(0); await api.lock(); await refresh(); }} st={st} onStatus={refresh} embedded={embedded} />}
     </div>
   );
 }
@@ -451,7 +466,7 @@ function Setup({ onDone }: { onDone: () => Promise<void> }) {
 }
 
 // 解锁态。支持三条路：Touch ID（进入即自动尝试一次）、主密码、换新设备时的主密码 + Secret Key。
-function Unlock({ onDone, st }: { onDone: () => Promise<void>; st: VStatus }) {
+function Unlock({ onDone, st, promptToken }: { onDone: () => Promise<void>; st: VStatus; promptToken: number }) {
   const [mp, setMp] = useState("");
   const [sk, setSk] = useState("");
   const [useSk, setUseSk] = useState(false);
@@ -487,7 +502,11 @@ function Unlock({ onDone, st }: { onDone: () => Promise<void>; st: VStatus }) {
       setErr(m || "Touch ID 未通过");
     }
   };
-  useEffect(() => { if (canBio) void touchId(); /* 进入即尝试 Touch ID */ }, []); // eslint-disable-line
+  // 自动弹 Touch ID 只认「主动进入」的门票（promptToken > 0，一票一弹）：
+  // 首次打开窗口、锁定态下再按快捷键/入口打开，都会给票；
+  // 自动锁定或点右上角「锁定」出现的锁定页没有票 —— 系统指纹弹框会抢焦点，
+  // 那两个时刻用户很可能根本不在这个窗口上（验收第四轮）。按钮手动弹不受影响。
+  useEffect(() => { if (promptToken > 0 && canBio) void touchId(); }, [promptToken]); // eslint-disable-line
 
   return (
     <Center>

@@ -6,7 +6,7 @@ import * as path from "node:path";
 import { promises as fs } from "node:fs";
 import { ConfigStore, expandHome, LauncherFolder, LauncherScript, Phrase, Workflow, WorkflowPrefab } from "../config";
 import { PhraseSync, collectTombs, stampUpdated } from "./phrases-sync";
-import { simulatePaste } from "../clipboard/paste";
+import { keepSystemEventsAlive, simulatePaste } from "../clipboard/paste";
 import { getAppIcon } from "../clipboard/source-app";
 import { run } from "../shared/util";
 import { suppressAppActivate } from "../activation";
@@ -62,7 +62,6 @@ interface ManagerOpts {
 
 export class LauncherManager {
   private panel: Electron.BrowserWindow | null = null;
-  private appWasActive = false;
   private shownAt = 0;  // 唤起时刻：刚弹出瞬间的失焦（主窗口被激活抢焦）要忽略，避免立刻收起/来回切换
   private cache = new Map<string, LauncherResult>();  // 本次查询结果，供 run 回查
   private lastQuery = "";                              // 本次查询词，供 run 记录使用频率
@@ -114,6 +113,9 @@ export class LauncherManager {
     try { await this.ensurePanel(); } catch { /* 预热失败不影响后续按需创建 */ }
     // 应用目录 + 包内名字索引也提前建好（要读几百个 Info.plist，别摊到第一次搜索上）。
     void this.listAppDirs().catch(() => { /* 建不起来就退回按文件名搜 */ });
+    // System Events 保活：工作流热键的选区抓取 / 前台查询、常用语的模拟粘贴都走它，
+    // 冷启动 1~2 秒是「热键慢」的大头（见 paste.ts 的说明）。
+    keepSystemEventsAlive();
     // 常用语云端同步：启动拉一次，之后按周期拉；本地改动由 setPhrases 触发推送。
     this.phraseSync.start();
     // 全局快捷键由 main.ts 统一注册（见 registerShortcut）。
@@ -156,6 +158,14 @@ export class LauncherManager {
       show: false,
       fullscreenable: false,
       hasShadow: false,      // 阴影交给内部卡片画，避免透明窗留一圈方角暗影
+      // ⚠️ 非激活面板（NSPanel，Alfred / Spotlight 的做法，2026-09-03 验收第四轮）：
+      // 面板要接键盘输入（做 key window）但**不激活本 app**。原来是普通窗口，
+      // 拿焦点 = 激活整个 app —— 被别的软件盖住的主窗口会被 macOS 一并带到本 app
+      // 最前，Esc 收面板的瞬间主窗口闪到屏幕最上层再沉回去（sam 实锤的那个闪现）；
+      // 工作流触发大字显示时主窗口跑到最前，也是同一条根。panel 化之后 app 从头到尾
+      // 没被激活，主窗口在哪层就呆在哪层，焦点用完自动还给原应用（粘贴常用语
+      // 也因此更稳 —— 不再依赖 app.hide() 把焦点交还）。
+      type: process.platform === "darwin" ? "panel" : undefined,
       backgroundColor: "#00000000",
       webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
     });
@@ -185,8 +195,7 @@ export class LauncherManager {
   // prefill：唤起时预先填进搜索框的内容（Hotkey 节点的「打开快捷入口」用）。
   // 不传就是普通唤起（搜索框清空）。
   private async show(prefill?: { q: string; caret?: "left" | "right" }): Promise<void> {
-    const { BrowserWindow, screen } = await import("electron");
-    this.appWasActive = BrowserWindow.getAllWindows().some((w) => !w.isDestroyed() && w.isFocused());
+    const { screen } = await import("electron");
     const win = await this.ensurePanel();
     // 每次唤起都居中到光标所在屏幕上方 1/3（Alfred 风格）。
     try {
@@ -207,20 +216,15 @@ export class LauncherManager {
     win.webContents.send("launcher:shown", prefill || null);
   }
 
-  private async hide(returnFocus = false): Promise<void> {
+  // returnFocus 参数保留但已无实际分支（历史：普通窗口时代靠 app.hide() 还焦点）。
+  // panel 化（见 ensurePanel）后 app 从未被激活，焦点天然一直在原应用手里 ——
+  // 原来那段「先 app.hide() 再 panel.hide()」的顺序舞蹈连同它治的闪烁一起消失了。
+  private async hide(_returnFocus = false): Promise<void> {
     // 面板一收起，脚本要求的自动重查就没意义了，定时器要跟着停掉。
     if (this.rerunTimer) { clearTimeout(this.rerunTimer); this.rerunTimer = undefined; }
     // Spotlight 结果只在一次面板会话内复用（见 spotlightLater）。
     this.spotlightCache.clear();
     this.spotlightSeq++;
-    // 顺序要紧：先 app.hide() 再 panel.hide()。
-    // 反过来的话，面板一收起 macOS 就把同一个 app 的下一个窗口（主窗口）顶到前台，
-    // 等下一行 app.hide() 执行时主窗口已经画出来了 —— 肉眼就是「闪一下主窗口再一起消失」。
-    // 整体先隐藏就没有这个中间态；panel.hide() 仍要补一刀，否则 app 再被唤起时面板会跟着回来。
-    if (returnFocus && !this.appWasActive && process.platform === "darwin") {
-      const { app } = await import("electron");
-      app.hide();
-    }
     if (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) {
       this.panelHiddenAt = Date.now();
       this.panel.hide();
@@ -450,16 +454,24 @@ export class LauncherManager {
   }
 
   // 图标预热：索引建好后在后台把全部应用的图标读进 getAppIcon 的缓存。
-  // 每次 4 个、批与批之间让出事件循环 —— 主进程还要响应快捷键和 IPC，别把它堵死。
-  // 同一份索引只预热一次；索引重建（5 分钟）时新出现的应用会被补上，老的直接缓存命中。
+  //
+  // ⚠️ 第一版是每批 4 个、批间 setTimeout(0) —— 实机翻车（sam：唤起有时要 1 秒）：
+  // createThumbnailFromPath 每个要几十毫秒的主进程侧开销，几百个应用连着跑，
+  // 事件循环被塞满，**全局快捷键的回调都得排队** —— 唤起慢、工作流热键慢，全是它。
+  // 现在：开跑前先歇 15s（避开启动高峰）、每批 3 个、批间 150ms，且面板可见时暂停
+  // （用户正在用，一个毫秒都别跟他抢）。预热慢点无所谓 —— 没预热到的图标只是第一次
+  // 搜到时现取一次。同一份索引只预热一次；索引重建（5 分钟）时补新增的。
   private iconWarmAt = 0;
   private async prewarmIcons(paths: string[], at: number): Promise<void> {
     if (process.platform !== "darwin" || this.iconWarmAt === at) return;
     this.iconWarmAt = at;
-    for (let i = 0; i < paths.length; i += 4) {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    await sleep(15_000);
+    for (let i = 0; i < paths.length; i += 3) {
       if (this.appDirCache.at !== at) return;   // 索引又重建了，交给下一轮
-      await Promise.all(paths.slice(i, i + 4).map((p) => getAppIcon(p).catch(() => "")));
-      await new Promise((r) => setTimeout(r, 0));
+      while (this.panel && !this.panel.isDestroyed() && this.panel.isVisible()) await sleep(500);
+      await Promise.all(paths.slice(i, i + 3).map((p) => getAppIcon(p).catch(() => "")));
+      await sleep(150);
     }
   }
 
@@ -1023,6 +1035,9 @@ export class LauncherManager {
         x: this.textBounds.x, y: this.textBounds.y, width: w, height: h,
         frame: false, transparent: true, resizable: false,
         skipTaskbar: true, show: false, fullscreenable: false, hasShadow: false,
+        // 同快捷入口面板：非激活 panel，focus 拿键盘（Esc / 滚动）但不激活 app，
+        // 不把被盖住的主窗口带到最前（2026-09-03 第四轮，同一条根）。
+        type: process.platform === "darwin" ? "panel" : undefined,
         backgroundColor: "#00000000",
         webPreferences: { preload: this.opts.preloadPath, contextIsolation: true, nodeIntegration: false },
       });
