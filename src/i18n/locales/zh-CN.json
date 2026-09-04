@@ -557,7 +557,10 @@
     "countLine": "共 {{n}} 条 · {{open}} 条待办",
     "allTags": "全部标签",
     "noResult": "这些筛选条件下没有灵感",
-    "clearFilter": "清掉筛选"
+    "clearFilter": "清掉筛选",
+    "attsLabel": "配图",
+    "attsCount": "{{n}} 张",
+    "attSaveFailed": "没存上：这张图读不出来"
   },
   "abilities": {
     "title": "能力",
@@ -806,8 +809,15 @@
     "visionFailManual": "手动填一笔",
     "visionFailRetry": "换一张图",
     "quoteImgCount": "{{n}} 张图片",
-    "vcardStale": "这张卡已失效，可能已在别的端处理",
-    "vcardTimeout": "服务端没有响应，稍后看记账页有没有这一笔"
+    "vcardStale": "这张卡失效了",
+    "vcardElsewhere": "这笔已经记好了",
+    "vcardElsewhereWhere": "在别的设备上",
+    "vcardStaleWhy": "等了 20 秒没等到回执，不确定这笔有没有记上。",
+    "vcardSeeEntry": "看这笔记录",
+    "vcardSeeList": "去流水里看",
+    "vcardStaleWhyManual": "另一台设备把这张卡改成手动填了。",
+    "vcardManualNow": "手动记一笔",
+    "vcardDup": "那边也记上了这一笔，检查一下有没有记重"
   },
   "clipboard": {
     "searchPh": "搜索剪贴板…",
@@ -1206,7 +1216,8 @@
     "recManage": "管理周期记账",
     "monthOnly": "{{m}} 月",
     "attAfterSave": "保存后挂上",
-    "attAttachFailed": "「{{name}}」没挂到这笔账上"
+    "attAttachFailed": "「{{name}}」没挂到这笔账上",
+    "focusOtherMonth": "这笔在 {{m}} 月，当前只显示这个月的流水"
   },
   "layout": {
     "settings": "设置",

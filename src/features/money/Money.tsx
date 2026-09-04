@@ -58,9 +58,46 @@ function takePendingDraft(): MoneyDraft | null {
   return d;
 }
 
+/** 跳到记账页时要定位的一笔流水。entryId 为空 = 只要求落到流水视图，不定位具体某一行。
+ *  ym：那笔账属于哪个月（识图记账的日期取自票据，拍上个月的票就落在上个月）。记账页只加载当月，
+ *  不是当月就定位不到 —— 那时说一句「这笔在 X 月」，别让出口静默。 */
+export interface MoneyFocus {
+  entryId?: string;
+  ym?: string;
+}
+// 与 pendingDraft 同一套「先记目标再切一级导航」：Money 是路由式挂载的，值取一次就清 ——
+// 否则下次手点进记账还会莫名其妙闪一行。
+let pendingFocus: MoneyFocus | null = null;
+/** 从别处跳到记账页的流水视图，可带一笔要定位的流水（批次 013 回执裁定 3：失效卡的出口 ——
+ *  「看这笔记录」带 entry_id、「去流水里看」不带）。 */
+export function gotoMoneyList(focus?: { entryId?: string; ym?: string }): void {
+  pendingFocus = { entryId: focus?.entryId, ym: focus?.ym };
+  legacy.goNav("money");
+}
+function takePendingFocus(): MoneyFocus | null {
+  const f = pendingFocus;
+  pendingFocus = null;
+  return f;
+}
+
 export function Money() {
   const { t } = useTranslation();
-  const [view, setView] = useState<"stats" | "list">("stats");
+  /** 从别处跳来的定位（见 gotoMoneyList）：挂载时取一次，取到就直接落流水视图。 */
+  const [focus] = useState<MoneyFocus | null>(() => takePendingFocus());
+  const [view, setView] = useState<"stats" | "list">(focus ? "list" : "stats");
+  /** 要闪一下的那一行（交给 MoneyListView）。用户一旦自己切视图就清掉 ——
+   *  切走再切回来 MoneyListView 会重挂，不清的话同一笔会再闪一遍。 */
+  const [focusId, setFocusId] = useState<string | null>(focus?.entryId || null);
+  const switchView = (v: "stats" | "list") => { setFocusId(null); setView(v); };
+  // 要定位的那笔不在当月：记账页只加载当月，定位不到 —— 说一句它在哪个月，别让那颗钮点了没反应。
+  useEffect(() => {
+    if (!focus?.ym) return;
+    const cur = ymOf(new Date());
+    if (focus.ym === cur) return;
+    setFocusId(null);
+    showToast(t("money.focusOtherMonth", { m: Number(focus.ym.slice(5)) }), { tone: "warn" });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus]);
   const [phase, setPhase] = useState<Phase>("loading");
   const [ym, setYm] = useState(ymOf(new Date()));
   const [cats, setCats] = useState<MoneyCat[]>([]);
@@ -155,7 +192,7 @@ export function Money() {
           onClick: () => setRecurOpen(""),
         }],
         secondRow: (<>
-          <Segmented<"stats" | "list"> value={view} onChange={setView} options={[
+          <Segmented<"stats" | "list"> value={view} onChange={switchView} options={[
             { v: "stats", label: t("money.tabStats") },
             { v: "list", label: t("money.tabList") },
           ]} />
@@ -190,11 +227,11 @@ export function Money() {
       ) : view === "stats" && stats ? (
         <Dashboard>
           <MoneyStatsView stats={stats} entries={entries} catName={catName} catSlot={catSlot} catArt={catArt}
-            onGoList={(cat) => { setFilterCat(cat); setView("list"); }} />
+            onGoList={(cat) => { setFilterCat(cat); switchView("list"); }} />
         </Dashboard>
       ) : (
         <MoneyListView entries={entries} catName={catName} catSlot={catSlot} catArt={catArt}
-          dir={dir} query={query} filterCat={filterCat} onClearFilter={clearFilter}
+          dir={dir} query={query} filterCat={filterCat} focusId={focusId} onClearFilter={clearFilter}
           onAdd={() => setAddOpen(true)} onEdit={(e) => setEditEntry(e)} onDelete={(e) => void doDelete(e)}
           onOpenRule={(ruleId) => {
             // 规则可能已删（删规则不删流水）—— 那就说人话，别装作能跳。

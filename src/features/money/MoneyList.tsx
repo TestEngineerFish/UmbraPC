@@ -9,11 +9,14 @@
 // 底部合计按**筛选结果**算 —— 数据全在手上，合计和服务端按同样口径算出来是同一个数。
 //
 // 月份固定当月（拍板 D3），第二行的月份只是个标签不是选择器，二期放开时再换控件。
+//
+// focusId（批次 013 裁定 3）：别处（聊天里失效的识图确认卡）跳过来时可以点名一笔流水，
+// 这里负责滚过去 + 闪 1.2s；那笔不在当月或被筛掉就静默略过 —— 见下面 useEffect 的注释。
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MoneyEntry } from "../../services/server";
 import { ContextMenu, EmptyState, Segmented, btn, btnRow, chip } from "../../components/ui";
-import { FooterTotal, Group, GroupRow, HeaderSearch, ListModal } from "../../components/layout";
+import { FooterTotal, Group, GroupRow, HeaderSearch, ListModal, useFlashId } from "../../components/layout";
 import { IconChevronDown, IconPencil, IconTrash } from "../../components/icons";
 import { catColor, catTint, groupByDay, SRC_ICON, yuan } from "./moneyKit";
 
@@ -84,7 +87,7 @@ export function MoneyListFilters({ dir, setDir, query, setQuery, filterCat, setF
   </>);
 }
 
-export function MoneyListView({ entries, catName, catSlot, catArt, dir, query, filterCat, onClearFilter, onAdd, onEdit, onDelete, onOpenRule }: {
+export function MoneyListView({ entries, catName, catSlot, catArt, dir, query, filterCat, focusId, onClearFilter, onAdd, onEdit, onDelete, onOpenRule }: {
   entries: MoneyEntry[];
   catName: (slug: string) => string;
   catSlot: (slug: string) => number;
@@ -94,6 +97,8 @@ export function MoneyListView({ entries, catName, catSlot, catArt, dir, query, f
   dir: MoneyDir;
   query: string;
   filterCat: string | null;
+  /** 从别处跳来要定位的那一笔（Money.gotoMoneyList）：滚过去 + 闪 1.2s。命中不了就什么都不做。 */
+  focusId?: string | null;
   onClearFilter: () => void;
   onAdd: () => void;
   onEdit: (e: MoneyEntry) => void;
@@ -103,6 +108,21 @@ export function MoneyListView({ entries, catName, catSlot, catArt, dir, query, f
 }) {
   const { t, i18n } = useTranslation();
   const [ctx, setCtx] = useState<Ctx | null>(null);
+  const [flashId, flash] = useFlashId();
+  // 行的 DOM（照 Phrases 的 rowRefs 同一套回调 ref）：只给「滚到那一行」用。
+  const rowRefs = useRef(new Map<string, HTMLDivElement>());
+
+  // 定位一笔流水（批次 013 裁定 3：聊天里失效卡的两个出口）：滚到那一行 + 闪 1.2s。
+  // **命中不了就什么都不做，不报错也不吐司** —— 记账页只加载当月（拍板 D3），那笔可能在别的月里，
+  // 也可能被当前筛选滤掉了；用户本来就是被送到流水页来自己翻的，弹一句「找不到」只是打断他。
+  // 依赖只有 focusId：换筛选、静默重拉都不会重跑，不会反复闪。Money 那边一切视图就把它清掉。
+  useEffect(() => {
+    if (!focusId) return;
+    const el = rowRefs.current.get(focusId);
+    if (!el) return;
+    el.scrollIntoView({ block: "nearest" });
+    flash(focusId);
+  }, [focusId, flash]);
 
   const q = query.trim();
   const list = entries.filter((e) => {
@@ -138,11 +158,15 @@ export function MoneyListView({ entries, catName, catSlot, catArt, dir, query, f
       // 表格类满铺（full）：分组 = 一天，分组头是日期 + 当天合计，卡内逐行。
       <ListModal full>
         {groups.map((g) => (
+          // 当天合计走 action 而不是 count：T2 组头的 count 是「N 条」那种紧挨标题的计数，
+          // 合计在稿里一直是靠右的一段等宽数字（批次 013 回执裁定 2 之后两者位置分开了）。
           <Group key={g.day} title={dayLabel(g.date)}
-            count={[g.spend ? t("money.daySpend", { v: yuan(g.spend) }) : "", g.earn ? t("money.dayEarn", { v: yuan(g.earn) }) : ""]
-              .filter(Boolean).join(" · ")}>
+            action={<span className="flex-none text-[11px] text-muted font-mono [font-variant-numeric:tabular-nums] whitespace-nowrap">{
+              [g.spend ? t("money.daySpend", { v: yuan(g.spend) }) : "", g.earn ? t("money.dayEarn", { v: yuan(g.earn) }) : ""]
+                .filter(Boolean).join(" · ")}</span>}>
             {g.items.map((e) => (
-              <GroupRow key={e.id}
+              <GroupRow key={e.id} flash={flashId === e.id}
+                rowRef={(el) => { if (el) rowRefs.current.set(e.id, el); else rowRefs.current.delete(e.id); }}
                 onContextMenu={(ev) => { ev.preventDefault(); setCtx({ x: ev.clientX, y: ev.clientY, entry: e }); }}>
                 {/* 分类色块（批次 003）：图标底是同色 tint 圆角块，描边取色槽色。 */}
                 <span className="w-[28px] h-[28px] flex-none rounded-[8px] flex items-center justify-center"

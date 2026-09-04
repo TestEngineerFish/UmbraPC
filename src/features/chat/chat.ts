@@ -47,7 +47,7 @@ import { amountToCents } from "../money/moneyKit";
 // ⋯ 菜单的「回收站」→ 总设置的回收站子页并预选「聊天消息」芯片。
 // 这两处是直接 import（批次 013 要求）而不是 shell 回填：Money / Settings 都只在点击时才碰
 // shell 的导出，模块求值阶段没人用到对方，ESM 的循环引用在这里是安全的。
-import { gotoMoneyAdd } from "../money/Money";
+import { gotoMoneyAdd, gotoMoneyList } from "../money/Money";
 import { gotoSettings } from "../settings/Settings";
 import { t } from "../../i18n";
 import { askConfirm, showToast } from "../../components/overlay";
@@ -598,29 +598,50 @@ function onMessage(msg: any): void {
       break;
     }
     case "vision_confirm_resolved": {
-      // 卡已处理（本端或别的端点的）：approved → 「已记入」+ 追加那条秘书消息（服务端已落库，
-      // message_id 是它的 id）；否则 → 「已改成手动填」。跨会话找卡（和 confirm_resolved 同款）。
-      // stale:true = 服务端已经不认这张卡（重启 / 已被别的端处理 / 超时后再点）：**不是**「改成手动填」——
-      // 已记入 / 已手动填的卡不动，其余置成「已失效」只读态，并吐司同一句。
+      // 卡已处理。**谁点的**决定画哪张（批次 013 回执裁定 3）：本端点的（state=waiting，或超时已置 stale
+      // 但回执迟到）→ 正常的「已记入」/「已改成手动填」；本端没点过（state 还是 open）→ 是别的端记的，
+      // 走 A 态「这笔已经记好了 · 在别的设备上」，出口「看这笔记录」（entry_id 服务端带回来了）。
+      // stale:true = 服务端已经不认这张卡（重启 / 已被处理 / 超时后再点）→ B 态「这张卡失效了」。
       const cid = String(msg.confirm_id || "");
       const approved = Boolean(msg.approved);
       const stale = Boolean(msg.stale);
+      const entryId = msg.entry_id ? String(msg.entry_id) : undefined;
       let staled = false;
+      // 本端已经手动补记过、那边又记成功了：库里就是两笔，得说一声。
+      let dupWarn = false;
       for (const id of Object.keys(convs)) {
         for (const b of convs[id].blocks) {
           if (b.kind !== "vcard" || b.confirmId !== cid) continue;
           if (stale) {
-            if (b.state !== "approved" && b.state !== "manual") { b.state = "stale"; staled = true; }
+            // 服务端不认这张卡了：本端这次「记入」没算数（记下来 —— 随后到的 approved 是别的端记的）。
+            b.staleAck = true;
+            if (b.state !== "approved" && b.state !== "manual" && b.state !== "elsewhere") {
+              b.state = "stale"; b.staleWhy = "wait"; staled = true;
+            }
+          } else if (approved) {
+            if (b.state === "approved" || b.state === "manual") {
+              // 已经是终态：本端自己的结果不被别人的广播改写（正在填的草稿和「已记入」对不上更糟）。
+              // 但 B 态点过「手动记一笔」的，要提醒一句别记重了。
+              if (b.manualDone) dupWarn = true;
+            } else {
+              // 本端点过、且服务端没说这张卡失效 →「已记入」；否则是别的端记的 → A 态「在别的设备上」。
+              b.state = b.mine && !b.staleAck ? "approved" : "elsewhere";
+              b.entryId = entryId;
+              b.entryYm = msg.ym ? String(msg.ym) : undefined;
+              if (b.manualDone) dupWarn = true;
+            }
           } else {
-            b.state = approved ? "approved" : "manual";
+            // 拒绝（改成手动填）：本端自己点的就是「已改成手动填」；别的端点的，本端这张没结果可等了
+            // —— 归 B 态，但第二句照实写「别的设备把它改成手动填了」，不说「不确定记没记上」。
+            if (b.mine && !b.staleAck) { b.state = "manual"; }
+            else if (b.state !== "approved" && b.state !== "manual") { b.state = "stale"; b.staleWhy = "otherManual"; }
           }
         }
       }
       clearVcardTimer(cid);  // 等回音的 20 秒定时器：回音来了（不管哪种）就不用再等
-      if (stale) {
-        if (staled) showToast(t("chat.vcardStale"), { tone: "warn" });
-        break;
-      }
+      if (dupWarn) showToast(t("chat.vcardDup"), { tone: "warn" });
+      // stale 不吐司：卡上就写着「这张卡失效了」+ 为什么 + 两个出口，再飘一条同义的等于说两遍。
+      if (stale) { void staled; break; }
       const s = cs(target);
       if (approved && msg.text) {
         const mid = msg.message_id ? Number(msg.message_id) : undefined;
@@ -2332,17 +2353,21 @@ function vcardRecord(idx: number): void {
     return;
   }
   b.state = "waiting";
+  b.mine = true;   // 回执回来时靠它认「这是我点的」（超时进 B 态后回执迟到也还认得出来）
   renderMessages();
-  // 20 秒没等到回音（发出去后连接断了这类）：卡置「已失效」+ 吐司「服务端没有响应，稍后看记账页有没有
-  // 这一笔」。**不放回可点态** —— 服务端那边多半已经处理掉了（或者根本没收到），再点必然 stale；
-  // 账到底记没记，去记账页看一眼最靠谱。真记上了的话 resolved 迟早会来，再把它切成「已记入」。
+  // 20 秒没等到回音（发出去后连接断了这类）：卡置 **B 态**「这张卡失效了 · 等了 20 秒没等到回执，
+  // 不确定这笔有没有记上」+ 出口「去流水里看」「手动记一笔」（稿 07 节 B）。**不放回可点态** ——
+  // 服务端那边多半已经处理掉了（或者根本没收到），再点必然 stale；账到底记没记，去流水里看一眼最靠谱。
+  // 真记上了的话 resolved 迟早会来，再把它切成「已记入」。
   const conv = activeConv;
   clearVcardTimer(b.confirmId);
   vcardTimers[b.confirmId] = window.setTimeout(() => {
     delete vcardTimers[b.confirmId];
     if (b.state !== "waiting") return;
     b.state = "stale";
-    showToast(t("chat.vcardTimeout"), { tone: "fail" });
+    // 不再吐司：B 态的卡上就写着「等了 20 秒没等到回执，不确定这笔有没有记上」+ 两个出口，
+    // 再飘一条同义的吐司只是把同一句话说两遍。
+
     if (conv === activeConv) renderMessages();
   }, 20000);
 }
@@ -2356,6 +2381,7 @@ function vcardManual(idx: number): void {
   syncVcardFromDom(idx, b);
   if (!chatConn.sendVisionConfirm(b.confirmId, false)) showToast(t("chat.notConnected"), { tone: "warn" });
   b.state = "manual";
+  b.mine = true;   // 同上：回执回来时认得出这是本端的决定
   renderMessages();
   const f = b.fields;
   gotoMoneyAdd({
@@ -2370,6 +2396,37 @@ function vfailManual(idx: number): void {
   const b = cs(activeConv).blocks[idx];
   if (!b || b.kind !== "vfail") return;
   gotoMoneyAdd({ atts: b.att ? [{ file_id: b.att, label: "原始截图" }] : [] });
+}
+
+// ── 失效卡的三个出口（稿 07 节；批次 013 回执裁定 3）─────────────────────────
+// A「看这笔记录」：跳记账流水并定位那一笔（entryId 是别的端记完后服务端带回来的）。
+// 那笔不在当月的话记账页定位不到 —— 静默略过，页面照常停在流水视图。
+function vcardSeeEntry(idx: number): void {
+  const b = cs(activeConv).blocks[idx];
+  if (!b || b.kind !== "vcard") return;
+  gotoMoneyList({ entryId: b.entryId, ym: b.entryYm });
+}
+
+// B「去流水里看」：不知道记没记上，跳过去自己看一眼。不带定位。
+function vcardSeeList(): void {
+  gotoMoneyList();
+}
+
+// B「手动记一笔」：卡上那些字段（可能已被用户改过）+ 原图带成草稿，直接开「记一笔」。
+// **仍然 best-effort 给服务端发一次 approved=false**：B 态有两个来源，服务端说 stale 的那种确实
+// 已经不认这张卡了，但「本端 20 秒没等到回执」那种服务端多半还留着它（登记簿 TTL 24 小时，
+// 新连接握手还会补发）—— 不销掉的话，别的端过一会儿点「记入」就成了同一笔记两遍。
+function vcardManualNow(idx: number): void {
+  const b = cs(activeConv).blocks[idx];
+  if (!b || b.kind !== "vcard") return;
+  if (!b.staleAck) chatConn.sendVisionConfirm(b.confirmId, false);
+  b.manualDone = true;
+  const f = b.fields;
+  gotoMoneyAdd({
+    cents: amountToCents(f.yuan) ?? undefined,
+    direction: f.direction, cat: f.cat, sub: f.sub || "", merchant: f.merchant.trim(), at_ms: f.at_ms,
+    atts: b.att ? [{ file_id: b.att, label: "原始截图" }] : [],
+  });
 }
 
 // 那条带图消息的原文：优先按 user_message_id 找，找不到（历史没拉到那页）就找带着同一张图的
@@ -2915,12 +2972,15 @@ function onMsgsClick(e: Event): void {
     "[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit],[data-reconnect],[data-jobact],"
     + "[data-locshot],[data-locclear],[data-locfbtoggle],[data-locfbsend],[data-locpause],[data-locsend],[data-locresume],"
     + "[data-stopreply],[data-goseenav],[data-qjump],[data-upcancel],[data-upretry],[data-imgat],"
-    + "[data-vcrecord],[data-vcmanual],[data-vfmanual],[data-vfretry]",
+    + "[data-vcrecord],[data-vcmanual],[data-vcseeentry],[data-vcseelist],[data-vcmanualnow],[data-vfmanual],[data-vfretry]",
   ) as HTMLElement | null;
   if (!el) return;
   // ── 批次 013 ④⑤：识图确认卡 / 识不出卡 ──
   if (el.dataset.vcrecord !== undefined) { vcardRecord(Number(el.dataset.vcrecord)); return; }
   if (el.dataset.vcmanual !== undefined) { vcardManual(Number(el.dataset.vcmanual)); return; }
+  if (el.dataset.vcseeentry !== undefined) { vcardSeeEntry(Number(el.dataset.vcseeentry)); return; }
+  if (el.dataset.vcseelist !== undefined) { vcardSeeList(); return; }
+  if (el.dataset.vcmanualnow !== undefined) { vcardManualNow(Number(el.dataset.vcmanualnow)); return; }
   if (el.dataset.vfmanual !== undefined) { vfailManual(Number(el.dataset.vfmanual)); return; }
   if (el.dataset.vfretry !== undefined) { vfailRetry(Number(el.dataset.vfretry)); return; }
   // ── 错误块的「重新连接」──

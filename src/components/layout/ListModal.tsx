@@ -8,32 +8,40 @@ import { SectionHeader } from "./ListDetail";
 import { showToast } from "../overlay";
 import { IconCopy } from "../icons";
 
-/** T2 的滚动容器：padding 20/24/24 + 组间 18（批次 013《PC 常用语与带图入口》01 / 05 节的实测值，
- *  与 T3 内容区 20/24 同档；012 骨架小样里的 16/20 是示意），内容最宽 920（full 时满铺，给表格类）。 */
+/** T2 的滚动容器：padding 20/24/24 + 组间 18 + 组头到卡 7（批次 013 裁定 2，
+ *  tokens.pageTemplate.listModal.content；与 T3 内容区 20/24 同档，012 骨架小样里的 16/20 是示意），
+ *  内容最宽 920。组头到卡那 7 在下面的 Group 里给。
+ *  full（表格类，眼下只有记账流水）= 只去掉宽度上限，**内边距和别处一样**（裁定 2 点名了记账流水页
+ *  跟着这组走）—— 满铺指的是宽度不设上限，不是让分组头贴到窗口边上。 */
 export function ListModal({ full, children }: { full?: boolean; children: React.ReactNode }) {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
-      <div className={`flex flex-col gap-[18px] ${full ? "p-0" : "p-[20px_24px_24px] max-w-[920px]"}`}>{children}</div>
+      <div className={`flex flex-col gap-[18px] p-[20px_24px_24px] ${full ? "" : "max-w-[920px]"}`}>{children}</div>
     </div>
   );
 }
 
-/** 一个分组：分区小标题（可带计数）+ 一张卡，卡内逐行。 */
+/** 一个分组：分区小标题（可带计数）+ 一张卡，卡内逐行。
+ *  组头到卡 7（批次 013 裁定 2，tokens.pageTemplate.listModal.content）：距离由这里的 gap 给，
+ *  组头本身走贴左那一档（pad="group"）—— 卡贴着内容区左边，组头缩 14 会比卡还往里。 */
 export function Group({ title, count, action, children }: { title: React.ReactNode; count?: React.ReactNode; action?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <section className="flex flex-col">
-      <SectionHeader count={count} action={action}>{title}</SectionHeader>
+    <section className="flex flex-col gap-[7px]">
+      <SectionHeader pad="group" count={count} action={action}>{title}</SectionHeader>
       <div className="bg-card border border-border rounded-[12px] overflow-hidden">{children}</div>
     </section>
   );
 }
 
-/** 卡内一行：最小 52 高 / padding 11/14 / 行间 1px --border-soft；hover --hover；flash = 刚新增的高亮（1.2s 渐隐）。 */
-export function GroupRow({ onClick, onContextMenu, flash, active, children }: {
-  onClick?: () => void; onContextMenu?: (e: React.MouseEvent) => void; flash?: boolean; active?: boolean; children: React.ReactNode;
+/** 卡内一行：最小 52 高 / padding 11/14 / 行间 1px --border-soft；hover --hover；flash = 刚新增的高亮（1.2s 渐隐）。
+ *  rowRef：把行的 DOM 交出去，给「滚到这一行」用（照 Phrases 的 PhraseRow 同一套回调 ref）。 */
+export function GroupRow({ onClick, onContextMenu, flash, active, rowRef, children }: {
+  onClick?: () => void; onContextMenu?: (e: React.MouseEvent) => void; flash?: boolean; active?: boolean;
+  rowRef?: (el: HTMLDivElement | null) => void;
+  children: React.ReactNode;
 }) {
   return (
-    <div onClick={onClick} onContextMenu={onContextMenu}
+    <div ref={rowRef} onClick={onClick} onContextMenu={onContextMenu}
       className={`group/row flex items-center gap-[10px] min-h-[52px] px-[14px] py-[11px] border-b border-border-soft last:border-b-0 transition-colors duration-[1200ms] ease-out ${
         flash ? "bg-orange-soft" : active ? "bg-hover" : "hover:bg-hover"} ${onClick ? "cursor-pointer" : ""}`}>
       {children}

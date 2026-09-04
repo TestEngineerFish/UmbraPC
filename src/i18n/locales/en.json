@@ -557,7 +557,10 @@
     "countLine": "{{n}} total · {{open}} open",
     "allTags": "All tags",
     "noResult": "No ideas match these filters",
-    "clearFilter": "Clear filters"
+    "clearFilter": "Clear filters",
+    "attsLabel": "Images",
+    "attsCount": "{{n}}",
+    "attSaveFailed": "Couldn't save: this image can't be read"
   },
   "abilities": {
     "title": "Abilities",
@@ -806,8 +809,15 @@
     "visionFailManual": "Enter it manually",
     "visionFailRetry": "Try another image",
     "quoteImgCount": "{{n}} image(s)",
-    "vcardStale": "This card has expired — it may have been handled on another device",
-    "vcardTimeout": "The server didn't respond — check the Money page later to see whether it was recorded"
+    "vcardStale": "This card has expired",
+    "vcardElsewhere": "This one is already recorded",
+    "vcardElsewhereWhere": "on another device",
+    "vcardStaleWhy": "Waited 20 seconds with no confirmation — not sure whether it was recorded.",
+    "vcardSeeEntry": "View the entry",
+    "vcardSeeList": "Open the entry list",
+    "vcardStaleWhyManual": "Another device switched this card to manual entry.",
+    "vcardManualNow": "Record it manually",
+    "vcardDup": "It was recorded on the other device too — check for a duplicate"
   },
   "clipboard": {
     "searchPh": "Search clipboard…",
@@ -1206,7 +1216,8 @@
     "recManage": "Manage recurring",
     "monthOnly": "Month {{m}}",
     "attAfterSave": "Attached on save",
-    "attAttachFailed": "\"{{name}}\" couldn't be attached to this entry"
+    "attAttachFailed": "\"{{name}}\" couldn't be attached to this entry",
+    "focusOtherMonth": "That entry is in month {{m}}; only this month's entries are shown"
   },
   "layout": {
     "settings": "Settings",

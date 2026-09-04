@@ -45,12 +45,25 @@ export function DetailPlaceholder({ text }: { text: string }) {
   );
 }
 
-/** 分区小标题：11px / 600 / .06em / --faint，padding 9/14/5；带计数时右侧 10.5px --faint。 */
-export function SectionHeader({ children, count, action }: { children: React.ReactNode; count?: React.ReactNode; action?: React.ReactNode }) {
+/** 分区小标题：11px / 600 / .06em / --faint；带计数时右侧 10.5px --faint。
+ *  内边距两档（pad）：
+ *    "list"（默认）= 9/14/5，T1 列表栏的分组头与详情栏的分区标题，行文与卡片一样缩进 14；
+ *    "group" = 贴左 `0 2px`，T2 的分组头（tokens.pageTemplate.listModal）与灵感详情的配图组头 ——
+ *      那两处的卡本身就贴着内容区左边，组头再缩 14 会比卡还往里；组头到卡的 7 由外层 gap 给，
+ *      所以这一档上下都不留内边距。
+ *  计数的位置也跟着分档：list 档顶到行尾（列表栏里右对齐好扫），group 档**紧挨标题**——
+ *  稿 01 / 05 / 08 节都是「标签名 + 条数」贴在一起，后面才是空白与右注（右注走 action）。 */
+export function SectionHeader({ children, count, action, pad = "list" }: {
+  children: React.ReactNode;
+  count?: React.ReactNode;
+  action?: React.ReactNode;
+  pad?: "list" | "group";
+}) {
   return (
-    <div className="flex-none flex items-center gap-[8px] pt-[9px] px-[14px] pb-[5px]">
-      <span className="flex-1 min-w-0 truncate text-[11px] font-semibold tracking-[.06em] text-faint">{children}</span>
-      {count !== undefined ? <span className="flex-none text-[10.5px] text-faint [font-variant-numeric:tabular-nums]">{count}</span> : null}
+    <div className={`flex-none flex items-center gap-[8px] ${pad === "group" ? "px-[2px] pt-0 pb-0" : "pt-[9px] px-[14px] pb-[5px]"}`}>
+      <span className={`${pad === "group" ? "flex-none max-w-[70%]" : "flex-1"} min-w-0 truncate text-[11px] font-semibold tracking-[.06em] text-faint`}>{children}</span>
+      {count !== undefined ? <span className={`flex-none ${pad === "group" ? "text-[11px]" : "text-[10.5px]"} text-faint [font-variant-numeric:tabular-nums]`}>{count}</span> : null}
+      {pad === "group" ? <span className="flex-1 min-w-0" /> : null}
       {action}
     </div>
   );

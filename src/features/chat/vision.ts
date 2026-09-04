@@ -11,10 +11,19 @@ import { CAT_LABEL, catColor, catIcon, catTint } from "../money/moneyKit";
 
 // ── 块形状（进 chat.ts 的 Block 联合）────────────────────────────────────────
 /** 识图结果确认卡。fields 是**就地编辑的当前值**：输入事件随敲随存，整区重绘不丢。
- *  state：open 可改可点 → waiting 已点「记入」等服务端 → approved「已记入」/ manual「已改成手动填」
- *  （后两态由 vision_confirm_resolved 决定，哪个端点的都一样）；stale「已失效」= 服务端已经不认这张卡
- *  （resolved 带 stale：服务端重启 / 已被别的端处理）或「记入」20 秒没等到回音 —— 只读、不出按钮，
- *  再点也只会再失效一次。卡不持久化（离线由服务端补发）。 */
+ *
+ *  state（批次 013 回执裁定 3 把原来那个含糊的 stale 拆成两态 —— 一句「可能已在别的端处理」
+ *  盖了「知道结果」和「不知道结果」两件事，后一种用户看完还得自己去流水里翻）：
+ *    open      可改可点
+ *    waiting   已点「记入」，等服务端回执
+ *    approved  本端记成功（「已记入」，下面紧跟着一条秘书消息）
+ *    manual    本端改成手动填
+ *    elsewhere **A · 知道结果**：这张卡被别的端记掉了 → 「这笔已经记好了 · 在别的设备上」+「看这笔记录」
+ *    stale     **B · 不知道结果**：服务端重启 / 已不认这张卡 / 20 秒没等到回执 →
+ *              「这张卡失效了」+ 一句为什么 +「去流水里看」「手动记一笔」
+ *  A / B 两态整卡退成只读：描边转 --border-soft、头图标块转中性、四个字段收成一行摘要，
+ *  不留禁用的输入框与下拉（禁用态的控件会被反复点）。出口一律次级钮。卡不删也不消失。
+ *  卡不持久化（离线由服务端补发）。 */
 export interface VCardBlock {
   kind: "vcard";
   confirmId: string;
@@ -26,7 +35,22 @@ export interface VCardBlock {
   /** 模型没看清的字段名（yuan / cat / merchant / at_ms），只标那一项，整卡不变色。 */
   unsure: string[];
   userMsgId?: number;
-  state: "open" | "waiting" | "approved" | "manual" | "stale";
+  state: "open" | "waiting" | "approved" | "manual" | "elsewhere" | "stale";
+  /** elsewhere 态下服务端给的那笔流水 id / 月份（resolved 带回来）：「看这笔记录」跳过去要它们 ——
+   *  识图记账的日期取自票据，拍上个月的票就落在上个月，记账页只加载当月，没有 ym 就只能干瞪眼。 */
+  entryId?: string;
+  entryYm?: string;
+  /** 本端点过「记入」——决定 approved 的回执画成「已记入」还是 A 态「在别的设备上」。
+   *  不能靠 state 猜：本端点完超时进了 B 态，和「别的端先记了、本端被 stale 掉」两种情形
+   *  state 都是 stale，但一个该是「已记入」、一个该是 A 态。 */
+  mine?: boolean;
+  /** 服务端回过 stale（这张卡它已经不认了）：那本端这次「记入」肯定没算数，
+   *  随后到的 approved 广播是**别的端**记的 —— 光看 mine 会把它错认成本端记成功。 */
+  staleAck?: boolean;
+  /** 本端在 B 态点过「手动记一笔」：迟到的 approved 回执要提醒一句「那边也记上了，别记重了」。 */
+  manualDone?: boolean;
+  /** B 态第二句写什么：wait = 等了 20 秒没回执（不知道结果）；otherManual = 别的端把它改成手动填了。 */
+  staleWhy?: "wait" | "otherManual";
   ts: number;
 }
 
@@ -51,6 +75,8 @@ const ICON_CHEVRON = "M6 9l6 6 6-6";
 // 稿 ⑤ 的警示图标是八角形（不是错误块那颗圆的）。
 const ICON_ALERT_OCT = "M8.6 3h6.8L21 8.6v6.8L15.4 21H8.6L3 15.4V8.6zM12 8v4.5M12 16h.01";
 const ICON_SPIN_ARC = "M12 3a9 9 0 1 0 9 9";
+// 失效卡 B 态的时钟（稿 07 节）：不是错误，只是这张卡过期了，所以不用警示形也不用红。
+const ICON_CLOCK = "M12 3.5a8.5 8.5 0 1 0 0 17 8.5 8.5 0 0 0 0-17M12 7.5V12l3 1.8";
 /** 引用条 / 气泡内引用块尾部的图片图标（umbra-icons `image`）。 */
 export const ICON_IMAGE = "M3 5h18v14H3zM3 16l5-4 4 3 3-2 6 4";
 
@@ -78,6 +104,10 @@ export function fromDateTimeLocal(v: string): number {
 /** 只读展示：「2026-09-04 12:38」。 */
 export function fmtDateTime(ms: number): string {
   return toDateTimeLocal(ms).replace("T", " ");
+}
+/** 失效卡摘要里的日期：「09-04」（稿 07 节；一行摘要里不需要年和分钟）。 */
+export function fmtDate(ms: number): string {
+  return toDateTimeLocal(ms).slice(5, 10);
 }
 
 // ── 分类 ────────────────────────────────────────────────────────────────────
@@ -125,7 +155,49 @@ function fieldCol(label: string, box: string, flex = ""): string {
   return `<div style="${flex}min-width:0;display:flex;flex-direction:column;gap:5px;">${label}${box}</div>`;
 }
 
+/** A / B 两态的一行摘要：¥ 金额（650/17 等宽 tabular）+ 分类 · 商家 + 日期（等宽），12.5px --muted。 */
+function staleSummary(b: VCardBlock, cats: MoneyCat[] | null): string {
+  const f = b.fields;
+  const mid = [catName(cats, f.cat, b.catName) + (f.sub ? ` · ${f.sub}` : ""), f.merchant].filter(Boolean).join(" · ");
+  return `<div style="display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);">`
+    + `<span style="flex:none;font:650 17px ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;color:var(--text);white-space:nowrap;">¥${esc(f.yuan)}</span>`
+    + (mid ? `<span style="flex:none;white-space:nowrap;">${esc(mid)}</span>` : "")
+    + `<span style="flex:none;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;">${esc(fmtDate(f.at_ms))}</span>`
+    + `</div>`;
+}
+
+/** 失效卡（稿 07 节）：A「这笔已经记好了 · 在别的设备上」/ B「这张卡失效了」+ 为什么。
+ *  整卡 1px --border-soft、头图标块 --chip / --faint、摘要一行、出口一律次级钮。 */
+function vcardStaleHtml(b: VCardBlock, i: number, cats: MoneyCat[] | null, sel: boolean): string {
+  const elsewhere = b.state === "elsewhere";
+  const halo = sel ? "box-shadow:0 0 0 2px var(--orange-soft);" : "";
+  const haloAttr = sel ? ` data-halo="1"` : "";
+  const ghost = btn("ghost", "sm");
+  const head = `<span style="flex:none;width:22px;height:22px;border-radius:6px;background:var(--chip);color:var(--faint);display:flex;align-items:center;justify-content:center;">`
+    + svg(elsewhere ? ICON_CHECK : ICON_CLOCK, 13, elsewhere ? 2.2 : 1.9) + `</span>`
+    + `<span style="flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">`
+    + esc(t(elsewhere ? "chat.vcardElsewhere" : "chat.vcardStale")) + `</span>`
+    + (elsewhere ? `<span style="flex:none;font-size:11px;color:var(--faint);white-space:nowrap;">${esc(t("chat.vcardElsewhereWhere"))}</span>` : "");
+  // B 态的第二句照实说：不知道结果就写「等了 20 秒没等到回执」；已知是别的端改成手动填的就直说
+  //（稿 07：「服务端能区分就照实换一句，句式不变」）。
+  const why = elsewhere ? ""
+    : `<div style="font-size:12px;line-height:1.7;color:var(--muted);text-wrap:pretty;">${
+      esc(t(b.staleWhy === "otherManual" ? "chat.vcardStaleWhyManual" : "chat.vcardStaleWhy"))}</div>`;
+  const exits = elsewhere
+    ? `<button data-vcseeentry="${i}" class="${ghost}">${esc(t("chat.vcardSeeEntry"))}</button>`
+    : `<button data-vcseelist="${i}" class="${ghost}">${esc(t("chat.vcardSeeList"))}</button>`
+      + `<button data-vcmanualnow="${i}" class="${ghost}">${esc(t("chat.vcardManualNow"))}</button>`;
+  return `<div${haloAttr} data-vcard="${i}" style="align-self:flex-start;width:420px;max-width:100%;background:var(--card);border:1px solid var(--border-soft);border-radius:12px 12px 12px 4px;overflow:hidden;${halo}">`
+    + `<div style="display:flex;align-items:center;gap:9px;padding:11px 13px;border-bottom:1px solid var(--border-soft);">${head}</div>`
+    + `<div style="padding:12px 13px 13px;display:flex;flex-direction:column;gap:12px;">`
+    + staleSummary(b, cats) + why
+    + `<div style="display:flex;align-items:center;gap:9px;">${exits}</div>`
+    + `</div></div>`;
+}
+
 export function vcardHtml(b: VCardBlock, i: number, cats: MoneyCat[] | null, sel: boolean): string {
+  // A / B 失效两态是另一张卡（只读摘要 + 出口），不走下面这套四字段的排版。
+  if (b.state === "elsewhere" || b.state === "stale") return vcardStaleHtml(b, i, cats, sel);
   const f = b.fields;
   const editable = b.state === "open";
   const dis = editable ? "" : " disabled";
@@ -133,8 +205,7 @@ export function vcardHtml(b: VCardBlock, i: number, cats: MoneyCat[] | null, sel
   const halo = sel ? "box-shadow:0 0 0 2px var(--orange-soft);" : "";
   const haloAttr = sel ? ` data-halo="1"` : "";
 
-  // 头：22 图标块 + 标题 + 右「确认后记入」。已处理态换成勾 +「已记入」/ 铅笔 +「已改成手动填」；
-  // 失效态是警示八角 +「这张卡已失效…」（--muted，不用红：它不是错误，只是过期了）。
+  // 头：22 图标块 + 标题 + 右「确认后记入」。已处理态换成勾 +「已记入」/ 铅笔 +「已改成手动填」。
   let head: string;
   if (b.state === "approved") {
     head = `<span style="flex:none;width:22px;height:22px;border-radius:6px;background:var(--success-soft);color:var(--success);display:flex;align-items:center;justify-content:center;">${svg(ICON_CHECK, 13, 2.2)}</span>`
@@ -142,9 +213,6 @@ export function vcardHtml(b: VCardBlock, i: number, cats: MoneyCat[] | null, sel
   } else if (b.state === "manual") {
     head = `<span style="flex:none;width:22px;height:22px;border-radius:6px;background:var(--chip);color:var(--muted);display:flex;align-items:center;justify-content:center;">${svg(ICON_PENCIL, 13, 1.9)}</span>`
       + `<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t("chat.vcardManualDone"))}</span>`;
-  } else if (b.state === "stale") {
-    head = `<span style="flex:none;width:22px;height:22px;border-radius:6px;background:var(--chip);color:var(--muted);display:flex;align-items:center;justify-content:center;">${svg(ICON_ALERT_OCT, 13, 1.9)}</span>`
-      + `<span style="flex:1;min-width:0;font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t("chat.vcardStale"))}</span>`;
   } else {
     head = `<span style="flex:none;width:22px;height:22px;border-radius:6px;background:var(--orange-soft);color:var(--orange-text);display:flex;align-items:center;justify-content:center;">${svg(ICON_MONEY, 13, 1.9)}</span>`
       + `<span style="flex:1;min-width:0;font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(t(f.direction === "income" ? "chat.vcardTitleIncome" : "chat.vcardTitleExpense"))}</span>`
@@ -199,7 +267,7 @@ export function vcardHtml(b: VCardBlock, i: number, cats: MoneyCat[] | null, sel
 
   // 底行：左「原图存进这笔的附件」+ 右「改成手动填」（描边 28）+「记入」（橙实心 28）。
   // waiting 只禁按钮不换文案 —— 服务端回 resolved 是几百毫秒的事，闪一下「记入中」反而像出了状况。
-  // manual / stale 没有底行：图没有跟着这张卡去任何地方，那句「原图存进这笔的附件」就不成立。
+  // manual 没有底行：图没有跟着这张卡去任何地方，那句「原图存进这笔的附件」就不成立。
   let foot = "";
   if (b.state === "open" || b.state === "waiting") {
     foot = `<div style="display:flex;align-items:center;gap:9px;padding-top:3px;">`
@@ -231,6 +299,7 @@ export function vcardSummary(b: VCardBlock, cats: MoneyCat[] | null): string {
   const f = b.fields;
   const head = b.state === "approved" ? t("chat.vcardDone")
     : b.state === "manual" ? t("chat.vcardManualDone")
+    : b.state === "elsewhere" ? t("chat.vcardElsewhere")
     : b.state === "stale" ? t("chat.vcardStale")
     : t(f.direction === "income" ? "chat.vcardTitleIncome" : "chat.vcardTitleExpense");
   const parts = [`¥${f.yuan}`, catName(cats, f.cat, b.catName) + (f.sub ? ` · ${f.sub}` : ""), f.merchant, fmtDateTime(f.at_ms)].filter(Boolean);

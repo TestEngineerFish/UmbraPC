@@ -352,7 +352,7 @@ export function TrashContent({ page }: { page: TrashPage }) {
         {!groups.length && !showVault ? <EmptyState compact title={t("trash.chipEmpty")} /> : null}
 
         {groups.map(({ g, rows: rs }) => (
-          <section key={g} className="flex flex-col gap-[8px]">
+          <section key={g} className="flex flex-col gap-[7px]">
             {groupHead(t(GROUP_LABEL[g]), rs.length, g === "chat" ? t("trash.chatGroupHint") : undefined)}
             <div className="bg-card border border-border rounded-[12px] overflow-hidden">
               {/* 行单独包一层，末行的 last:border-b-0 才不会被卡底那一行顶掉。 */}
@@ -375,7 +375,7 @@ export function TrashContent({ page }: { page: TrashPage }) {
         ))}
 
         {showVault ? (
-          <section className="flex flex-col gap-[8px]">
+          <section className="flex flex-col gap-[7px]">
             {groupHead(t("trash.zoneVault"), vaultCount)}
             {vault.unlocked ? (
               <div className="bg-card border border-border rounded-[12px] overflow-hidden">

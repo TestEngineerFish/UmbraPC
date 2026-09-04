@@ -7,12 +7,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
-import { btn, btnRow, btnGhost, btnPrimary, select as selectCls, ConfirmDialog, Modal, EmptyState, filterChip, filterChipCount } from "../../components/ui";
+import { btn, btnRow, btnGhost, btnPrimary, select as selectCls, ConfirmDialog, ContextMenu, Modal, EmptyState, filterChip, filterChipCount } from "../../components/ui";
 import { PageShell, HeaderSearch, ListDetail, CardList, ListCard, DetailHead, SectionHeader, detailIconBtn, SyncSpinner, Skeleton } from "../../components/layout";
 import { showToast } from "../../components/overlay";
 import { ImageViewer, openInViewerWindow } from "../../components/ImageViewer";
 import {
-  IconArrowRight, IconBulb, IconChat, IconCheck, IconCopy, IconKeyboard,
+  IconArrowRight, IconBulb, IconChat, IconCheck, IconCopy, IconDownload, IconImage, IconKeyboard,
   IconPencil, IconPhone, IconPlus, IconTrash,
 } from "../../components/icons";
 import {
@@ -285,6 +285,17 @@ function Card({ item, on, tag, onPick }: { item: Inspiration; on: boolean; tag: 
               <IconCheck size={10} />{t("inspiration.linkedJob")}
             </span>
           ) : null}
+          {/* 配图张数（批次 013 裁定 4，tokens.inspirationAtts.card）：卡片是扫读用的，
+              只在元信息带尾部报个数，**缩略图一律不上卡** —— 一列卡挂上缩略图会变成图墙。 */}
+          {item.atts?.length ? (
+            <span className="flex-none inline-flex items-center gap-[4px] text-[10.5px] text-faint whitespace-nowrap [font-variant-numeric:tabular-nums]"
+              title={t("inspiration.attsCount", { n: item.atts.length })}>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 5h18v14H3zM3 16l5-4 4 3 3-2 6 4" />
+              </svg>
+              {item.atts.length}
+            </span>
+          ) : null}
         </div>
       </div>
     </ListCard>
@@ -303,12 +314,41 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
   const [copied, setCopied] = useState(false);
   const [task, setTask] = useState<TaskItem | null>(null);
   const m = metaOf(item.status);
-  // 附件（批次 013：带图记灵感时服务端把原图挂上）。点开走通用 ImageViewer：先试独立图片窗
+  // 配图（批次 013 裁定 4：带图记灵感时服务端把原图挂上）。点开走通用 ImageViewer：先试独立图片窗
   // （批次 011，不遮详情），没有桥（网页预览 / 测试）退回窗口内 overlay —— 与记账弹窗同一套。
-  const atts = item.atts || [];
+  // 最多 4 张：服务端已经限了，这里再兜一下（多出来的连预览器的左右切换都不该出现）。
+  const atts = (item.atts || []).slice(0, 4);
   const [viewer, setViewer] = useState<string | null>(null);
   const viewerItems = atts.map((a) => ({ src: fileUrl(a.file_id), alt: a.label }));
   const openImg = (src: string) => { if (!openInViewerWindow(viewerItems, src)) setViewer(src); };
+  /** 缩略图右键菜单：查看大图 / 复制图片 / 存到…。
+   *  **没有「移除这张」**（裁定 4）：改配图走编辑弹窗的附件区，破坏性动作不散落进只读详情。 */
+  const [attMenu, setAttMenu] = useState<{ x: number; y: number; src: string; label: string } | null>(null);
+
+  // 复制图片：取回原图直接写剪贴板。浏览器基本只认 image/png，JPEG / WebP 可能被拒 ——
+  // 拒了就如实吐司，不要假装成功（写不进去的时候用户按 ⌘V 得到的是上一次的剪贴板内容）。
+  const copyImg = async (src: string) => {
+    try {
+      const blob = await (await fetch(src)).blob();
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
+      showToast(t("chat.copyImageOk"), { tone: "ok" });
+    } catch { showToast(t("layout.copyFailed"), { tone: "fail" }); }
+  };
+  // 「存到…」：桌面桥没有另存 API（services/desktop.ts 里没有这类通道），退化成浏览器下载 ——
+  // Electron 收到 <a download> 会弹系统保存框，和聊天的「存到…」、图片预览器的下载同一条路。
+  const saveImg = async (src: string, name: string) => {
+    try {
+      const blob = await (await fetch(src)).blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      // 扩展名跟着真实类型走，别把 JPEG 一律写成 .png。
+      const ext = (blob.type.split("/")[1] || "").replace(/[^a-z0-9]/gi, "").slice(0, 5) || "png";
+      a.download = `${(name || "image").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60)}.${ext}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch { showToast(t("inspiration.attSaveFailed"), { tone: "fail" }); }
+  };
 
   // 关联任务的标题 / 状态 / 时间不在灵感行里，按 task_id 单独取一次（只有选中项会取）。
   useEffect(() => {
@@ -366,16 +406,27 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
           <SectionHeader>{t("inspiration.rawLabel")}</SectionHeader>
           <div className="text-[12.5px] leading-[1.75] whitespace-pre-wrap bg-card border border-border rounded-[10px] p-[11px_12px]"
             style={{ textWrap: "pretty" } as React.CSSProperties}>{item.raw}</div>
-          {/* 附件缩略条（批次 013）：正文下面 8px，缩略 78 / 圆角 8 / 1px --border / --chip 底 / cover / gap 6 ——
-              与聊天里带附件的文字气泡同一形态（tokens.launcherImage.chatForm）。只在详情画，卡片上不画。 */}
+          {/* 配图缩略条（批次 013 裁定 4 · 08 节 · tokens.inspirationAtts.detail）：
+              与正文之间上距 14 + 1px --border-soft 分隔线，整块 flex-col gap 8；
+              组头走通用分组头「配图 · N 张」（贴左那一档 —— 缩略条自己贴着正文左边，组头再缩 14 会错开）；
+              缩略 78 / 圆角 8 / 1px --border / --chip 底 / cover / gap 8 / flex-wrap，与聊天缩略条同一档。 */}
           {atts.length ? (
-            <div className="flex flex-wrap gap-[6px] mt-[8px]">
-              {atts.map((a) => (
-                <button key={a.file_id} title={a.label} onClick={() => openImg(fileUrl(a.file_id))}
-                  className="flex-none w-[78px] h-[78px] p-0 rounded-[8px] border border-border bg-chip overflow-hidden cursor-zoom-in">
-                  <img src={fileUrl(a.file_id)} alt={a.label} className="w-full h-full object-cover block" />
-                </button>
-              ))}
+            <div className="mt-[14px] pt-[14px] border-t border-border-soft flex flex-col gap-[8px]">
+              <SectionHeader pad="group" count={t("inspiration.attsCount", { n: atts.length })}>
+                {t("inspiration.attsLabel")}
+              </SectionHeader>
+              <div className="flex flex-wrap gap-[8px]">
+                {atts.map((a) => (
+                  <button key={a.file_id} title={a.label} onClick={() => openImg(fileUrl(a.file_id))}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setAttMenu({ x: e.clientX, y: e.clientY, src: fileUrl(a.file_id), label: a.label || a.file_id });
+                    }}
+                    className="flex-none w-[78px] h-[78px] p-0 rounded-[8px] border border-border bg-chip overflow-hidden cursor-zoom-in">
+                    <img src={fileUrl(a.file_id)} alt={a.label} className="w-full h-full object-cover block" />
+                  </button>
+                ))}
+              </div>
             </div>
           ) : null}
         </div>
@@ -447,6 +498,24 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
     </div>
     {/* 独立图片窗开不了时的回落形态（overlay，portal 到应用根，不受详情栏进场动画影响）。 */}
     <ImageViewer src={viewer} items={viewerItems} onClose={() => setViewer(null)} />
+
+    {/* 缩略图右键三项。图标与聊天的图片菜单同款（chat.ts 的 viewImg / copyImg / saveImg），
+        文案也复用那三条 key —— 同一件事在两处叫两个名字才是问题。 */}
+    {attMenu ? (
+      <ContextMenu x={attMenu.x} y={attMenu.y} onClose={() => setAttMenu(null)} items={[
+        {
+          label: t("chat.menuViewImage"),
+          icon: (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3" />
+            </svg>
+          ),
+          onClick: () => openImg(attMenu.src),
+        },
+        { label: t("chat.menuCopyImage"), icon: <IconImage size={13} />, onClick: () => void copyImg(attMenu.src) },
+        { label: t("chat.menuSaveImage"), icon: <IconDownload size={13} />, onClick: () => void saveImg(attMenu.src, attMenu.label) },
+      ]} />
+    ) : null}
   </>);
 }
 
