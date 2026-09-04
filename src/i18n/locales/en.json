@@ -817,7 +817,7 @@
     "vcardSeeList": "Open the entry list",
     "vcardStaleWhyManual": "Another device switched this card to manual entry.",
     "vcardManualNow": "Record it manually",
-    "vcardDup": "It was recorded on the other device too — check for a duplicate"
+    "vcardDup": "It was recorded there too — you may have two entries"
   },
   "clipboard": {
     "searchPh": "Search clipboard…",
@@ -842,7 +842,9 @@
     "charCount": "{{count}} chars",
     "fileCount": "{{count}} files",
     "phrase": "Snippets",
-    "searchPhrasePh": "Search snippets…"
+    "searchPhrasePh": "Search snippets…",
+    "phraseNoTag": "Untagged",
+    "phraseCount": "{{n}}"
   },
   "screenshot": {
     "toolSelect": "Select (drag to move the region · ⇧drag to marquee · drag an object to move · ⌥drag to duplicate)",
@@ -1217,7 +1219,7 @@
     "monthOnly": "Month {{m}}",
     "attAfterSave": "Attached on save",
     "attAttachFailed": "\"{{name}}\" couldn't be attached to this entry",
-    "focusOtherMonth": "That entry is in month {{m}}; only this month's entries are shown"
+    "backToThisMonth": "Back to this month"
   },
   "layout": {
     "settings": "Settings",

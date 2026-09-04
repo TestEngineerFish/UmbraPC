@@ -817,7 +817,7 @@
     "vcardSeeList": "去流水里看",
     "vcardStaleWhyManual": "另一台设备把这张卡改成手动填了。",
     "vcardManualNow": "手动记一笔",
-    "vcardDup": "那边也记上了这一笔，检查一下有没有记重"
+    "vcardDup": "那边也记上了，可能记了两笔"
   },
   "clipboard": {
     "searchPh": "搜索剪贴板…",
@@ -842,7 +842,9 @@
     "charCount": "{{count}} 字符",
     "fileCount": "{{count}} 个文件",
     "phrase": "常用语",
-    "searchPhrasePh": "搜索常用语…"
+    "searchPhrasePh": "搜索常用语…",
+    "phraseNoTag": "无标签",
+    "phraseCount": "{{n}} 条"
   },
   "screenshot": {
     "toolSelect": "选择（拖动移动截图区域 · ⇧拖框选 · 拖对象移动 · ⌥拖复制）",
@@ -1217,7 +1219,7 @@
     "monthOnly": "{{m}} 月",
     "attAfterSave": "保存后挂上",
     "attAttachFailed": "「{{name}}」没挂到这笔账上",
-    "focusOtherMonth": "这笔在 {{m}} 月，当前只显示这个月的流水"
+    "backToThisMonth": "回本月"
   },
   "layout": {
     "settings": "设置",

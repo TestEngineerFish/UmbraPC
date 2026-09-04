@@ -33,6 +33,13 @@ export class ClipboardManager {
   private phraseSeq = 0;
   private gcTimer: NodeJS.Timeout | null = null;
 
+  // 常用语的标签清单（顺序 = 常用语设置里那份）。由 main.ts 在 launcher 建好后注入 ——
+  // clipboard 比 launcher 先建，构造时还拿不到它；没注入就退化成不分组（全归「无标签」）。
+  private phraseTagsFn: (() => string[]) | null = null;
+  setPhraseTags(fn: () => string[]): void {
+    this.phraseTagsFn = fn;
+  }
+
   // reregister：截图与剪贴板共用 globalShortcut，改快捷键时由 main.ts 统一清理后各自重注册。
   constructor(private cfg: ConfigStore, userData: string, private opts: ManagerOpts, private reregister: () => void) {
     this.store = new ClipStore(userData);
@@ -218,16 +225,28 @@ export class ClipboardManager {
 
   // ── 常用语（虚拟分类）──
   // 常用语存在 config.phrases 里，不进剪贴板历史；这里把它包装成 ClipItem 交给同一个面板渲染。
+  // 常用语条目。**按标签分组**（批次 013：和常用语页同一套规矩 —— 分组顺序跟标签清单走、
+  // 「无标签」永远最后）：这里只负责排好序并给每条打上 group，插分组头是面板的事。
+  // 搜索时照样分组：过滤完再排，空组自然不出现。
   private phraseItems(keyword = ""): ClipItem[] {
     const kw = keyword.trim().toLowerCase();
     const list = this.cfg.get().phrases || [];
     const now = Date.now();
+    // 标签顺序 = 常用语设置里那份（配置在前、用到但没登记的 keyword 追加）；组内保持列表原顺序。
+    const order = this.phraseTagsFn?.() || [];
+    const rank = (tag: string) => {
+      if (!tag) return order.length + 1;             // 「无标签」永远最后
+      const i = order.indexOf(tag);
+      return i >= 0 ? i : order.length;              // 清单里没有的（同步刚来的新标签）排在「无标签」之前
+    };
     return list
       .filter((p) => {
         if (!kw) return true;
         return [p.name, p.content, p.keyword || ""].some((s) => (s || "").toLowerCase().includes(kw));
       })
-      .map((p) => {
+      .map((p, i) => ({ p, i, tag: (p.keyword || "").trim() }))
+      .sort((a, b) => (rank(a.tag) - rank(b.tag)) || (a.i - b.i))
+      .map(({ p, tag }) => {
         let id = this.phrasePseudoId.get(p.id);
         if (id === undefined) {
           id = -++this.phraseSeq;
@@ -241,8 +260,8 @@ export class ClipboardManager {
           hash: `phrase:${p.id}`,
           favorite: false,
           size: p.content.length,
-          // 借 sourceApp 这一栏显示关键词，列表第二行就能看到怎么直达。
-          sourceApp: p.keyword ? `⌨ ${p.keyword}` : undefined,
+          // 分组头已经写着标签名了，行里不再重复一遍（原来借 sourceApp 显示的 `⌨ 关键词` 撤掉）。
+          group: tag,
           lastUsedAt: now,
           createdAt: now,
         };

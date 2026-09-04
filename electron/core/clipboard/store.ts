@@ -18,6 +18,9 @@ export interface ClipItem {
   sourcePath?: string;  // 图片文件来源原路径
   sourceApp?: string;
   sourceAppPath?: string;
+  /** 分组名：只有「常用语」这一类会带（= 它的标签，没标签的给「无标签」）。
+   *  面板据此在列表里插分组头 —— 剪贴板历史那几类不分组，这一栏为空。 */
+  group?: string;
   lastUsedAt: number;   // 排序字段（毫秒）
   createdAt: number;
 }

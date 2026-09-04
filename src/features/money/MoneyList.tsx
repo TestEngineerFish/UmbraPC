@@ -27,7 +27,7 @@ interface Ctx { x: number; y: number; entry: MoneyEntry }
 
 /** 页头第二行的筛选件：月份标签 / 收支分段 / 分类下拉 / 搜索 / 清空筛选。
  *  状态全在 Money.tsx（第二行由 PageShell 的页头渲染，不在列表组件树里）。 */
-export function MoneyListFilters({ dir, setDir, query, setQuery, filterCat, setFilterCat, cats, catName, monthText, onClear }: {
+export function MoneyListFilters({ dir, setDir, query, setQuery, filterCat, setFilterCat, cats, catName, monthText, onClear, onBackToCurrentMonth }: {
   dir: MoneyDir;
   setDir: (d: MoneyDir) => void;
   query: string;
@@ -39,6 +39,9 @@ export function MoneyListFilters({ dir, setDir, query, setQuery, filterCat, setF
   catName: (slug: string) => string;
   monthText: string;
   onClear: () => void;
+  /** 看的不是当月时才给（失效卡「看这笔记录」会把月份切过去）：一颗「回本月」。
+   *  页面本来没有月份选择器，不给这条路用户就只能切走再切回来才回得到当月。 */
+  onBackToCurrentMonth?: () => void;
 }) {
   const { t } = useTranslation();
   const [catMenu, setCatMenu] = useState(false);
@@ -55,8 +58,12 @@ export function MoneyListFilters({ dir, setDir, query, setQuery, filterCat, setF
   const hasFilter = !!(filterCat || query.trim() || dir !== "all");
 
   return (<>
-    {/* 一期只做本月（D3）：这是标签不是选择器，所以是只读胶囊，没有 hover 转橙、没有下拉箭头 */}
+    {/* 一期只做本月（D3）：这是标签不是选择器，所以是只读胶囊，没有 hover 转橙、没有下拉箭头。
+        例外是从聊天的失效卡跳进来看别的月份时，后面跟一颗「回本月」（批次 013 落地答复 §三.1）。 */}
     <span className={chip()}>{monthText}</span>
+    {onBackToCurrentMonth ? (
+      <button className={btn("ghost", "sm")} onClick={onBackToCurrentMonth}>{t("money.backToThisMonth")}</button>
+    ) : null}
     <Segmented<MoneyDir> value={dir} onChange={setDir} options={[
       { v: "all", label: t("money.dirAll") },
       { v: "expense", label: t("money.expense") },

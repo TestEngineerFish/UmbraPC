@@ -1,5 +1,5 @@
 // 剪贴板历史面板（React）。复用原有 CSS 类，逻辑与 vanilla 版一致。
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 type ClipType = "text" | "image" | "files";
@@ -14,6 +14,9 @@ interface ClipItem {
   sourcePath?: string;
   sourceApp?: string;
   sourceAppPath?: string;
+  /** 分组名：只有「常用语」这一类带（= 它的标签，空串 = 无标签）。主进程已按分组排好序，
+   *  面板只负责在换组处插一条分组头（批次 013：面板里的常用语也按标签分组）。 */
+  group?: string;
   lastUsedAt: number;
   createdAt: number;
 }
@@ -54,6 +57,12 @@ html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,
 .list{width:300px;overflow-y:auto;border-right:1px solid var(--border);padding:6px;}
 .row{display:flex;gap:9px;align-items:flex-start;padding:8px 9px;border-radius:9px;cursor:pointer;}
 .row.sel{background:var(--sel);}
+/* 常用语的标签分组头。面板是固定浅色小窗，取值按这里的密度收了一档：
+   11px/600/.06em + --muted，计数紧挨标题（和常用语页同一套语义）。第一条不留上边距。 */
+.grp{display:flex;align-items:center;gap:7px;padding:9px 9px 4px;}
+.grp:first-child{padding-top:2px;}
+.grp .gt{font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70%;}
+.grp .gc{font-size:10.5px;color:var(--muted);opacity:.75;white-space:nowrap;font-variant-numeric:tabular-nums;}
 .row .idx{width:16px;font-size:11px;color:var(--muted);text-align:center;flex:none;padding-top:2px;}
 .row .ic{width:22px;height:22px;border-radius:6px;flex:none;object-fit:cover;background:var(--chip);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted);overflow:hidden;}
 .row .mid{flex:1;min-width:0;}
@@ -230,18 +239,27 @@ export function Panel() {
           <div className="list" ref={listRef}>
             {items.length ? (
               items.map((it, i) => (
-                <Row
-                  key={it.id}
-                  it={it}
-                  index={keyword === "" && i < 9 ? i + 1 : ""}
-                  sel={i === selected}
-                  thumb={thumbs.get(it.id)}
-                  icon={it.sourceAppPath ? icons.get(it.sourceAppPath) : undefined}
-                  imageLabel={t("clipboard.image")}
-                  onClick={() => setSelected(i)}
-                  onDouble={() => paste(it)}
-                  onMenu={(x, y) => { setSelected(i); setMenu({ x, y, item: it }); }}
-                />
+                // 分组头只是插在渲染里的一行，**不进 items** —— 选中下标、上下键、数字 1–9
+                // 全都还是按条目算的，分组不影响任何键盘操作。
+                <Fragment key={it.id}>
+                  {it.group !== undefined && it.group !== items[i - 1]?.group ? (
+                    <div className="grp">
+                      <span className="gt">{it.group || t("clipboard.phraseNoTag")}</span>
+                      <span className="gc">{t("clipboard.phraseCount", { n: items.filter((x) => x.group === it.group).length })}</span>
+                    </div>
+                  ) : null}
+                  <Row
+                    it={it}
+                    index={keyword === "" && i < 9 ? i + 1 : ""}
+                    sel={i === selected}
+                    thumb={thumbs.get(it.id)}
+                    icon={it.sourceAppPath ? icons.get(it.sourceAppPath) : undefined}
+                    imageLabel={t("clipboard.image")}
+                    onClick={() => setSelected(i)}
+                    onDouble={() => paste(it)}
+                    onMenu={(x, y) => { setSelected(i); setMenu({ x, y, item: it }); }}
+                  />
+                </Fragment>
               ))
             ) : (
               <div className="empty">{t("clipboard.empty")}</div>

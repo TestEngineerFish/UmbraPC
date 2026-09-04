@@ -639,7 +639,14 @@ function onMessage(msg: any): void {
         }
       }
       clearVcardTimer(cid);  // 等回音的 20 秒定时器：回音来了（不管哪种）就不用再等
-      if (dupWarn) showToast(t("chat.vcardDup"), { tone: "warn" });
+      // 提醒必须带出口（批次 013 落地答复 §三.2）：只说「检查一下有没有记重」是把活退回给用户。
+      if (dupWarn) {
+        showToast(t("chat.vcardDup"), {
+          tone: "warn",
+          actionLabel: t("chat.vcardSeeList"),
+          onAction: () => gotoMoneyList({ entryId, ym: msg.ym ? String(msg.ym) : undefined }),
+        });
+      }
       // stale 不吐司：卡上就写着「这张卡失效了」+ 为什么 + 两个出口，再飘一条同义的等于说两遍。
       if (stale) { void staled; break; }
       const s = cs(target);

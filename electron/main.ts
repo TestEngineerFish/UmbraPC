@@ -498,6 +498,9 @@ app.whenReady().then(async () => {
   screenshot = new ScreenshotManager(store, winOpts, reregisterShortcuts);
   // 快捷入口：复用剪贴板的存储实例（避免两份读写同一文件）。
   launcher = new LauncherManager(store, app.getPath("userData"), winOpts, reregisterShortcuts);
+  // 剪贴板面板的「常用语」分类按标签分组（批次 013），标签清单的正本在 launcher ——
+  // clipboard 先建、launcher 后建，所以这里回填而不是走构造参数。
+  clipboard.setPhraseTags(() => launcher!.phraseTags());
   // 快捷入口「发给秘书」：跳出主窗口聊天页并发送这条消息。
   // 批次 013 起消息是 { text, atts? }（atts = 面板已传好的图片 file_id），整个对象原样发给主窗口，
   // 主窗口 shell.ts 按有没有 atts 分流到 sendTextWithAtts / sendText。

@@ -89,15 +89,7 @@ export function Money() {
    *  切走再切回来 MoneyListView 会重挂，不清的话同一笔会再闪一遍。 */
   const [focusId, setFocusId] = useState<string | null>(focus?.entryId || null);
   const switchView = (v: "stats" | "list") => { setFocusId(null); setView(v); };
-  // 要定位的那笔不在当月：记账页只加载当月，定位不到 —— 说一句它在哪个月，别让那颗钮点了没反应。
-  useEffect(() => {
-    if (!focus?.ym) return;
-    const cur = ymOf(new Date());
-    if (focus.ym === cur) return;
-    setFocusId(null);
-    showToast(t("money.focusOtherMonth", { m: Number(focus.ym.slice(5)) }), { tone: "warn" });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focus]);
+
   const [phase, setPhase] = useState<Phase>("loading");
   const [ym, setYm] = useState(ymOf(new Date()));
   const [cats, setCats] = useState<MoneyCat[]>([]);
@@ -121,9 +113,11 @@ export function Money() {
   const alive = useRef(true);
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
-  const reload = useCallback(async (silent = false) => {
-    // 每次重拉时重算当月：页面在月底跨零点开着不关，第二天记的账要进新的月。
-    const m = ymOf(new Date());
+  // targetYm：拉指定的月（批次 013 落地答复 §三.1：失效卡的「看这笔记录」要把月份切过去，
+  // 不许先弹一句「这笔在 X 月」再让用户自己找）。不传就是当月 ——
+  // 每次重拉都重算当月：页面在月底跨零点开着不关，第二天记的账要进新的月。
+  const reload = useCallback(async (silent = false, targetYm?: string) => {
+    const m = targetYm || ymOf(new Date());
     setYm(m);
     if (!silent) setPhase("loading");
     // 趋势一次拉 12 个月，近 6 月在统计页里切片 —— 切档位不再打接口。
@@ -139,7 +133,8 @@ export function Money() {
     setPhase("ready");
   }, []);
 
-  useEffect(() => { void reload(); }, [reload]);
+  // 首拉：带 ym 的定位（失效卡「看这笔记录」跳的可能是上个月的票）就直接拉那个月。
+  useEffect(() => { void reload(false, focus?.ym); }, [reload, focus]);
 
   // slug → 显示名 / 色槽。分类接口默认不含停用的，但**历史流水可能指向停用分类**
   // （停用不影响历史数据），所以查不到时名字回退成 slug 本身、色槽回退中性灰，
@@ -151,6 +146,9 @@ export function Money() {
   const catArt = useCallback((slug: string) => catIcon(slug, cats.find((c) => c.slug === slug)?.icon), [cats]);
 
   const monthText = t("money.monthLabel", { y: ym.slice(0, 4), m: Number(ym.slice(5)) });
+  // 看的不是当月（只可能是从失效卡跳进来的）：月份芯片旁边给一颗「回本月」——
+  // 页面没有月份选择器，不给这条路用户就只能靠切走再切回来。
+  const offCurrentMonth = ym !== ymOf(new Date());
   const isEmpty = phase === "ready" && !entries.length && !!stats && stats.expense === 0 && stats.income === 0;
   // 在跑的周期规则数：进次级按钮的文案（「周期记账 · 3」），tooltip 给全量（共 N 条 · M 条在跑）。
   const live = rules.filter((r) => !r.paused && r.next_at_ms > 0).length;
@@ -200,7 +198,8 @@ export function Money() {
             <MoneyListFilters dir={dir} setDir={setDir} query={query} setQuery={setQuery}
               filterCat={filterCat} setFilterCat={setFilterCat}
               cats={cats.filter((c) => c.enabled).map((c) => [c.slug, c.name])}
-              catName={catName} monthText={monthText} onClear={clearFilter} />
+              catName={catName} monthText={monthText} onClear={clearFilter}
+              onBackToCurrentMonth={offCurrentMonth ? () => { setFocusId(null); void reload(false); } : undefined} />
           ) : null}
         </>),
       }}
