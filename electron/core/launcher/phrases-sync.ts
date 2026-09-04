@@ -51,6 +51,13 @@ export class PhraseSync {
   private pushTimer: NodeJS.Timeout | undefined;
   private pullTimer: NodeJS.Timeout | undefined;
   private onChanged: () => void;
+  // 本地改动计数：schedulePush 每次 +1。sync 发请求前记下当时的值，回包落地前再对一次 ——
+  // 请求在飞期间本地又改过的话，这份回包已经落后于本地，整份落地会把刚才的改动冲掉
+  //（实锤：拖拽调序两次，第二次落在第一次的回包里被冲回去，「一会儿又变回第五行」）。
+  private localSeq = 0;
+  // 同步在飞时又来了一次推送请求：记一笔，飞完立刻再来一轮。原来是直接丢掉（return false），
+  // 丢掉的那次改动没有任何东西会再推它，直到用户下次改东西 —— 而在那之前它就被回包冲没了。
+  private pendingPush = false;
 
   // onChanged：同步结果落地后回调，让各窗口刷新常用语列表。
   constructor(private cfg: ConfigStore, onChanged: () => void) {
@@ -82,6 +89,7 @@ export class PhraseSync {
 
   // 本地改动后调用：攒一小会儿再推，避免拖拽调序时一秒钟发好几次。
   schedulePush(): void {
+    this.localSeq++;
     if (!this.isConfigured()) return;
     if (this.pushTimer) clearTimeout(this.pushTimer);
     this.pushTimer = setTimeout(() => { this.pushTimer = undefined; void this.sync(); }, PUSH_DEBOUNCE_MS);
@@ -90,7 +98,10 @@ export class PhraseSync {
   // 一次往返完成双向同步。返回是否成功；失败原因记在 state 里，不抛给调用方
   // （后台行为，弹窗打断用户不合适；设置页会显示上次失败原因）。
   async sync(): Promise<boolean> {
-    if (this.state.syncing) return false;
+    if (this.state.syncing) {
+      this.pendingPush = true;   // 飞完再来一轮，别丢（见字段注释）
+      return false;
+    }
     if (!this.isConfigured()) {
       this.state.lastError = "";
       return false;
@@ -98,6 +109,7 @@ export class PhraseSync {
     this.state.syncing = true;
     try {
       const c = this.cfg.get();
+      const seq0 = this.localSeq;   // 这份快照对应的本地版本
       const items = (c.phrases || []).map((p, i) => ({
         id: p.id,
         name: p.name || "",
@@ -130,6 +142,14 @@ export class PhraseSync {
         keyword: x.keyword ? String(x.keyword) : undefined,
         updatedAt: Number(x.updatedAt) || 0,
       }));
+      if (this.localSeq !== seq0) {
+        // 请求在飞期间本地又改过：回包落后于本地，不落地（落地=冲掉刚才的改动）。
+        // 记一笔立刻再同步一轮，本地改动随下一轮推上去，那一轮的回包才是一致的。
+        this.pendingPush = true;
+        this.state.lastAt = Date.now();
+        this.state.lastError = "";
+        return true;
+      }
       // 墓碑也以服务端为准：本地那份已经推上去合并过了，留着只会重复上报。
       await this.cfg.save({ phrases: merged, phrasesDeleted: data.deleted || [] });
       this.state.lastAt = Date.now();
@@ -142,22 +162,36 @@ export class PhraseSync {
       return false;
     } finally {
       this.state.syncing = false;
+      if (this.pendingPush) {
+        this.pendingPush = false;
+        setTimeout(() => { void this.sync(); }, RERUN_DELAY_MS);
+      }
     }
   }
 }
 
-// 给一批常用语盖上改动时间戳：和上一份逐条比，内容真变了的才更新 updatedAt。
+// 在飞期间攒下的推送，飞完隔多久再来一轮：给 IPC 落盘一点余量，不用长。
+const RERUN_DELAY_MS = 300;
+
+// 给一批常用语盖上改动时间戳：和上一份逐条比，**内容或位置**真变了的才更新 updatedAt。
 // 不能无脑全盖 —— 那样任何一次保存都会让本机的所有条目在合并时「赢」过别的设备。
+//
+// 位置为什么算进去：服务端按条目 last-write-wins，顺序（order）跟着**胜者**走。
+// 只比内容的话，纯调序一条都不盖时间戳 → 服务端逐条判「不比库里新」全部丢弃 →
+// 回包按库里的旧顺序回来、整份落地 → 拖完过几秒又变回去（sam 实锤）。
+// 部分条目恰好因为刚编辑过而时间戳更新，就只有它们赢了 —— 于是出现「落在中间某个位置」
+// 那种既不是新序也不是旧序的排列。
 export function stampUpdated(next: Phrase[], prev: Phrase[]): Phrase[] {
   const now = Date.now();
-  const before = new Map(prev.map((p) => [p.id, p]));
-  return next.map((p) => {
+  const before = new Map(prev.map((p, i) => [p.id, { p, i }]));
+  return next.map((p, i) => {
     const b = before.get(p.id);
     const same = b
-      && (b.name || "") === (p.name || "")
-      && (b.content || "") === (p.content || "")
-      && (b.keyword || "") === (p.keyword || "");
-    return same ? { ...p, updatedAt: b.updatedAt || now } : { ...p, updatedAt: now };
+      && (b.p.name || "") === (p.name || "")
+      && (b.p.content || "") === (p.content || "")
+      && (b.p.keyword || "") === (p.keyword || "")
+      && b.i === i;
+    return same ? { ...p, updatedAt: b.p.updatedAt || now } : { ...p, updatedAt: now };
   });
 }
 
