@@ -202,6 +202,10 @@ export class VaultManager {
     if (this.lockTimer) { clearTimeout(this.lockTimer); this.lockTimer = undefined; }
     // 锁上之后既推不了也拉不了（没有 AUK），定时器留着只会空转。
     this.stopSyncTimers();
+    // 独立图片窗里若正开着**保险箱的**图（解密后的 data URL），锁定要连带关掉 ——
+    // 不然锁了个寂寞：明文图还在另一扇窗里亮着。只关来源是保险箱的（source 匹配），
+    // 用户正看着的记账凭证不躺枪。
+    void import("../imageviewer").then((m) => m.closeImageViewer("vault")).catch(() => {});
   }
   private requireKey(vaultId: string): Buffer {
     if (!this.auk) throw new Error("保险箱已锁定");

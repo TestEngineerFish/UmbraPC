@@ -20,7 +20,7 @@ import {
 import { Modal, ErrorCard, btn } from "../../components/ui";
 import { askConfirm, showToast } from "../../components/overlay";
 import { DateTimeField } from "../../components/DateTimePicker";
-import { ImageViewer } from "../../components/ImageViewer";
+import { ImageViewer, openInViewerWindow } from "../../components/ImageViewer";
 // 日期换算（ms ↔ 'YYYY-MM-DD'/'HH:mm'）的唯一出处在 notify/reminderKit（纯函数层，带 vitest），
 // 跨功能引用刻意为之 —— 再抄一份就会两处漂移。
 import { combineDateTime, toDateInput, toTimeInput } from "../notify/reminderKit";
@@ -70,6 +70,9 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
     ...atts.map((a) => ({ src: fileUrl(a.file_id), alt: a.origin ? t("money.attOrigin") : a.label })),
     ...pending.map((p) => ({ src: p.url, alt: p.file.name })),
   ];
+  // 批次 011：优先开独立图片窗 —— 记账弹窗不被遮住，对着凭证还能继续填数；
+  // 没有桥（网页预览/测试）退回窗口内 overlay。
+  const openImg = (src: string) => { if (!openInViewerWindow(viewerItems, src)) setViewer(src); };
 
   useEffect(() => { amountRef.current?.focus(); }, []);
 
@@ -344,7 +347,7 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
                   ImageViewer（sam 第二轮：图片预览要一个通用弹框，能左右切）。 */}
               <button className="w-full h-full p-0 block bg-transparent border-none cursor-zoom-in"
                 title={a.origin ? t("money.attOrigin") : a.label}
-                onClick={() => setViewer(fileUrl(a.file_id))}>
+                onClick={() => openImg(fileUrl(a.file_id))}>
                 <img src={fileUrl(a.file_id)} alt={a.label} className="w-full h-full object-cover" />
               </button>
               <div className="absolute left-0 right-0 bottom-0 px-[5px] py-[2px] bg-[rgba(11,10,9,.62)] text-white text-[10px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis">
@@ -373,7 +376,7 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
           ))}
           {pending.map((p) => (
             <div key={p.key} className="relative flex-none w-[72px] h-[72px] rounded-[9px] border border-border bg-chip overflow-hidden">
-              <button className="w-full h-full p-0 block bg-transparent border-none cursor-zoom-in" title={p.file.name} onClick={() => setViewer(p.url)}>
+              <button className="w-full h-full p-0 block bg-transparent border-none cursor-zoom-in" title={p.file.name} onClick={() => openImg(p.url)}>
                 <img src={p.url} alt={p.file.name} className="w-full h-full object-cover" />
               </button>
               <div className="absolute left-0 right-0 bottom-0 px-[5px] py-[2px] bg-[rgba(11,10,9,.62)] text-white text-[10px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis">

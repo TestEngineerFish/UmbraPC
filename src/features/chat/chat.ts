@@ -20,8 +20,16 @@ import {
   getClientId,
   getAutoApproveOperate,
   setAutoApproveOperate,
+  createInspiration,
+  uploadFileProgress,
   type KnownDevice,
+  type MsgMeta,
+  type MsgQuote,
 } from "../../services/server";
+// 常用语存在快捷入口的主进程侧（云端同步走它的通道）——「存为常用语」直接进同一份列表。
+import { hasLauncher, launcherApi } from "../tools/bridges";
+// 图片消息点开走独立图片窗（批次 011 ④）；没有桥（Web 预览）回落到本文件的灯箱。
+import { openInViewerWindow } from "../../components/ImageViewer";
 import { getDesktopConfig } from "../../services/desktop";
 import { hasNotify, notifyApi } from "../notify/bridge";
 import { mdToHtml } from "./markdown";
@@ -33,8 +41,18 @@ import { askConfirm, showToast } from "../../components/overlay";
 import { btn, btnWide } from "../../components/kit";
 
 type Block =
-  | { kind: "user"; text: string; ts?: string | number }
-  | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number }
+  // id：服务端消息表里的行号 —— 删除 / 引用都指着它。刚发出还没拿到回执时是 undefined
+  //（reply 回执带 user_message_id 补上）；failed = 没送出去（右键给「重新发送」）。
+  | { kind: "user"; text: string; ts?: string | number; id?: number; failed?: boolean; quote?: MsgQuote }
+  | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number; id?: number; meta?: MsgMeta }
+  // 图片消息（批次 011 ③）：多张图合成**一条**。srcs 是渲染地址（上传中=本地 ObjectURL，
+  // 落库后=服务端 /files/ 地址）；state 走 上传中→已发 / 失败三态；files 留着供「重新发送」
+  //（图片还在本地，重发不用重新选）。localKey 是本端在途消息的匹配号（message_saved 认领用）。
+  | {
+      kind: "image"; atts: string[]; srcs: string[]; ts?: string | number; id?: number;
+      state: "uploading" | "sent" | "failed"; loaded?: number; total?: number;
+      files?: File[]; err?: string; localKey?: string; sentSig?: string;
+    }
   | { kind: "device"; text: string; ts?: string | number }
   // 任务进度卡（task_update）：引擎里程碑 + 电脑操控共用。kind 沿用 "job" 只是
   // 界面层的历史名（连着 i18n 的 chat.job* 文案键），线上协议已全部是 task_id。
@@ -45,8 +63,9 @@ type Block =
   // 问答卡：秘书在派活前把歧义问清楚（多题、单选/多选、可自定义、逐题推进、统一提交）。
   | { kind: "question"; cardId: string; title: string; questions: QCard[]; at: number; picked: Record<string, string[]>; custom: Record<string, string>; done?: boolean }
   // 系统提示行（稿 1412-1413）：居中的一颗小灰胶囊，说明「不是你干的、但这里变了」。
-  // 目前只有一个来源：别的端清空了这段历史。没有它的话，聊天窗会毫无征兆地整个变空。
-  | { kind: "system"; text: string; ts?: string | number }
+  // 两个来源：别的端清空了这段历史；「占位阶段停」的取消提示（批次 011，meta.cancelled）。
+  // meta.tools 非空时下面跟一条琥珀行（停之前已经执行掉的工具，说得具体）。
+  | { kind: "system"; text: string; ts?: string | number; id?: number; meta?: MsgMeta }
   // 「找位置」卡（稿 1645-1670）：电脑操作时模型反复定位不准，停下来请你指一下。
   // 服务端一直支持（operate.py `_locate_with_user`），iOS 也早就做了（LocateCard.swift），
   // **只有 PC 端一直没接** —— 后果是 operate 卡住时 PC 上什么都不显示，
@@ -148,6 +167,21 @@ let slashDismissed = false;                // 「当普通消息发」：这段 
 let ideaBanner: string | null = null;      // 灵感来源横幅文案（「知道了」可关）
 // 正在清空历史：清空期间禁发消息，避免新消息被服务端的会话重置一起删掉。
 let clearing = false;
+// ── 批次 011：消息菜单 / 引用 / 图片消息的模块状态 ─────────────────────────────
+// 右键菜单：idx 指当前会话 blocks 下标（选中态 halo 也看它）；关掉置 null。
+let msgMenu: { idx: number; x: number; y: number } | null = null;
+// 输入框上方的引用条（主会话专用）。发送时随消息带给服务端（meta.quote）。
+let quoteRef: MsgQuote | null = null;
+// 待发图片条（主会话专用）：over = 超过单张 10MB 上限（标红留在条里，说清哪张多大）。
+interface PendingImg { key: string; file: File; url: string; over?: boolean }
+let pendingImgs: PendingImg[] = [];
+// 拖图进聊天区的遮罩：>0 显示（dragenter/leave 成对，直接布尔会被子元素抖没）。
+let dragDepth = 0;
+// 在途图片消息的「取消上传」把手：localKey → abort 当前 XHR。
+const upAborts: Record<string, () => void> = {};
+// 图片消息上限（和服务端一致：单张 10MB、一次 9 张）。
+const IMG_MAX_COUNT = 9;
+const IMG_MAX_BYTES = 10 * 1024 * 1024;
 
 function newConvState(): ConvState {
   return {
@@ -193,10 +227,25 @@ function platformIcon(platform?: string): string {
   return "🖥️";
 }
 
-function rowToBlock(m: { role: string; content: string; created_at?: string }): Block {
-  if (m.role === "user") return { kind: "user", text: m.content, ts: m.created_at };
+// /files/{id} 的完整地址（图片消息的附件是文件 id，不是路径）。
+function fileSrc(fid: string): string {
+  return absUrl(`/files/${encodeURIComponent(fid)}`);
+}
+
+function rowToBlock(m: { role: string; content: string; created_at?: string; id?: number; kind?: string; atts?: string[]; meta?: MsgMeta }): Block {
+  const meta = m.meta || {};
+  // 图片消息：atts 是文件 id 列表，渲染地址现拼（服务端地址可能换）。
+  if ((m.kind || "text") === "image") {
+    const atts = m.atts || [];
+    return { kind: "image", id: m.id, atts, srcs: atts.map(fileSrc), state: "sent", ts: m.created_at };
+  }
+  // 系统提示行（取消收尾等）。meta 带着：琥珀行（tools）靠它。
+  if (m.kind === "system" || m.role === "system") {
+    return { kind: "system", id: m.id, text: m.content, ts: m.created_at, meta };
+  }
+  if (m.role === "user") return { kind: "user", id: m.id, text: m.content, ts: m.created_at, quote: meta.quote };
   if (m.role === "device") return { kind: "device", text: m.content, ts: m.created_at };
-  return { kind: "assistant", thinking: false, streaming: false, text: m.content, trace: [], traceOpen: false, ts: m.created_at };
+  return { kind: "assistant", id: m.id, thinking: false, streaming: false, text: m.content, trace: [], traceOpen: false, ts: m.created_at, meta };
 }
 
 // IM 风格消息时间：今天→HH:MM，昨天→昨天 HH:MM，今年→M月D日 HH:MM，更早→YYYY年M月D日 HH:MM。
@@ -397,12 +446,76 @@ function onMessage(msg: any): void {
       break;
     }
     case "reply": {
+      const s = cs(target);
       const a = assistantOf(target);
-      if (a) { a.thinking = false; a.streaming = false; a.text = msg.text || a.text; }
-      cs(target).assistantIdx = null;
-      cs(target).lastText = msg.text || "";
-      cs(target).lastAt = Date.now();
+      if (a) {
+        a.thinking = false; a.streaming = false; a.text = msg.text || a.text;
+        // 回执带两条消息的落库 id（批次 011）：删除 / 引用都指着它。
+        if (msg.message_id) a.id = Number(msg.message_id);
+      }
+      if (msg.user_message_id) {
+        // 从占位往前找最近一条还没有 id 的用户消息（正常就是紧挨着的上一条）。
+        for (let i = s.blocks.length - 1; i >= 0; i--) {
+          const b = s.blocks[i];
+          if (b.kind === "user" && b.id === undefined && !b.failed) { b.id = Number(msg.user_message_id); break; }
+        }
+      }
+      s.assistantIdx = null;
+      s.lastText = msg.text || "";
+      s.lastAt = Date.now();
       break;
+    }
+    case "reply_cancelled": {
+      // 你停了这次回复（批次 011 ①）。两种收尾：半截 → assistant + meta.interrupted；
+      // 空手 → system 提示行。都替换掉正在流式的占位块（工具轨迹保留 —— 那是真跑过的）。
+      const s = cs(target);
+      const idx = s.assistantIdx;
+      const meta: MsgMeta = msg.meta || {};
+      let blk: Block;
+      if (msg.role === "assistant") {
+        const trace = idx !== null && s.blocks[idx]?.kind === "assistant"
+          ? (s.blocks[idx] as Extract<Block, { kind: "assistant" }>).trace : [];
+        blk = { kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace, traceOpen: false, ts: Date.now(), id: msg.id ? Number(msg.id) : undefined, meta };
+      } else {
+        blk = { kind: "system", text: msg.text || "", ts: Date.now(), id: msg.id ? Number(msg.id) : undefined, meta };
+      }
+      if (idx !== null && s.blocks[idx]?.kind === "assistant") s.blocks[idx] = blk;
+      else s.blocks.push(blk);
+      s.assistantIdx = null;
+      s.lastText = msg.text || "";
+      s.lastAt = Date.now();
+      break;
+    }
+    case "message_saved": {
+      // 图片消息落库回执：把在途气泡认领成正式消息（id 到手，删除 / 引用有对象了）。
+      const s = cs(target);
+      const sig = ((msg.atts || []) as string[]).join(",");
+      for (const b of s.blocks) {
+        if (b.kind === "image" && b.state === "uploading" && b.sentSig === sig) {
+          b.id = Number(msg.id) || undefined;
+          b.atts = (msg.atts || []) as string[];
+          b.srcs.forEach((u) => { if (u.startsWith("blob:")) URL.revokeObjectURL(u); });
+          b.srcs = b.atts.map(fileSrc);
+          b.state = "sent";
+          b.files = undefined; b.sentSig = undefined;
+          if (b.localKey) delete upAborts[b.localKey];
+          break;
+        }
+      }
+      break;
+    }
+    case "message_deleted": {
+      // 谁删的都一样处理（服务端不排除发起端）：本地还有这条就移除，已移除就当没事。
+      removeBlockById(target, Number(msg.id) || 0);
+      if (target === activeConv) renderMessages();
+      renderContacts();
+      return;
+    }
+    case "message_restored": {
+      // 回收站找回：往正确位置插旧消息的逻辑每端写一遍必然各错各的 —— 重拉该会话。
+      const conv = typeof msg.conversation === "string" && msg.conversation ? msg.conversation : activeConv;
+      if (convs[conv]) reloadConv(conv);
+      return;
     }
     case "task_update": // 任务进度（引擎里程碑 + 电脑操控共用）：更新/新建进度卡
       target = handleTaskUpdate(msg);
@@ -500,12 +613,25 @@ function onMessage(msg: any): void {
       return;
     }
     case "chat_message": {
-      // 其它端发出的消息（跨端同步）。
+      // 其它端发出的消息（跨端同步）。批次 011 起还有三种新形状：
+      // kind=image（图片消息）、role/kind=system（别的端停了回复的提示行）、带 meta 的半截中断。
       const s = cs(target);
       const ts = Date.now();
-      if (msg.role === "user") s.blocks.push({ kind: "user", text: msg.text || "", ts });
-      else s.blocks.push({ kind: "assistant", thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts });
-      s.lastText = msg.text || "";
+      const meta: MsgMeta = msg.meta || {};
+      if ((msg.kind || "") === "image") {
+        const atts = ((msg.atts || []) as string[]);
+        s.blocks.push({ kind: "image", id: msg.id ? Number(msg.id) : undefined, atts, srcs: atts.map(fileSrc), state: "sent", ts });
+        s.lastText = t("chat.imageMsgPreview");
+      } else if (msg.role === "system" || msg.kind === "system") {
+        s.blocks.push({ kind: "system", id: msg.id ? Number(msg.id) : undefined, text: msg.text || "", ts, meta });
+        s.lastText = msg.text || "";
+      } else if (msg.role === "user") {
+        s.blocks.push({ kind: "user", text: msg.text || "", ts, quote: meta.quote });
+        s.lastText = msg.text || "";
+      } else {
+        s.blocks.push({ kind: "assistant", id: msg.id ? Number(msg.id) : undefined, thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts, meta });
+        s.lastText = msg.text || "";
+      }
       s.lastAt = ts;
       break;
     }
@@ -529,6 +655,46 @@ function assistantOf(conv: string): Extract<Block, { kind: "assistant" }> | null
   if (s.assistantIdx === null) return null;
   const b = s.blocks[s.assistantIdx];
   return b && b.kind === "assistant" ? b : null;
+}
+
+// 按消息 id 移除一个块（本地删除 / message_deleted 广播共用）。
+// blocks 是索引寻址的（assistantIdx / jobMap / 打开着的菜单都记下标），抽掉一个要整体左移。
+function removeBlockById(conv: string, id: number): boolean {
+  if (!id) return false;
+  const s = cs(conv);
+  const idx = s.blocks.findIndex((b) => "id" in b && b.id === id);
+  if (idx < 0) return false;
+  removeBlockAt(conv, idx);
+  return true;
+}
+function removeBlockAt(conv: string, idx: number): void {
+  const s = cs(conv);
+  s.blocks.splice(idx, 1);
+  if (s.assistantIdx !== null) {
+    if (s.assistantIdx === idx) s.assistantIdx = null;
+    else if (s.assistantIdx > idx) s.assistantIdx -= 1;
+  }
+  for (const k of Object.keys(s.jobMap)) {
+    if (s.jobMap[k] === idx) delete s.jobMap[k];
+    else if (s.jobMap[k] > idx) s.jobMap[k] -= 1;
+  }
+  if (msgMenu && conv === activeConv) {
+    if (msgMenu.idx === idx) msgMenu = null;
+    else if (msgMenu.idx > idx) msgMenu.idx -= 1;
+  }
+}
+
+// 整会话重拉（回收站找回后走这条：往正确位置插旧消息不如重拉一页可靠）。
+function reloadConv(conv: string): void {
+  const s = cs(conv);
+  s.blocks = [];
+  s.assistantIdx = null;
+  s.jobMap = {};
+  s.oldestId = null;
+  s.hasMore = false;
+  s.loaded = false;
+  s.loading = false;
+  if (conv === activeConv) void loadConvHistory(conv);
 }
 
 // 返回该 task_update 归属的会话 id（供 onMessage 决定是否刷新/标未读）。
@@ -597,6 +763,11 @@ const dots = `<span style="display:inline-flex;gap:4px;align-items:center;"><spa
 const timeLine = (ts: string | number | undefined, align: "flex-start" | "flex-end") => {
   const s = fmtMsgTime(ts);
   return s ? `<div style="align-self:${align};font-size:10.5px;color:var(--muted);padding:0 4px;">${s}</div>` : "";
+};
+// 时间戳后带标注（批次 011 ①：流式中停的「已中断」缀在时间后，不进正文）。
+const timeLineMarked = (ts: string | number | undefined, align: "flex-start" | "flex-end", mark: string) => {
+  const s = fmtMsgTime(ts);
+  return `<div style="align-self:${align};font-size:10.5px;color:var(--muted);padding:0 4px;">${s ? s + " · " : ""}${esc(mark)}</div>`;
 };
 
 // 授权卡按钮：批准 / 总是允许 / 拒绝。「总是允许」= 打开自动批准 + 批准本次。
@@ -698,9 +869,66 @@ function labeled(who: "assistant" | "device", bubbleHtml: string): string {
   return `<div style="display:flex;flex-direction:column;align-items:flex-start;gap:5px;">${label}${bubbleHtml}</div>`;
 }
 
-function blockHtml(b: Block, i: number): string {
-  if (b.kind === "user")
-    return `<div style="align-self:flex-end;max-width:76%;background:var(--user-bubble);padding:10px 13px;border-radius:12px 12px 4px 12px;line-height:1.65;white-space:pre-wrap;">${esc(b.text)}</div>${timeLine(b.ts, "flex-end")}`;
+// ── 批次 011 ①：取消收尾的琥珀行 ────────────────────────────────────────────
+// 「⚠︎ 停之前它已经建好了提醒「…」。这条留着，不跟着撤销。 [去看提醒]」
+// 只在真的执行过**会留下东西的**工具时出：只读查询（search/list/web_search）停了就停了，
+// 说「不跟着撤销」反而吓人。清单从 meta.tools 来（服务端在 tool_call 流经处攒的）。
+const KEPT_TOOLS: Record<string, { verb: string; nav: string; btnKey: string }> = {
+  create_reminder:  { verb: "建好了提醒",     nav: "notify",      btnKey: "chat.goSeeReminder" },
+  update_reminder:  { verb: "改了提醒",       nav: "notify",      btnKey: "chat.goSeeReminder" },
+  delete_reminder:  { verb: "删了提醒",       nav: "notify",      btnKey: "chat.goSeeReminder" },
+  add_money_entry:  { verb: "记了一笔账",     nav: "money",       btnKey: "chat.goSeeMoney" },
+  add_phrase:       { verb: "存了一条常用语", nav: "tools",       btnKey: "chat.goSeePhrases" },
+  save_inspiration: { verb: "记下了一条灵感", nav: "inspiration", btnKey: "chat.goSeeIdeas" },
+  create_task:      { verb: "创建了任务",     nav: "tasks",       btnKey: "chat.goSeeTasks" },
+};
+// 从 args（JSON 字符串，服务端截 200）里捞一个能指认对象的词：提醒的 text、任务的 name…
+function toolObjOf(args?: string): string {
+  try {
+    const p = JSON.parse(args || "{}");
+    const v = p.text || p.title || p.name || "";
+    const s = String(v).trim();
+    return s ? `「${s.length > 24 ? s.slice(0, 24) + "…" : s}」` : "";
+  } catch { return ""; }
+}
+function toolsKeptHtml(meta: MsgMeta | undefined, center: boolean): string {
+  const kept = (meta?.tools || []).filter((x) => KEPT_TOOLS[x.name]);
+  if (!kept.length) return "";
+  const parts = kept.map((x) => `${KEPT_TOOLS[x.name].verb}${toolObjOf(x.args)}`);
+  const tail = kept.length > 1 ? t("chat.toolsKeptTailMany") : t("chat.toolsKeptTailOne");
+  const first = KEPT_TOOLS[kept[0].name];
+  return `<div style="align-self:${center ? "center" : "flex-start"};max-width:82%;display:flex;align-items:center;gap:9px;padding:8px 11px;background:var(--warning-soft);border:1px solid var(--warning);border-radius:9px;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--warning)" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;"><path d="M12 4 2.5 20h19zM12 10v4M12 17v.01"></path></svg>
+      <span style="flex:1;min-width:0;font-size:12px;color:var(--warning);line-height:1.65;">${esc(t("chat.toolsKeptHead"))}${esc(parts.join("、"))}${esc(tail)}</span>
+      <button data-goseenav="${esc(first.nav)}" class="${btn("ghost", "sm")}" style="flex:none;">${esc(t(first.btnKey))}</button>
+    </div>`;
+}
+
+// 字节 → 「1.8 MB」（上传进度行用；<0.1MB 的图也照 MB 说，单位一致才好比大小）。
+const fmtMB = (n: number) => `${(Math.max(0, n) / 1048576).toFixed(1)} MB`;
+
+// 气泡顶部的被引用块（批次 011 ②）：--chip 底 + 左 2px 橙条，2 行截断，点它回到原消息。
+function quoteChipHtml(q: MsgQuote): string {
+  const who = q.role === "user" ? t("chat.quoteMe") : t("chat.secretary");
+  return `<div data-qjump="${q.id || ""}" style="display:flex;align-items:stretch;gap:7px;margin-bottom:7px;padding:6px 9px;background:var(--chip);border-radius:7px;${q.id ? "cursor:pointer;" : ""}">
+      <span style="flex:none;width:2px;border-radius:999px;background:var(--orange);"></span>
+      <span style="flex:1;min-width:0;font-size:11.5px;color:var(--muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;">${esc(t("chat.quoteWho", { who }))}：${esc(q.text)}</span>
+    </div>`;
+}
+
+function blockHtml(b: Block, i: number, sel = false): string {
+  // 选中态（菜单开着）：气泡外一圈 halo，底色和描边都不动（批次 011 稿②）。
+  const halo = sel ? "box-shadow:0 0 0 2px var(--orange-soft);" : "";
+  const haloAttr = sel ? ` data-halo="1"` : "";
+
+  if (b.kind === "user") {
+    const bubble = `<div${haloAttr} style="max-width:100%;background:var(--user-bubble);padding:10px 13px;border-radius:12px 12px 4px 12px;line-height:1.65;white-space:pre-wrap;${halo}">${b.quote ? quoteChipHtml(b.quote) : ""}${esc(b.text)}</div>`;
+    // 发送失败：气泡左侧一颗实心红「!」圆钮（右键菜单给「重新发送」）。
+    const failMark = b.failed
+      ? `<span title="${esc(t("chat.sendFailed"))}" style="flex:none;width:17px;height:17px;border-radius:999px;background:var(--danger);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">!</span>`
+      : "";
+    return `<div style="align-self:flex-end;max-width:76%;display:flex;align-items:center;gap:8px;justify-content:flex-end;">${failMark}${bubble}</div>${timeLine(b.ts, "flex-end")}`;
+  }
 
   if (b.kind === "device") {
     // 设备发出的消息**靠左**。
@@ -724,9 +952,18 @@ function blockHtml(b: Block, i: number): string {
       : "";
     // 注意：这里不能用 white-space:pre-wrap —— Markdown 渲染已把换行转成块/段落/<br>，
     // 再 pre-wrap 会把 md 源码里的换行重复显示成大片空白。
-    const bubble = `<div style="align-self:flex-start;max-width:82%;background:var(--card);border:1px solid var(--border);padding:11px 13px;border-radius:12px 12px 12px 4px;line-height:1.65;min-height:20px;overflow-wrap:break-word;">${b.thinking ? dots : ""}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
-    return trace + labeled("assistant", bubble) + (b.streaming ? "" : timeLine(b.ts, "flex-start"));
+    const bubbleCore = `<div${haloAttr} style="min-width:0;background:var(--card);border:1px solid var(--border);padding:11px 13px;border-radius:12px 12px 12px 4px;line-height:1.65;min-height:20px;overflow-wrap:break-word;${halo}">${b.thinking ? dots : ""}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
+    // 停止钮（批次 011 ①）：**常显**在占位/流式气泡尾部，25px 描边小钮，hover 转红。
+    // 等回复的那几秒正是最需要看见它的时候，不藏进 hover。
+    const bubble = b.streaming
+      ? `<div style="align-self:flex-start;max-width:82%;display:flex;align-items:flex-end;gap:8px;">${bubbleCore}<button data-stopreply="1" class="hover:border-danger hover:text-danger" style="flex:none;height:25px;padding:0 10px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:8px;font-size:11.5px;font-family:inherit;cursor:pointer;white-space:nowrap;transition:border-color .13s ease,color .13s ease;">${esc(t("chat.stopReply"))}</button></div>`
+      : `<div style="align-self:flex-start;max-width:82%;display:flex;">${bubbleCore}</div>`;
+    // 流式中停：时间戳后缀「已中断」（不写进正文 —— 括号在气泡里会被读成秘书自己说的话）。
+    const time = b.meta?.interrupted ? timeLineMarked(b.ts, "flex-start", t("chat.interruptedMark")) : timeLine(b.ts, "flex-start");
+    return trace + labeled("assistant", bubble) + (b.streaming ? "" : time + toolsKeptHtml(b.meta, false));
   }
+
+  if (b.kind === "image") return imageBlockHtml(b, i, sel);
 
   if (b.kind === "job") {
     // 卡里嵌着待处理的授权 —— 那不是「90%」，那是**待确认**（停下来等你点头）。
@@ -771,7 +1008,7 @@ function blockHtml(b: Block, i: number): string {
           <button data-jobact="${esc(b.taskId)}" data-jobfail="${st === "failed" ? "1" : ""}" class="${btn("ghost", "sm")}">${esc(actLabel)}</button>
         </div>`;
     // 长摘要（agent 的输出动辄几百字）限高可滚，别撑破卡片。
-    return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;display:flex;flex-direction:column;gap:9px;">
+    return `<div${haloAttr} style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;display:flex;flex-direction:column;gap:9px;${halo}">
         <div style="display:flex;align-items:center;gap:9px;">
           ${spin}
           <span style="flex:1;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(b.goal)}</span>
@@ -788,7 +1025,9 @@ function blockHtml(b: Block, i: number): string {
 
   if (b.kind === "system") {
     // 稿 1412-1413：居中一颗小灰胶囊。刻意做得比任何消息都弱 —— 它不是谁说的话。
-    return `<div style="align-self:center;padding:3px 11px;border-radius:999px;background:var(--chip);color:var(--faint);font-size:11px;white-space:nowrap;">${esc(b.text)}</div>`;
+    // 取消收尾若动过工具（meta.tools），下面跟一条琥珀行把留下的东西说具体（批次 011 ①）。
+    return `<div style="align-self:center;padding:3px 11px;border-radius:999px;background:var(--chip);color:var(--faint);font-size:11px;white-space:nowrap;">${esc(b.text)}</div>`
+      + toolsKeptHtml(b.meta, true);
   }
 
   if (b.kind === "done") {
@@ -826,7 +1065,7 @@ function blockHtml(b: Block, i: number): string {
             ? `${svgIcon(ICON_AUTH_APPROVED, 12, 1.9)}${esc(t("chat.approved"))}`
             : `${svgIcon(ICON_AUTH_DENIED, 12, 1.9)}${esc(t("chat.denied"))}`}</div>`
       : confirmButtons(b.confirmId, b.scope);
-    return `<div style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;">
+    return `<div${haloAttr} style="align-self:flex-start;max-width:82%;width:100%;background:var(--card);border:1px solid var(--border);border-radius:11px;padding:12px 14px;${halo}">
         <div style="font-weight:600;color:var(--orange-text);margin-bottom:6px;display:flex;align-items:center;gap:7px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"></path><path d="M10.3 3.9 2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path></svg>${esc(t("chat.needConfirm"))}</div>
         <div style="font-size:13px;line-height:1.55;color:var(--text);">${esc(b.summary)}</div>
         ${detail ? `<div style="font-size:11.5px;color:var(--muted);margin-top:6px;font-family:ui-monospace,Menlo,monospace;word-break:break-all;">${esc(detail)}</div>` : ""}
@@ -860,6 +1099,57 @@ function blockHtml(b: Block, i: number): string {
 // 与 iOS 的一处**故意**不同：iOS 是拖箭头（箭尾→尖端），PC 这里是点一下。
 // 箭头在 iOS 上是为了解决「手指挡住要点的位置」，鼠标指针不遮挡，桌面端不需要，
 // 稿也画的是点选。回传给服务端的都只有尖端那一个点，协议是一样的。
+// ── 图片消息气泡（批次 011 ③）────────────────────────────────────────────────
+// 尺寸规则照稿：单图长边上限 240 保比例、圆角跟气泡（12 12 4 12）；多图固定 78px 格子
+// 3 列 cover 裁方，外面套一层气泡底 —— 格子固定，布局才不随图片比例跳。
+// 上传中：盖 rgba(12,10,8,.5) + 白色**确定型**进度环 + 百分比（有真百分比就不用旋转弧），
+// 下一行「正在上传 · 1.8 MB / 2.9 MB」+「取消上传」。
+// 失败：气泡压到 55% + 描边转红 + 左侧实心红「!」，错误三段式 + [重新发送]。
+function imageBlockHtml(b: Extract<Block, { kind: "image" }>, i: number, sel: boolean): string {
+  const halo = sel ? "box-shadow:0 0 0 2px var(--orange-soft);" : "";
+  const haloAttr = sel ? ` data-halo="1"` : "";
+  const n = b.srcs.length;
+  const failed = b.state === "failed";
+  const uploading = b.state === "uploading";
+  const one = n === 1;
+  // 主体：单图=图片自己就是气泡；多图=气泡底上的 3 列格子。
+  const body = one
+    ? `<img data-imgat="0" src="${esc(b.srcs[0])}" alt="${esc(t("chat.imageAlt"))}" draggable="false" style="display:block;max-width:240px;max-height:240px;border-radius:12px 12px 4px 12px;${b.state === "sent" ? "cursor:zoom-in;" : ""}">`
+    : `<div style="display:grid;grid-template-columns:repeat(${Math.min(3, n)}, 78px);gap:4px;">${b.srcs
+        .map((u, j) => `<img data-imgat="${j}" src="${esc(u)}" alt="${esc(t("chat.imageAlt"))}" draggable="false" style="width:78px;height:78px;object-fit:cover;border-radius:6px;display:block;${b.state === "sent" ? "cursor:zoom-in;" : ""}">`)
+        .join("")}</div>`;
+  const shellPad = one ? "" : "padding:6px;background:var(--user-bubble);";
+  // 上传遮罩：确定型进度环（r=15.9155 → 周长 100，dashoffset 直接用百分数）。
+  const pct = b.total ? Math.max(0, Math.min(100, Math.round(((b.loaded || 0) / b.total) * 100))) : 0;
+  const overlay = uploading
+    ? `<span style="position:absolute;inset:0;border-radius:${one ? "12px 12px 4px 12px" : "10px"};background:rgba(12,10,8,.5);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;color:#fff;">
+        <svg width="40" height="40" viewBox="0 0 40 40" style="transform:rotate(-90deg);"><circle cx="20" cy="20" r="15.9155" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="3"></circle><circle data-upring="${i}" cx="20" cy="20" r="15.9155" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-dasharray="100" stroke-dashoffset="${100 - pct}"></circle></svg>
+        <span data-uppct="${i}" style="font:600 11.5px ui-monospace,Menlo,monospace;">${pct}%</span>
+      </span>`
+    : "";
+  const shell = `<div${haloAttr} data-imgmsg="${i}" style="position:relative;display:inline-block;${shellPad}border-radius:${one ? "12px 12px 4px 12px" : "10px"};border:1px solid ${failed ? "var(--danger)" : "var(--border)"};overflow:hidden;${failed ? "opacity:.55;" : ""}${halo}">${body}${overlay}</div>`;
+  const failMark = failed
+    ? `<span title="${esc(t("chat.sendFailed"))}" style="flex:none;width:17px;height:17px;border-radius:999px;background:var(--danger);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">!</span>`
+    : "";
+  let foot = "";
+  if (uploading) {
+    foot = `<div style="align-self:flex-end;display:flex;align-items:center;gap:9px;padding:0 2px;">
+        <span data-upline="${i}" style="font-size:11px;color:var(--muted);">${esc(t("chat.uploading"))} · ${fmtMB(b.loaded || 0)} / ${fmtMB(b.total || 0)}</span>
+        <button data-upcancel="${i}" class="${btn("ghost", "sm")}">${esc(t("chat.uploadCancel"))}</button>
+      </div>`;
+  } else if (failed) {
+    // 错误三段式：发生了什么 → 为什么 → 现在能做什么（最后半句是关键 ——
+    // 不说「图片还在本地」，用户会以为要重新去相册里翻）。
+    foot = `<div style="align-self:flex-end;display:flex;align-items:center;gap:9px;max-width:76%;padding:0 2px;">
+        <span style="flex:1;min-width:0;font-size:11.5px;color:var(--danger);line-height:1.65;">${esc(t("chat.uploadFailHead"))}：${esc(b.err || t("chat.uploadFailNet"))}。${esc(t("chat.uploadFailBody"))}</span>
+        <button data-upretry="${i}" class="${btn("danger", "sm")}" style="flex:none;">${esc(t("chat.resend"))}</button>
+      </div>`;
+  }
+  return `<div style="align-self:flex-end;max-width:76%;display:flex;align-items:center;gap:8px;justify-content:flex-end;">${failMark}${shell}</div>`
+    + foot
+    + (b.state === "sent" ? timeLine(b.ts, "flex-end") : "");
+}
+
 function locateCardHtml(b: Extract<Block, { kind: "locate" }>, i: number): string {
   const head = `<div style="display:flex;align-items:center;gap:8px;">
       <span style="flex:none;width:22px;height:22px;border-radius:7px;background:var(--orange-soft);color:var(--orange-text);display:flex;align-items:center;justify-content:center;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 19 19 5M19 5h-7M19 5v7"></path></svg></span>
@@ -1171,10 +1461,12 @@ function renderMessages(preserve = false): void {
       : `<div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:10px;min-height:300px;">${avatarHtml(activeConv, 46)}<span style="font-size:14px;text-align:center;max-width:280px;line-height:1.5;">${esc(emptyHint)}</span></div>`;
   } else {
     // 每条消息包一层 flex:none，避免纵向 flex 在内容（高图片）超高时压缩重叠。
+    // data-bi 是右键菜单认块用的下标（批次 011 ②）；sel = 菜单开着的那条（halo）。
     el.innerHTML = s.blocks
-      .map((b, i) => `<div style="flex:none;display:flex;flex-direction:column;gap:8px;">${blockHtml(b, i)}</div>`)
+      .map((b, i) => `<div data-bi="${i}" style="flex:none;display:flex;flex-direction:column;gap:8px;">${blockHtml(b, i, msgMenu?.idx === i)}</div>`)
       .join("");
   }
+  renderMsgMenu();
   refreshComposer();
   // 离线横幅跟着消息区一起刷：设备上下线会走 device_presence → loadDevices → renderContacts，
   // 但那条路不重绘消息区，所以下面 loadDevices 里也单独叫了一次。
@@ -1202,18 +1494,52 @@ function refreshComposer(): void {
   if (!wrap.querySelector("#draft")) {
     // position:relative：斜杠面板绝对定位在输入区上方（稿：left 16、贴着输入条向上）。
     wrap.style.position = "relative";
+    // 「+」在输入框左侧、发送在右侧（分居两端，底部对齐，批次 011 ③）；
+    // 引用条 / 待发图片条叠在输入行上方同一区。
     wrap.innerHTML = `
       <div id="uslash"></div>
       <div id="uideabanner"></div>
+      <div id="uquote"></div>
+      <div id="uimgstrip"></div>
       <div style="display:flex;gap:10px;align-items:flex-end;padding:10px 16px 4px;">
+        <button id="uplus" title="${esc(t("chat.addImage"))}" class="hover:border-orange hover:text-orange-text" style="flex:none;width:38px;height:38px;border:1px solid var(--border);background:transparent;color:var(--muted);border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:border-color .13s ease,color .13s ease;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"></path></svg></button>
         <div style="flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:flex-start;gap:7px;border:1px solid var(--border);background:var(--bg);border-radius:10px;padding:6px 8px;">
           <span id="uchip"></span>
           <textarea id="draft" rows="2" class="flex-1 min-w-[120px] resize-none border-none bg-transparent text-text px-[4px] py-[3px] text-[13.5px] leading-[1.5] font-[inherit] max-h-[120px] outline-none"></textarea>
         </div>
         <button id="sendbtn" class="${btn("primary")} gap-[6px] self-center" ${clearing ? "disabled" : ""}>${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
       </div>
-      <div id="uchiphint" style="padding:0 16px 10px;"></div>`;
+      <div id="uchiphint" style="padding:0 16px 10px;"></div>
+      <input id="uimgfile" type="file" accept="image/*" multiple style="display:none;">`;
     wrap.querySelector("#sendbtn")!.addEventListener("click", send);
+    // 「+」→ 文件选择；选完清 value，同一批图能再选一次。
+    const fileInput = wrap.querySelector("#uimgfile") as HTMLInputElement;
+    wrap.querySelector("#uplus")!.addEventListener("click", () => {
+      if (pendingImgs.length >= IMG_MAX_COUNT) { showToast(t("chat.imgMax9"), { tone: "warn" }); return; }
+      fileInput.click();
+    });
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files) takeImgs(fileInput.files);
+      fileInput.value = "";
+    });
+    // 待发条：× 摘图、虚线「+」再加（事件代理，条是 innerHTML 重画的）。
+    (wrap.querySelector("#uimgstrip") as HTMLElement).addEventListener("click", (e) => {
+      const el = (e.target as HTMLElement).closest("[data-imgdrop],[data-imgadd]") as HTMLElement | null;
+      if (!el) return;
+      if (el.dataset.imgadd !== undefined) {
+        if (pendingImgs.length < IMG_MAX_COUNT) fileInput.click();
+        return;
+      }
+      const key = el.dataset.imgdrop!;
+      const hit = pendingImgs.find((p) => p.key === key);
+      if (hit) URL.revokeObjectURL(hit.url);
+      pendingImgs = pendingImgs.filter((p) => p.key !== key);
+      renderImgStrip();
+    });
+    // 引用条的 ×。
+    (wrap.querySelector("#uquote") as HTMLElement).addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest("[data-quoteoff]")) { quoteRef = null; renderQuoteBar(); }
+    });
     const ta = wrap.querySelector("#draft") as HTMLTextAreaElement;
     ta.addEventListener("input", () => {
       drafts[activeConv] = ta.value;
@@ -1239,6 +1565,13 @@ function refreshComposer(): void {
         if (e.key === "Enter" && !e.shiftKey && flat.length) { e.preventDefault(); pickSlash(flat[Math.min(slashSel, flat.length - 1)]); return; }
       }
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    });
+    // ⌘V 粘图与「+」同效（批次 011 ③）：剪贴板里有图片就收进待发条，不落进文本。
+    ta.addEventListener("paste", (e) => {
+      const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith("image/"));
+      if (!files.length) return;
+      e.preventDefault();
+      takeImgs(files);
     });
     // 面板行点击 / hover 同步选中 / 空态两个出口，全走事件代理。
     (wrap.querySelector("#uslash") as HTMLElement).addEventListener("click", (e) => {
@@ -1272,6 +1605,65 @@ function refreshComposer(): void {
   renderChip();
   renderIdeaBanner();
   renderSlashPanel();
+  renderQuoteBar();
+  renderImgStrip();
+}
+
+// ── 批次 011：引用条与待发图片条 ────────────────────────────────────────────
+// 输入框上方的引用条：左 2px 橙竖条 + 「引用 秘书」 + 摘要 2 行截断 + ×（稿②）。
+function renderQuoteBar(): void {
+  const el = container?.querySelector("#uquote") as HTMLElement | null;
+  if (!el) return;
+  if (!quoteRef) { el.innerHTML = ""; return; }
+  const who = quoteRef.role === "user" ? t("chat.quoteMe") : t("chat.secretary");
+  el.innerHTML = `<div style="display:flex;align-items:stretch;gap:9px;margin:8px 16px 0;padding:7px 10px;background:var(--chip);border-radius:9px;">
+      <span style="flex:none;width:2px;border-radius:999px;background:var(--orange);"></span>
+      <span style="flex:1;min-width:0;font-size:11.5px;color:var(--muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;align-self:center;"><span style="font-weight:600;color:var(--text);">${esc(t("chat.quoteWho", { who }))}</span>：${esc(quoteRef.text)}</span>
+      <button data-quoteoff="1" title="${esc(t("chat.quoteOff"))}" style="flex:none;align-self:center;width:18px;height:18px;border:none;background:transparent;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div>`;
+}
+
+// 待发缩略条：64px 缩略 + 右上 × + 末尾虚线「+」+ 右端计数 3 / 9（稿③）。
+// 超限那张标红留在条里，下面一行说清是哪张、多大 —— 直接吞掉用户会以为自己没选中。
+function renderImgStrip(): void {
+  const el = container?.querySelector("#uimgstrip") as HTMLElement | null;
+  if (!el) return;
+  if (!pendingImgs.length) { el.innerHTML = ""; return; }
+  const full = pendingImgs.length >= IMG_MAX_COUNT;
+  const thumbs = pendingImgs.map((p) => `
+    <span style="position:relative;flex:none;width:64px;height:64px;border-radius:8px;overflow:hidden;border:${p.over ? "1.5px solid var(--danger)" : "1px solid var(--border)"};">
+      <img src="${esc(p.url)}" alt="" style="width:100%;height:100%;object-fit:cover;display:block;">
+      <button data-imgdrop="${esc(p.key)}" title="${esc(t("chat.imgRemove"))}" style="position:absolute;top:2px;right:2px;width:17px;height:17px;border:none;border-radius:999px;background:rgba(11,10,9,.62);color:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </span>`).join("");
+  const over = pendingImgs.findIndex((p) => p.over);
+  const overLine = over >= 0
+    ? `<div style="margin-top:6px;font-size:11.5px;color:var(--danger);line-height:1.65;">${esc(t("chat.imgOverLimit", { n: over + 1, size: fmtMB(pendingImgs[over].file.size) }))}</div>`
+    : "";
+  el.innerHTML = `<div style="margin:8px 16px 0;">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        ${thumbs}
+        <button data-imgadd="1" ${full ? "disabled" : ""} style="flex:none;width:64px;height:64px;border:1px dashed var(--border);background:transparent;color:${full ? "var(--faint)" : "var(--muted)"};border-radius:8px;cursor:${full ? "default" : "pointer"};display:flex;align-items:center;justify-content:center;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+        <span style="flex:1;"></span>
+        <span style="flex:none;font:600 11.5px ui-monospace,Menlo,monospace;color:var(--muted);">${pendingImgs.length} / ${IMG_MAX_COUNT}</span>
+      </div>
+      ${overLine}
+    </div>`;
+}
+
+// 收下一批图（「+」/ 拖入 / ⌘V 三个入口共用）：只认 image/*；超过 9 张收前几张并说明；
+// 超过单张 10MB 的**照收**但标红（送不出去，得用户自己摘 —— 静默丢弃是查不出的谜）。
+function takeImgs(files: FileList | File[]): void {
+  const imgs = [...files].filter((f) => f.type.startsWith("image/"));
+  if (!imgs.length) { showToast(t("chat.imgOnly"), { tone: "warn" }); return; }
+  const room = IMG_MAX_COUNT - pendingImgs.length;
+  const use = imgs.slice(0, Math.max(0, room));
+  if (imgs.length > room) showToast(t("chat.imgMax9"), { tone: "warn" });
+  if (!use.length) return;
+  pendingImgs = [
+    ...pendingImgs,
+    ...use.map((f) => ({ key: crypto.randomUUID(), file: f, url: URL.createObjectURL(f), over: f.size > IMG_MAX_BYTES })),
+  ];
+  renderImgStrip();
 }
 
 // ── 「/」面板的渲染与状态 ────────────────────────────────────────────────────
@@ -1381,12 +1773,313 @@ function refreshOfflineBar(): void {
     : "";
 }
 
+// ── 批次 011 ②：消息右键菜单 ─────────────────────────────────────────────────
+// 按消息类型给不同清单（稿定表）；系统提示行不接右键；右键空白只吞掉系统菜单。
+// 选中态：气泡外一圈 halo（renderMessages 按 msgMenu.idx 画），菜单一关就退。
+interface MsgMenuItem { act: string; label: string; icon: string; danger?: boolean }
+
+const MI = {
+  copy:     (): MsgMenuItem => ({ act: "copy", label: t("chat.menuCopy"), icon: `<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>` }),
+  quote:    (): MsgMenuItem => ({ act: "quote", label: t("chat.menuQuote"), icon: `<path d="M9 14 4 9l5-5"></path><path d="M20 20v-7a4 4 0 0 0-4-4H4"></path>` }),
+  phrase:   (): MsgMenuItem => ({ act: "phrase", label: t("chat.menuPhrase"), icon: `<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path><path d="M8 9h8M8 13h5"></path>` }),
+  idea:     (): MsgMenuItem => ({ act: "idea", label: t("chat.menuIdea"), icon: `<path d="M9.5 18h5M10.5 21.5h3M12 2.5a7 7 0 0 0-4 12.8V18h8v-2.7a7 7 0 0 0-4-12.8"></path>` }),
+  remind:   (): MsgMenuItem => ({ act: "remind", label: t("chat.menuRemind"), icon: `<path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"></path>` }),
+  del:      (): MsgMenuItem => ({ act: "del", label: t("chat.menuDelete"), icon: `<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path>`, danger: true }),
+  resend:   (): MsgMenuItem => ({ act: "resend", label: t("chat.menuResend"), icon: `<path d="M5 12h14M13 6l6 6-6 6"></path>` }),
+  viewImg:  (): MsgMenuItem => ({ act: "viewimg", label: t("chat.menuViewImage"), icon: `<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"></path>` }),
+  copyImg:  (): MsgMenuItem => ({ act: "copyimg", label: t("chat.menuCopyImage"), icon: `<rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path>` }),
+  saveImg:  (): MsgMenuItem => ({ act: "saveimg", label: t("chat.menuSaveImage"), icon: `<path d="M12 4v11M7 11l5 5 5-5M5 20h14"></path>` }),
+  copySum:  (): MsgMenuItem => ({ act: "copysum", label: t("chat.menuCopySummary"), icon: `<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>` }),
+  openTask: (): MsgMenuItem => ({ act: "opentask", label: t("chat.menuOpenTask"), icon: `<path d="M9 11.5l3 3L22 5M21 12.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path>` }),
+};
+
+function msgMenuItemsFor(b: Block): MsgMenuItem[] {
+  if (b.kind === "user") {
+    // 发送失败的砍到三项，「重新发送」置顶 —— 右键它十次有九次是为了这个（稿定）。
+    if (b.failed) return [MI.resend(), MI.copy(), MI.del()];
+    const items = [MI.copy(), MI.quote()];
+    if (hasLauncher) items.push(MI.phrase());   // 常用语存在快捷入口主进程侧，Web 预览没有
+    items.push(MI.idea(), MI.remind());
+    if (b.id) items.push(MI.del());             // 还没拿到回执的消息删不了（没有对象可指）
+    return items;
+  }
+  if (b.kind === "assistant") {
+    if (b.streaming || b.thinking) return [];   // 正在流式：先停再说
+    if (!b.text.trim()) return [];
+    // 秘书的回复不给「存为常用语」：常用语是「你常写的话」（稿定）。
+    const items = [MI.copy(), MI.quote(), MI.idea(), MI.remind()];
+    if (b.id) items.push(MI.del());
+    return items;
+  }
+  if (b.kind === "image") {
+    if (b.state !== "sent") return [];          // 上传中/失败态自带按钮，不叠菜单
+    const items = [MI.viewImg(), MI.copyImg(), MI.quote(), MI.saveImg()];
+    if (b.id) items.push(MI.del());
+    return items;
+  }
+  if (b.kind === "job") return [MI.copySum(), MI.openTask()];
+  if (b.kind === "confirm" || b.kind === "done") return [MI.copySum()];
+  return [];  // system / error / locate / question / device：不接右键
+}
+
+function closeMsgMenu(): void {
+  if (!msgMenu) return;
+  msgMenu = null;
+  const menuEl = container?.querySelector("#umsgmenu") as HTMLElement | null;
+  if (menuEl) menuEl.innerHTML = "";
+  // halo 直接从 DOM 上摘（别为关个菜单整区重绘 —— 滚动中重绘会跳）。
+  const haloed = container?.querySelector('[data-halo="1"]') as HTMLElement | null;
+  if (haloed) haloed.style.boxShadow = "";
+}
+
+function renderMsgMenu(): void {
+  const el = container?.querySelector("#umsgmenu") as HTMLElement | null;
+  if (!el) return;
+  if (!msgMenu) { el.innerHTML = ""; return; }
+  const b = cs(activeConv).blocks[msgMenu.idx];
+  const items = b ? msgMenuItemsFor(b) : [];
+  if (!items.length) { msgMenu = null; el.innerHTML = ""; return; }
+  // 取值照「PC 浮层菜单」组件（宽 142 / 圆角 9 / 内距 4 / 行 6-10 12.5px / 阴影同款）。
+  const rowH = 29, pad = 8;
+  const h = items.length * rowH + pad;
+  const x = Math.min(msgMenu.x, window.innerWidth - 150);
+  const y = msgMenu.y + h > window.innerHeight - 8 ? Math.max(8, msgMenu.y - h) : msgMenu.y;
+  el.innerHTML = `<div id="umsgmenubox" style="position:fixed;left:${x}px;top:${y}px;z-index:70;width:142px;background:var(--card);border:1px solid var(--border);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.13);padding:4px;">`
+    + items.map((m) =>
+      `<div data-msgact="${m.act}" class="hover:bg-hover" style="display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:6px;font-size:12.5px;color:${m.danger ? "var(--danger)" : "var(--text)"};white-space:nowrap;cursor:pointer;">`
+      + `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;">${m.icon}</svg>`
+      + `<span style="flex:1;min-width:0;">${esc(m.label)}</span></div>`).join("")
+    + `</div>`;
+}
+
+// 复制一段文字进剪贴板，配吐司（复制没有别的可见结果，静默失败=用户白等）。
+async function copyToClipboard(text: string): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(t("chat.copiedMsg"), { tone: "ok" });
+  } catch {
+    showToast(t("chat.copyFailed"), { tone: "fail" });
+  }
+}
+
+// 复制图片：剪贴板只认 image/png，别的格式过 canvas 转一道。
+async function copyImageToClipboard(src: string): Promise<void> {
+  try {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = () => rej(new Error("load")); img.src = src; });
+    const cv = document.createElement("canvas");
+    cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+    cv.getContext("2d")!.drawImage(img, 0, 0);
+    const blob = await new Promise<Blob | null>((res) => cv.toBlob(res, "image/png"));
+    if (!blob) throw new Error("blob");
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    showToast(t("chat.copyImageOk"), { tone: "ok" });
+  } catch {
+    showToast(t("chat.copyImageFail"), { tone: "fail" });
+  }
+}
+
+// 「存到…」：走浏览器下载（Electron 会弹系统保存框）。与预览器的下载同一做法。
+async function saveImageToDisk(src: string, name: string): Promise<void> {
+  try {
+    const resp = await fetch(src);
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = (name || "image").replace(/[\\/:*?"<>|]/g, "_").slice(0, 60) + ".png";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch { showToast(t("chat.copyImageFail"), { tone: "fail" }); }
+}
+
+// 引用一条消息：装进输入框上方的引用条，发送时随消息带走（meta.quote）。
+function quoteBlock(b: Block): void {
+  if (b.kind === "user") quoteRef = { id: b.id, role: "user", text: b.text.slice(0, 200) };
+  else if (b.kind === "assistant") quoteRef = { id: b.id, role: "assistant", text: b.text.slice(0, 200) };
+  else if (b.kind === "image") quoteRef = { id: b.id, role: "user", text: t("chat.quoteImage", { n: b.srcs.length }) };
+  else return;
+  if (activeConv !== MAIN) switchConv(MAIN);
+  refreshComposer();
+  (container?.querySelector("#draft") as HTMLTextAreaElement | null)?.focus();
+}
+
+// 回到被引用的原消息：滚过去 + 闪一下 halo。找不到（删了/翻页没拉到）就说一声。
+function scrollToMsg(id: number): void {
+  const s = cs(activeConv);
+  const idx = s.blocks.findIndex((b) => "id" in b && b.id === id);
+  const holder = idx >= 0 ? container?.querySelector(`[data-bi="${idx}"]`) as HTMLElement | null : null;
+  if (!holder) { showToast(t("chat.quoteJumpMissing")); return; }
+  holder.scrollIntoView({ block: "center", behavior: "smooth" });
+  const target = (holder.querySelector("[data-halo]") || holder.firstElementChild) as HTMLElement | null;
+  if (target) {
+    target.style.transition = "box-shadow .2s ease";
+    target.style.boxShadow = "0 0 0 2px var(--orange-soft)";
+    window.setTimeout(() => { target.style.boxShadow = ""; }, 1400);
+  }
+}
+
+// 「存为常用语」：直接进快捷入口那份列表（同名不重复存 —— 和秘书侧 add_phrase 同规则）。
+async function saveAsPhrase(text: string): Promise<void> {
+  try {
+    const api = launcherApi();
+    const list = await api.getPhrases();
+    const name = text.replace(/\s+/g, " ").trim().slice(0, 12) || t("chat.menuPhrase");
+    if (list.some((p) => p.content === text)) { showToast(t("chat.phraseExists"), { tone: "warn" }); return; }
+    await api.setPhrases([...list, { id: crypto.randomUUID(), name, content: text, updatedAt: Date.now() }]);
+    showToast(t("chat.phraseSaved"), { tone: "ok" });
+  } catch {
+    showToast(t("chat.phraseSaveFailed"), { tone: "fail" });
+  }
+}
+
+function doMsgAction(act: string, idx: number): void {
+  const s = cs(activeConv);
+  const b = s.blocks[idx];
+  if (!b) return;
+  if (act === "copy") {
+    void copyToClipboard(b.kind === "user" || b.kind === "assistant" ? b.text : "");
+  } else if (act === "quote") {
+    quoteBlock(b);
+  } else if (act === "phrase" && b.kind === "user") {
+    void saveAsPhrase(b.text);
+  } else if (act === "idea" && (b.kind === "user" || b.kind === "assistant")) {
+    void createInspiration({ raw: b.text }).then((r) =>
+      showToast(r ? t("chat.ideaSaved") : t("chat.ideaSaveFailed"), { tone: r ? "ok" : "fail" }));
+  } else if (act === "remind" && (b.kind === "user" || b.kind === "assistant")) {
+    // 预填「提醒」芯片 + 原文，让用户补时间再发 —— 提醒总得有个时间，秘书的语言理解接得住。
+    chipAction = slashCatalog().flatMap((g) => g.items).find((a) => a.k === "rem") || null;
+    drafts[MAIN] = b.text;
+    slashDismissed = false;
+    if (activeConv !== MAIN) switchConv(MAIN);
+    refreshComposer();
+    (container?.querySelector("#draft") as HTMLTextAreaElement | null)?.focus();
+  } else if (act === "resend" && b.kind === "user") {
+    const text = b.text, q = b.quote;
+    removeBlockAt(activeConv, idx);
+    renderMessages();
+    quoteRef = q || null;
+    sendTo(activeConv, text);
+    return;
+  } else if (act === "del") {
+    void (async () => {
+      const ok = await askConfirm({
+        title: t("chat.delMsgTitle"),
+        message: t("chat.delMsgBody"),
+        confirmText: t("chat.menuDelete"),
+        danger: true,
+      });
+      if (!ok) return;
+      const id = "id" in b ? b.id : undefined;
+      if (id) {
+        if (!chatConn.sendDeleteMessage(id)) { showToast(t("chat.notConnected"), { tone: "fail" }); return; }
+      }
+      // 本地立即移除（服务端广播不排除本端，重复收到时找不到 id 就当没事）。
+      // 弹确认框期间可能进过新消息，下标会漂 —— 按对象引用重新定位，别用旧 idx。
+      if (!removeBlockById(activeConv, id || 0)) {
+        const cur = cs(activeConv).blocks.indexOf(b);
+        if (cur >= 0) removeBlockAt(activeConv, cur);
+      }
+      renderMessages();
+      renderContacts();
+    })();
+  } else if (act === "viewimg" && b.kind === "image") {
+    openImageMsg(b, 0);
+  } else if (act === "copyimg" && b.kind === "image") {
+    void copyImageToClipboard(b.srcs[0]);
+  } else if (act === "saveimg" && b.kind === "image") {
+    void saveImageToDisk(b.srcs[0], `umbra-image-${b.id || Date.now()}`);
+  } else if (act === "copysum") {
+    if (b.kind === "job") void copyToClipboard(`${b.goal}（${b.pct}%，${b.status}）${b.message || ""}`);
+    else if (b.kind === "confirm") void copyToClipboard(b.summary);
+    else if (b.kind === "done") void copyToClipboard(`${t("chat.done")}：${b.goal}`);
+  } else if (act === "opentask" && b.kind === "job") {
+    openTaskCb?.(b.taskId);
+  }
+}
+
+// 拖入遮罩：n>0 显示（盖住整个会话列，pointer-events:none —— drop 事件在 section 上收）。
+function renderDragOverlay(n: number): void {
+  const el = container?.querySelector("#udragover") as HTMLElement | null;
+  if (!el) return;
+  el.innerHTML = n > 0
+    ? `<div style="position:absolute;inset:0;z-index:50;background:var(--orange-soft);border:2px dashed var(--orange);border-radius:11px;display:flex;align-items:center;justify-content:center;pointer-events:none;">
+        <span style="display:flex;align-items:center;gap:9px;padding:10px 16px;border-radius:11px;background:var(--card);border:1px solid var(--orange);color:var(--orange-text);font-size:13.5px;font-weight:600;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><path d="m21 15-5-5L5 21"></path></svg>${esc(t("chat.dropToSend", { n }))}
+        </span>
+      </div>`
+    : "";
+}
+
+// 「取消上传」：中断当前 XHR、撤掉在途气泡，图放回待发条（图片还在本地，不用重新选）。
+function cancelImageUpload(idx: number): void {
+  const s = cs(activeConv);
+  const b = s.blocks[idx];
+  if (!b || b.kind !== "image" || b.state !== "uploading") return;
+  if (b.localKey && upAborts[b.localKey]) { upAborts[b.localKey](); delete upAborts[b.localKey]; }
+  const files = b.files || [];
+  const urls = b.srcs;
+  removeBlockAt(activeConv, idx);
+  pendingImgs = [
+    ...pendingImgs,
+    ...files.map((f, i2) => ({ key: crypto.randomUUID(), file: f, url: urls[i2] || URL.createObjectURL(f) })),
+  ].slice(0, IMG_MAX_COUNT);
+  renderMessages();
+}
+
+// 「重新发送」失败的图片消息：从断掉那张续传（b.atts 攒着已传成的），不重传、不重选。
+function retryImageSend(idx: number): void {
+  const s = cs(activeConv);
+  const b = s.blocks[idx];
+  if (!b || b.kind !== "image" || b.state !== "failed" || !b.files) return;
+  b.state = "uploading";
+  b.err = undefined;
+  renderMessages();
+  void runImageSend(activeConv, b);
+}
+
+// 点开一条图片消息（独立图片窗优先，批次 011 ④；没有桥回落灯箱）。
+function openImageMsg(b: Extract<Block, { kind: "image" }>, at: number): void {
+  const items = b.srcs.map((u, j) => ({ src: u, alt: t("chat.imageAlt") + (b.srcs.length > 1 ? ` ${j + 1}` : "") }));
+  const src = b.srcs[Math.max(0, Math.min(at, b.srcs.length - 1))];
+  if (!openInViewerWindow(items, src)) openLightbox(src);
+}
+
+function onMsgsContextMenu(e: MouseEvent): void {
+  // 聊天区里一律吞掉系统菜单：稿定「右键空白不弹菜单，只吞掉系统菜单并退掉选中态」。
+  e.preventDefault();
+  const holder = (e.target as HTMLElement).closest("[data-bi]") as HTMLElement | null;
+  const idx = holder ? Number(holder.dataset.bi) : -1;
+  const b = idx >= 0 ? cs(activeConv).blocks[idx] : undefined;
+  if (!b || !msgMenuItemsFor(b).length) {
+    closeMsgMenu();
+    return;
+  }
+  msgMenu = { idx, x: e.clientX, y: e.clientY };
+  renderMessages(true);  // 重绘出 halo；preserve 滚动位置
+}
+
 function send(): void {
   if (!container) return;
   const ta = container.querySelector("#draft") as HTMLTextAreaElement | null;
   if (!ta) return;
   if (clearing) return; // 清空历史进行中，暂不发送，避免与会话重置竞争
   const raw = ta.value.trim();
+  if (!raw && !pendingImgs.length) return;
+  // 超限的图挡发送（稿③：「去掉它或换一张再发」）——条里那行红字已经点名是哪张。
+  if (pendingImgs.some((p) => p.over)) {
+    const at = pendingImgs.findIndex((p) => p.over);
+    showToast(t("chat.imgOverLimit", { n: at + 1, size: fmtMB(pendingImgs[at].file.size) }), { tone: "warn" });
+    return;
+  }
+  // 图文分条（稿③）：多张图合成**一条**图片消息，文字另成一条 —— 删除 / 引用的对象才说得清。
+  if (pendingImgs.length) {
+    const batch = pendingImgs;
+    pendingImgs = [];
+    renderImgStrip();
+    sendImages(activeConv, batch);
+  }
   if (!raw) return;
   // 芯片承载意图：发出去的是「【动作名】+ 原文」——服务端零改动，秘书的语言理解
   // 接得住，聊天历史里也看得出这条消息带着什么意图（Telegram 的 /命令 同理）。
@@ -1400,6 +2093,75 @@ function send(): void {
   sendTo(activeConv, text);
 }
 
+// ── 批次 011 ③：图片消息的发送链路 ──────────────────────────────────────────
+// 乐观出气泡（本地 ObjectURL 就地展示）→ 逐张上传（聚合进度画在气泡上）→
+// WS 送 file_id 列表 → message_saved 认领成正式消息。失败停在哪张就从哪张续传
+//（b.atts 攒着已传成的，「重新发送」不重传）。
+function sendImages(conv: string, batch: PendingImg[]): void {
+  stick = true;
+  forceScroll = true;
+  const s = cs(conv);
+  const block: Extract<Block, { kind: "image" }> = {
+    kind: "image", atts: [], srcs: batch.map((p) => p.url), state: "uploading",
+    loaded: 0, total: batch.reduce((n, p) => n + p.file.size, 0),
+    files: batch.map((p) => p.file), ts: Date.now(), localKey: crypto.randomUUID(),
+  };
+  s.blocks.push(block);
+  s.lastText = t("chat.imageMsgPreview");
+  s.lastAt = Date.now();
+  renderMessages();
+  renderContacts();
+  void runImageSend(conv, block);
+}
+
+async function runImageSend(conv: string, b: Extract<Block, { kind: "image" }>): Promise<void> {
+  const files = b.files || [];
+  // 已传成的字节数（续传时从中间起步，进度不清零）。
+  let doneBytes = files.slice(0, b.atts.length).reduce((n, f) => n + f.size, 0);
+  for (let i = b.atts.length; i < files.length; i++) {
+    const f = files[i];
+    const up = uploadFileProgress(f, (loaded) => {
+      b.loaded = doneBytes + loaded;
+      paintUploadProgress(conv, b);
+    });
+    if (b.localKey) upAborts[b.localKey] = up.abort;
+    const r = await up.promise;
+    // 取消/删除把块撤了就到此为止（abort 也走 null，靠块还在不在区分「取消」与「真失败」）。
+    if (!cs(conv).blocks.includes(b) || b.state !== "uploading") return;
+    if (!r) {
+      b.state = "failed";
+      b.err = t("chat.uploadFailNet");
+      if (conv === activeConv) renderMessages();
+      return;
+    }
+    b.atts.push(r.file_id);
+    doneBytes += f.size;
+    b.loaded = doneBytes;
+    paintUploadProgress(conv, b);
+  }
+  b.sentSig = b.atts.join(",");
+  if (!chatConn.sendImageMessage(b.atts, conv)) {
+    b.state = "failed";
+    b.err = t("chat.notConnected");
+    if (conv === activeConv) renderMessages();
+  }
+  // 成功路径不动状态：message_saved 回执来认领（带正式消息 id）。
+}
+
+// 上传进度**就地**刷（环 + 百分比 + 字节行），不整区重绘 —— 输入焦点和滚动位置都不动。
+function paintUploadProgress(conv: string, b: Extract<Block, { kind: "image" }>): void {
+  if (conv !== activeConv || !container) return;
+  const idx = cs(conv).blocks.indexOf(b);
+  if (idx < 0) return;
+  const pct = b.total ? Math.max(0, Math.min(100, Math.round(((b.loaded || 0) / b.total) * 100))) : 0;
+  const ring = container.querySelector(`[data-upring="${idx}"]`) as SVGCircleElement | null;
+  if (ring) ring.setAttribute("stroke-dashoffset", String(100 - pct));
+  const pctEl = container.querySelector(`[data-uppct="${idx}"]`) as HTMLElement | null;
+  if (pctEl) pctEl.textContent = `${pct}%`;
+  const line = container.querySelector(`[data-upline="${idx}"]`) as HTMLElement | null;
+  if (line) line.textContent = `${t("chat.uploading")} · ${fmtMB(b.loaded || 0)} / ${fmtMB(b.total || 0)}`;
+}
+
 // 发送到指定会话（主会话或某台设备）。
 function sendTo(conv: string, text: string): void {
   const t2 = (text || "").trim();
@@ -1408,7 +2170,11 @@ function sendTo(conv: string, text: string): void {
   forceScroll = true;
   const s = cs(conv);
   const now = Date.now();
-  s.blocks.push({ kind: "user", text: t2, ts: now });
+  // 引用条里的内容随消息带走（meta.quote，批次 011 ②），发完清条。
+  const quote = quoteRef || undefined;
+  quoteRef = null;
+  const userBlk: Extract<Block, { kind: "user" }> = { kind: "user", text: t2, ts: now, quote };
+  s.blocks.push(userBlk);
   // ⚠️ 这里**故意**和稿不一致：稿 7240 画的轨迹是收起态，但稿是静态图，没有「流式」这个概念。
   // 正在生成的回复要能眼看着工具一条条跑出来，收起了就等于把过程藏了，所以新回复保持展开。
   // 注意只有这一处是 true —— 从历史里读出来的回复（loadHistory / 增量同步那三处）仍然收起，
@@ -1419,9 +2185,13 @@ function sendTo(conv: string, text: string): void {
   s.lastAt = now;
   // 「模式」三态开关随批次 005 撤除：一律发 auto（服务端 mode 参数保留一段时间，
   // 界面不再出现）。意图改由「/」动作芯片表达（send 里拼进正文）。
-  if (!chatConn.sendMessage(t2, operateAutoApprove(), conv, "auto")) {
-    s.blocks.push({ kind: "error", text: t("chat.notConnected") });
+  if (!chatConn.sendMessage(t2, operateAutoApprove(), conv, "auto", quote)) {
+    // 没送出去：撤掉占位（不然那串思考点会永远转下去）、消息标失败（右键给「重新发送」），
+    // 错误块负责说明原因 + 「重新连接」。
+    s.blocks.pop();
     s.assistantIdx = null;
+    userBlk.failed = true;
+    s.blocks.push({ kind: "error", text: t("chat.notConnected") });
   }
   if (activeConv !== conv) switchConv(conv);
   else renderMessages();
@@ -1458,6 +2228,7 @@ function switchConv(id: string): void {
   forceScroll = true;
   detailOpen = false;
   headMenuOpen = false; // 菜单里的动作都是「对当前会话」的，换了会话还开着就有歧义
+  msgMenu = null;       // 消息右键菜单同理（idx 指的是旧会话的块）
   renderContacts();
   renderHeader();
   renderDetail();
@@ -1486,6 +2257,8 @@ function conversationToText(convId: string): string {
       lines.push(`[确认卡] ${b.summary}${b.resolved ? `（${b.resolved === "approved" ? "已批准" : "已拒绝"}）` : "（待确认）"}`, "");
     } else if (b.kind === "question") {
       lines.push(`[问答卡] ${b.title}${b.done ? "（已提交）" : "（待回答）"}`, "");
+    } else if (b.kind === "image") {
+      lines.push(`[我] [图片 ×${b.srcs.length}]`, "");
     } else if (b.kind === "system") {
       lines.push(`[系统] ${b.text}`, "");
     } else if (b.kind === "locate") {
@@ -1570,6 +2343,8 @@ export function mount(el: HTMLElement): void {
         <div id="umsgs" style="flex:1;overflow-y:auto;padding:18px 20px 22px;display:flex;flex-direction:column;gap:14px;min-height:0;"></div>
         <div id="ucomposer" style="flex:none;border-top:1px solid var(--border);background:var(--card);"></div>
         <div id="ulightbox"></div>
+        <div id="umsgmenu"></div>
+        <div id="udragover"></div>
       </section>
       <aside id="udetail" style="display:none;flex:none;width:272px;border-left:1px solid var(--border);overflow-y:auto;background:var(--rail);"></aside>
     </div>`;
@@ -1579,9 +2354,8 @@ export function mount(el: HTMLElement): void {
   // 菜单自身与 ⋯ 按钮的 click 都 stopPropagation 了，不会自己把自己关掉。
   if (docClickHandler) document.removeEventListener("click", docClickHandler);
   docClickHandler = () => {
-    if (!headMenuOpen) return;
-    headMenuOpen = false;
-    renderHeader();
+    if (headMenuOpen) { headMenuOpen = false; renderHeader(); }
+    if (msgMenu) closeMsgMenu();  // 点哪儿都退掉消息右键菜单（菜单自身 stopPropagation）
   };
   document.addEventListener("click", docClickHandler);
 
@@ -1592,6 +2366,47 @@ export function mount(el: HTMLElement): void {
   });
   const msgsEl = el.querySelector("#umsgs") as HTMLElement;
   msgsEl.addEventListener("click", onMsgsClick);
+  // 消息右键菜单（批次 011 ②）。
+  msgsEl.addEventListener("contextmenu", onMsgsContextMenu);
+  const menuEl = el.querySelector("#umsgmenu") as HTMLElement;
+  menuEl.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const row = (e.target as HTMLElement).closest("[data-msgact]") as HTMLElement | null;
+    if (!row || !msgMenu) return;
+    const act = row.dataset.msgact!;
+    const idx = msgMenu.idx;
+    closeMsgMenu();
+    doMsgAction(act, idx);
+  });
+  // 拖图进聊天区（批次 011 ③）：整块盖橙软底 + 2px 橙虚线 + 「松手发送 N 张图片」。
+  // dragenter/leave 在子元素间会成对乱跳，用深度计数；只在主会话收。
+  const sectionEl = el.querySelector("section") as HTMLElement;
+  const dragImgCount = (dt: DataTransfer | null): number => {
+    const items = [...(dt?.items || [])].filter((x) => x.kind === "file");
+    if (!items.length) return 0;
+    const imgs = items.filter((x) => !x.type || x.type.startsWith("image/"));
+    return imgs.length;
+  };
+  sectionEl.addEventListener("dragenter", (e) => {
+    if (activeConv !== MAIN || !dragImgCount(e.dataTransfer)) return;
+    e.preventDefault();
+    dragDepth++;
+    renderDragOverlay(dragImgCount(e.dataTransfer));
+  });
+  sectionEl.addEventListener("dragover", (e) => {
+    if (activeConv !== MAIN || !dragImgCount(e.dataTransfer)) return;
+    e.preventDefault();
+  });
+  sectionEl.addEventListener("dragleave", () => {
+    if (dragDepth > 0 && --dragDepth === 0) renderDragOverlay(0);
+  });
+  sectionEl.addEventListener("drop", (e) => {
+    if (activeConv !== MAIN) return;
+    e.preventDefault();
+    dragDepth = 0;
+    renderDragOverlay(0);
+    if (e.dataTransfer?.files.length) takeImgs(e.dataTransfer.files);
+  });
   // 问答卡的自定义填空：随敲随存（不重渲染，避免打断输入焦点）。
   msgsEl.addEventListener("input", (ev) => {
     const t2 = ev.target as HTMLInputElement;
@@ -1628,6 +2443,7 @@ export function mount(el: HTMLElement): void {
   // 跟踪是否贴底：上滑超过阈值即停止自动跟随，回到底部附近恢复跟随。
   msgsEl.addEventListener("scroll", () => {
     stick = msgsEl.scrollHeight - msgsEl.scrollTop - msgsEl.clientHeight < 80;
+    if (msgMenu) closeMsgMenu();  // 菜单是按坐标钉在屏上的，滚动后就对不上消息了
     if (msgsEl.scrollTop < 60) loadOlder(); // 滚到顶附近 → 加载更早历史
   });
   forceScroll = true; // 首次挂载滚到底
@@ -1640,13 +2456,43 @@ export function mount(el: HTMLElement): void {
 function onMsgsClick(e: Event): void {
   const el = (e.target as HTMLElement).closest(
     "[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit],[data-reconnect],[data-jobact],"
-    + "[data-locshot],[data-locclear],[data-locfbtoggle],[data-locfbsend],[data-locpause],[data-locsend],[data-locresume]",
+    + "[data-locshot],[data-locclear],[data-locfbtoggle],[data-locfbsend],[data-locpause],[data-locsend],[data-locresume],"
+    + "[data-stopreply],[data-goseenav],[data-qjump],[data-upcancel],[data-upretry],[data-imgat]",
   ) as HTMLElement | null;
   if (!el) return;
   // ── 错误块的「重新连接」──
   // 用 data-* 而不是 id：一屏里可能有多条错误块，id 会重复。
   if (el.dataset.reconnect !== undefined) {
     chatConn.connect();
+    return;
+  }
+  // ── 批次 011 的几个出口 ──
+  if (el.dataset.stopreply !== undefined) {
+    // 停止正在处理的回复：服务端取消后以 reply_cancelled 回来换收尾块，这里不动本地状态。
+    if (!chatConn.sendCancelReply(activeConv)) showToast(t("chat.notConnected"), { tone: "fail" });
+    return;
+  }
+  if (el.dataset.goseenav !== undefined) {
+    goNavCb?.(el.dataset.goseenav || "");
+    return;
+  }
+  if (el.dataset.qjump !== undefined) {
+    const id = Number(el.dataset.qjump);
+    if (id) scrollToMsg(id);
+    return;
+  }
+  if (el.dataset.upcancel !== undefined) {
+    cancelImageUpload(Number(el.dataset.upcancel));
+    return;
+  }
+  if (el.dataset.upretry !== undefined) {
+    retryImageSend(Number(el.dataset.upretry));
+    return;
+  }
+  if (el.dataset.imgat !== undefined) {
+    const holder = el.closest("[data-imgmsg]") as HTMLElement | null;
+    const b = holder ? cs(activeConv).blocks[Number(holder.dataset.imgmsg)] : undefined;
+    if (b && b.kind === "image" && b.state === "sent") openImageMsg(b, Number(el.dataset.imgat) || 0);
     return;
   }
   // ── 任务卡底部的动作按钮 ──
@@ -1793,6 +2639,8 @@ export function unmount(): void {
   container = null;
   chatShellEl = null;
   headMenuOpen = false;
+  msgMenu = null;
+  dragDepth = 0;
   if (docClickHandler) { document.removeEventListener("click", docClickHandler); docClickHandler = null; }
 }
 

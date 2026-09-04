@@ -243,6 +243,20 @@ contextBridge.exposeInMainWorld("umbraVault", {
   purgeTrash: (entries: { vaultId: string; itemId: string }[]) => ipcRenderer.invoke("vault:purgeTrash", entries),
 });
 
+// 独立图片查看窗桥（批次 011）。open 由各业务窗调；其余给 viewer 窗自己用。
+contextBridge.exposeInMainWorld("umbraViewer", {
+  open: (payload: { items: { src: string; alt?: string }[]; index: number; source?: string }) =>
+    ipcRenderer.invoke("viewer:open", payload),
+  ready: () => ipcRenderer.invoke("viewer:ready"),
+  close: () => ipcRenderer.invoke("viewer:close"),
+  fit: (w: number, h: number) => ipcRenderer.invoke("viewer:fit", w, h),
+  onData: (cb: (p: { items: { src: string; alt?: string }[]; index: number }) => void) => {
+    const l = (_e: unknown, p: { items: { src: string; alt?: string }[]; index: number }) => cb(p);
+    ipcRenderer.on("viewer:data", l);
+    return () => ipcRenderer.removeListener("viewer:data", l);
+  },
+});
+
 // 大字显示浮层桥。
 contextBridge.exposeInMainWorld("umbraLarge", {
   ready: () => ipcRenderer.invoke("largetype:ready"),

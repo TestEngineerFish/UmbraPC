@@ -528,6 +528,8 @@ app.whenReady().then(async () => {
     openReminder: (id) => { showMainWindow(); sendToMain("notify:open", id); },
   }, () => sendToMain("notify:changed"));
   void notify.init();
+  // 独立图片查看窗（批次 011）：所有窗口的「看大图」共用一扇，不遮任何界面。
+  void import("./core/imageviewer").then((m) => m.registerImageViewer(winOpts));
   Promise.all([clipboard.init(), screenshot.init(), launcher.init(), vault.init()])
     .then(() => {
       reregisterShortcuts(); // 就绪后统一注册各自快捷键

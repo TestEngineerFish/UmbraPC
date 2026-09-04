@@ -78,12 +78,26 @@ function wsUrl(): string {
   return base.replace(/^http/, "ws") + "/ws/chat";
 }
 
+// 消息的引用注脚（批次 011 消息菜单）：气泡顶部的被引用块 / 输入框上方的引用条都用它。
+export interface MsgQuote { id?: number; role: string; text: string }
+// 消息附加信息（服务端 meta JSON 列）：取消收尾的标注、执行过的工具清单、引用。
+export interface MsgMeta {
+  interrupted?: boolean;                      // 流式中停：半截保留，时间戳后缀「已中断」
+  cancelled?: boolean;                        // 占位阶段停：这行是系统提示
+  tools?: { name: string; args?: string }[];  // 停之前已执行的工具（琥珀行靠它说得具体）
+  quote?: MsgQuote;
+}
+
 export interface HistoryRow {
   id: number;
   role: string;
   content: string;
   created_at?: string;
   conversation?: string;
+  /** text / image（atts 是文件 id）/ system（取消提示这类系统行）。老服务端没有 → 当 text。 */
+  kind?: string;
+  atts?: string[];
+  meta?: MsgMeta;
 }
 
 // 拉历史：limit 条；传 beforeId 取更早一页（上拉加载）；conversation 指定会话
@@ -746,6 +760,40 @@ export async function uploadFile(file: File): Promise<{ file_id: string; filenam
     return null;
   }
 }
+/** 带进度 + 可中断的上传（批次 011 图片消息：气泡上要画**确定型**进度环 + 「取消上传」）。
+ *  fetch 拿不到上传进度，这里用 XHR；abort() 后 promise 以 null 收场（和失败同形，
+ *  调用方靠自己的状态区分「用户取消」与「真失败」——取消时它已经把气泡撤了）。 */
+export function uploadFileProgress(
+  file: File,
+  onProgress: (loaded: number, total: number) => void,
+): { promise: Promise<{ file_id: string; filename: string } | null>; abort: () => void } {
+  const xhr = new XMLHttpRequest();
+  let aborted = false;
+  const promise = (async () => {
+    const token = await window.umbra?.getRegisterInfo().then((r) => r.token).catch(() => "");
+    if (aborted) return null;
+    return await new Promise<{ file_id: string; filename: string } | null>((resolve) => {
+      xhr.open("POST", `${getServerUrl()}/files/upload`);
+      if (token) xhr.setRequestHeader("X-Umbra-Token", token);
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded, e.total); };
+      xhr.onload = () => {
+        try {
+          const d = JSON.parse(xhr.responseText || "null");
+          resolve(xhr.status >= 200 && xhr.status < 300 && d?.file_id
+            ? { file_id: String(d.file_id), filename: String(d.filename || file.name) }
+            : null);
+        } catch { resolve(null); }
+      };
+      xhr.onerror = () => resolve(null);
+      xhr.onabort = () => resolve(null);
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      xhr.send(fd);
+    });
+  })();
+  return { promise, abort: () => { aborted = true; try { xhr.abort(); } catch { /* 还没 open 就取消 */ } } };
+}
+
 /** 给一笔账挂上已上传的文件。服务端限一笔 4 张，超了回 400 → null。
  *  成功回这笔账**全量**的附件列表，界面直接用它对齐（别自己往数组里 push）。 */
 export async function addMoneyAtt(entryId: string, fileId: string, label: string): Promise<MoneyAtt[] | null> {
@@ -1155,11 +1203,32 @@ class ChatConnection {
   // conversation：'assistant' 主会话；'device:<id>' = 在某台设备的聊天窗口里说话
   //（服务端会把「目标设备=这台」作为上下文，端侧任务直接派给它）。
   // mode：三态开关 auto/chat/execution（输入框旁的「自动/聊天/执行」切换）。
-  sendMessage(content: string, autoApproveOperate = false, conversation = "assistant", mode = "auto"): boolean {
+  // quote：引用注脚（批次 011）——服务端落进这条消息的 meta.quote 并随广播带给各端。
+  sendMessage(content: string, autoApproveOperate = false, conversation = "assistant", mode = "auto", quote?: MsgQuote): boolean {
     return this.rawSend({
       type: "message", content, client_id: getClientId(),
       auto_approve_operate: autoApproveOperate, conversation, mode,
+      ...(quote ? { quote } : {}),
     });
+  }
+
+  // 图片消息（批次 011）：文件已先走 POST /files/upload 拿到 file_id，这里只送 id 列表。
+  // 服务端落库 + 跨端广播，不触发秘书回复（一期不识图）；回执是 message_saved（带消息 id）。
+  sendImageMessage(atts: string[], conversation = "assistant"): boolean {
+    return this.rawSend({
+      type: "message", kind: "image", atts, client_id: getClientId(), conversation,
+    });
+  }
+
+  // 停掉正在处理的回复（批次 011 稿①）：服务端取消该会话在跑的那条 process_message，
+  // 收尾（半截落库 / 系统提示行 / 工具清单）由服务端做完后以 reply_cancelled 事件回来。
+  sendCancelReply(conversation = "assistant"): boolean {
+    return this.rawSend({ type: "chat_cancel", conversation });
+  }
+
+  // 删一条消息（批次 011 稿②）：服务端软删进回收站（30 天），随后广播 message_deleted 给所有端。
+  sendDeleteMessage(messageId: number): boolean {
+    return this.rawSend({ type: "message_delete", id: messageId });
   }
 
   sendConfirm(confirmId: string, approved: boolean): boolean {

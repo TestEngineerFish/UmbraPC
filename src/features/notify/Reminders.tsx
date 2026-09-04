@@ -15,7 +15,7 @@ import {
 } from "../../components/ui";
 import { DateTimeField } from "../../components/DateTimePicker";
 import { IconImage, IconRepeat } from "../../components/icons";
-import { ImageViewer } from "../../components/ImageViewer";
+import { ImageViewer, openInViewerWindow } from "../../components/ImageViewer";
 import { SyncStamp } from "../../components/SyncStamp";
 import { askConfirm, showToast } from "../../components/overlay";
 import { fileUrl, uploadFile } from "../../services/server";
@@ -349,6 +349,17 @@ function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onFail, o
 
   const repeating = value.repeatRule !== "none";
   const attCount = (value.atts || []).length + pending.length;
+
+  // 已存的 + 待上传的合成一组交给预览器，里面可以 ← → 切（通用预览器，第三轮验收）。
+  const viewerItems = [
+    ...(value.atts || []).map((a) => ({ src: fileUrl(a.fileId), alt: a.label || "图片" })),
+    ...pending.map((p) => ({ src: p.url, alt: p.file.name })),
+  ];
+  // 批次 011：优先开独立图片窗 —— 编辑弹窗不被遮住，看着图还能继续填；
+  // 没有桥（网页预览/测试）退回窗口内 overlay。
+  const openImg = (src: string, alt: string) => {
+    if (!openInViewerWindow(viewerItems, src)) setViewer({ src, alt });
+  };
   const bad = validateReminder(value);
   // 结束日期那一行单独再算一次，错误就贴在它旁边（而不是只在底部）。
   const endBad = repeating ? repeatEndError(value) : "";
@@ -561,13 +572,13 @@ function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onFail, o
             <div className="flex flex-wrap gap-[8px]">
               {(value.atts || []).map((a) => (
                 <Thumb key={a.fileId} src={fileUrl(a.fileId)} label={a.label || "图片"}
-                  onOpen={() => setViewer({ src: fileUrl(a.fileId), alt: a.label || "图片" })}
+                  onOpen={() => openImg(fileUrl(a.fileId), a.label || "图片")}
                   onRemove={() => void dropSaved(a)} />
               ))}
               {pending.map((p) => (
                 // 标签条写来源（文件图片），文件名只进预览器标题（批次 007 答复）。
                 <Thumb key={p.key} src={p.url} label="文件图片" pending
-                  onOpen={() => setViewer({ src: p.url, alt: p.file.name })}
+                  onOpen={() => openImg(p.url, p.file.name)}
                   onRemove={() => dropPending(p.key)} />
               ))}
               {attCount < MAX_ATTS ? (
@@ -586,12 +597,9 @@ function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onFail, o
           </div>
         </Row>
       </div>
-      {/* 已存的 + 待上传的合成一组交给预览器，里面可以 ← → 切（通用预览器，第三轮验收）。 */}
+      {/* 独立图片窗开不了时的回落形态（overlay）。 */}
       <ImageViewer src={viewer?.src || null} alt={viewer?.alt} onClose={() => setViewer(null)}
-        items={[
-          ...(value.atts || []).map((a) => ({ src: fileUrl(a.fileId), alt: a.label || "图片" })),
-          ...pending.map((p) => ({ src: p.url, alt: p.file.name })),
-        ]} />
+        items={viewerItems} />
     </Modal>
   );
 }

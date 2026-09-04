@@ -11,7 +11,7 @@ import { Pill, btnGhost, btnPrimary, selectBox, fieldFlex, EmptyState } from "..
 // 附件删除走全局的确认弹窗与吐司：保险箱自己那套 setConfirm / flash 挂在 Main 上，
 // 而附件在组件树很深的 Gallery 里，够不着。overlay 是模块级单例，独立窗口也已经挂了 OverlayHost。
 import { askConfirm, showToast } from "../../components/overlay";
-import { ImageViewer } from "../../components/ImageViewer";
+import { ImageViewer, openInViewerWindow } from "../../components/ImageViewer";
 import { CAT_ICON, CAT_LABEL, PICK_ICONS } from "../money/moneyKit";
 import { IconPickerPop, IconThumb, compressIcon, type IconOption } from "../../components/IconPicker";
 import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
@@ -1704,7 +1704,14 @@ function Gallery({ kind, atts, attMeta, vid, itemId, edit, onAttAdded, onAttRemo
                 className="w-full h-full rounded-[10px] overflow-hidden border border-border p-0 block cursor-zoom-in"
                 style={urls[aid] ? { backgroundImage: `url(${urls[aid]})`, backgroundSize: "cover", backgroundPosition: "center" } : { background: "linear-gradient(135deg,#c7b8a3,#9a8b73)" }}
                 title={nameOf(aid)}
-                onClick={() => { if (urls[aid]) setViewer({ src: urls[aid], alt: nameOf(aid) }); }}
+                onClick={() => {
+                  if (!urls[aid]) return;
+                  // 批次 011：优先开独立图片窗（不遮住保险箱，看图时还能继续编辑）；
+                  // source="vault" —— 锁定时主进程连带关掉它（明文图不能比锁活得久）。
+                  if (!openInViewerWindow(viewerItems, urls[aid], "vault")) {
+                    setViewer({ src: urls[aid], alt: nameOf(aid) });
+                  }
+                }}
               />
               {edit ? (
                 <button

@@ -3,8 +3,9 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
-  ContextMenu, Pill, btnGhost, btnPrimary, inputHotkey, inputSmall,
+  ContextMenu, Modal, Pill, btnGhost, btnPrimary,
 } from "../../components/ui";
+import { askConfirm } from "../../components/overlay";
 import { SyncStamp } from "../../components/SyncStamp";
 import { HotkeyButton, HotkeyConflictBanner, useHotkeyConflict } from "./hotkeys";
 import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
@@ -42,10 +43,12 @@ export function PhrasesTool() {
   const { t } = useTranslation();
   const api = launcherApi();
   const [phrases, setPhrases] = useState<Phrase[]>([]);
-  const [draft, setDraft] = useState<{ name: string; keyword: string; content: string }>({ name: "", keyword: "", content: "" });
-  // 编辑缓冲区：编辑期间只改这份草稿，点「完成」才落盘，点「取消」直接丢弃。
-  // 之前是边打字边写配置，所以根本没有「取消」可言。
-  const [edit, setEdit] = useState<Phrase | null>(null);
+  // 编辑 / 新增共用一个弹窗（批次 011 稿：行内那排小输入框撤掉 ——「内容」框只有
+  // 200px 宽，写三段话根本看不见，和列表里看不全是同一个毛病）。
+  // modal.p 是编辑缓冲：期间只改这份草稿，点「保存」才落盘，取消直接丢弃。
+  const [modal, setModal] = useState<{ id: string | null; name: string; keyword: string; content: string } | null>(null);
+  // 点行原地展开只读全文（看和改分开 ——「看不全」和「改不动」是两件事）。
+  const [expanded, setExpanded] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   // 手柄按下标记：整行 draggable，但只认手柄发起的拖拽（见 row 里的 onDragStart）。
   const fromHandle = useRef(false);
@@ -74,21 +77,37 @@ export function PhrasesTool() {
     void api.setPhrases(list);
   };
 
-  const add = () => {
-    if (!draft.content.trim()) return;
-    const p: Phrase = {
-      id: `ph${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
-      name: draft.name.trim() || draft.content.trim().slice(0, 20),
-      content: draft.content.trim(),
-      keyword: draft.keyword.trim() || undefined,
-    };
-    save([...phrases, p]);
-    setDraft({ name: "", keyword: "", content: "" });
+  // 弹窗保存：id 为空 = 新增（接在末尾），否则改那一条。
+  // 名称和内容都填了才允许保存（稿定）；触发词可空 —— 那条只能靠名称搜到。
+  const modalValid = !!modal && !!modal.name.trim() && !!modal.content.trim();
+  const commitModal = () => {
+    if (!modal || !modalValid) return;
+    const kw = modal.keyword.trim() || undefined;
+    if (modal.id) {
+      save(phrases.map((p) => (p.id === modal.id
+        ? { ...p, name: modal.name.trim(), content: modal.content, keyword: kw } : p)));
+    } else {
+      save([...phrases, {
+        id: `ph${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`,
+        name: modal.name.trim(), content: modal.content, keyword: kw,
+      }]);
+    }
+    setModal(null);
   };
-  const commitEdit = () => {
-    if (!edit) return;
-    save(phrases.map((p) => (p.id === edit.id ? { ...edit, keyword: (edit.keyword || "").trim() || undefined } : p)));
-    setEdit(null);
+
+  // 删除：产品硬性规则「所有删除都要二次确认」——原来右键直删是漏网存量，顺手补上。
+  // 文案与 iOS 端同句（常用语没有回收站，走墓碑同步，不套「移入回收站」那句）。
+  const askDelete = async (id: string) => {
+    const p = phrases.find((x) => x.id === id);
+    if (!p) return;
+    const ok = await askConfirm({
+      message: t("tools.phraseDeleteAsk", { name: p.name }),
+      confirmText: t("common.delete"), danger: true,
+    });
+    if (!ok) return;
+    if (expanded === id) setExpanded(null);
+    snapshot();
+    save(phrases.filter((x) => x.id !== id));
   };
 
   // ── 拖拽调序：跟手实时重排 + FLIP 动画 ──────────────────────────────────
@@ -169,57 +188,62 @@ export function PhrasesTool() {
     }
   };
 
-  const row = (p: Phrase, editing: boolean) => (
-    <div
-      key={p.id}
-      ref={(el) => { if (el) rowRefs.current.set(p.id, el); else rowRefs.current.delete(p.id); }}
-      // 整行都是拖拽源，所以拖起来的是「一整条记录」的影像而不是一个小手柄；
-      // 但只有在手柄上按下才真的开始拖（onDragStart 里判），否则点行进编辑会被误判成拖拽。
-      draggable={!editing}
-      onDragStart={(e) => {
-        if (!fromHandle.current) { e.preventDefault(); return; }
-        lockUntil.current = 0;
-        setDragId(p.id);
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", p.id);
-      }}
-      onDragEnd={endDrag}
-      onDragOver={(e) => { if (dragId) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; moveTo(p.id, e.clientY); } }}
-      onDrop={(e) => { e.preventDefault(); endDrag(); }}
-      onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, id: p.id }); }}
-      className={`flex items-center gap-[11px] p-[9px_16px] border-b border-border-soft ${
-        dragId === p.id ? "opacity-45 bg-orange-soft" : "hover:bg-hover"}`}
-    >
-      <span
-        onMouseDown={() => { fromHandle.current = true; }}
-        onMouseUp={() => { fromHandle.current = false; }}
-        title={t("tools.dragToReorder")}
-        className="flex-none flex items-center text-faint cursor-grab active:cursor-grabbing hover:text-orange-text"
+  // 一行：点行 = 原地展开只读全文（--bg 底、max-height:180 内部滚动、保留换行），
+  // 改走行尾的 [编辑]，删除走行尾 [删除] / 右键 —— 看和改分开（批次 011 稿）。
+  // 长内容（多行或 >60 字）行尾多一个字数，先给个「有多长」的量级感再点开。
+  const row = (p: Phrase) => {
+    const open = expanded === p.id;
+    const long = p.content.includes("\n") || p.content.length > 60;
+    return (
+      <div
+        key={p.id}
+        ref={(el) => { if (el) rowRefs.current.set(p.id, el); else rowRefs.current.delete(p.id); }}
+        // 整行都是拖拽源，所以拖起来的是「一整条记录」的影像而不是一个小手柄；
+        // 但只有在手柄上按下才真的开始拖（onDragStart 里判），否则点行展开会被误判成拖拽。
+        draggable
+        onDragStart={(e) => {
+          if (!fromHandle.current) { e.preventDefault(); return; }
+          lockUntil.current = 0;
+          setDragId(p.id);
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", p.id);
+        }}
+        onDragEnd={endDrag}
+        onDragOver={(e) => { if (dragId) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; moveTo(p.id, e.clientY); } }}
+        onDrop={(e) => { e.preventDefault(); endDrag(); }}
+        onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, id: p.id }); }}
+        className={`border-b border-border-soft ${dragId === p.id ? "opacity-45 bg-orange-soft" : ""}`}
       >
-        <IconGrip size={13} />
-      </span>
-
-      {editing && edit ? (
-        <div className="flex-1 min-w-0 flex items-center gap-[8px]"
-          onKeyDown={(e) => { if (e.key === "Enter") commitEdit(); if (e.key === "Escape") setEdit(null); }}>
-          <input autoFocus value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })}
-            placeholder={t("settings.phraseName")} className={inputSmall} />
-          <input value={edit.keyword || ""} onChange={(e) => setEdit({ ...edit, keyword: e.target.value })}
-            placeholder={t("settings.phraseKeyword")} className={`${inputSmall} font-mono`} />
-          <input value={edit.content} onChange={(e) => setEdit({ ...edit, content: e.target.value })}
-            placeholder={t("settings.phraseContent")} className={inputHotkey} />
-          <button className={btnGhost} onClick={() => setEdit(null)}>{t("common.cancel")}</button>
-          <button className={btnPrimary} onClick={commitEdit}>{t("common.done")}</button>
+        <div className={`flex items-center gap-[11px] p-[9px_16px] group/prow ${dragId ? "" : "hover:bg-hover"}`}>
+          <span
+            onMouseDown={() => { fromHandle.current = true; }}
+            onMouseUp={() => { fromHandle.current = false; }}
+            title={t("tools.dragToReorder")}
+            className="flex-none flex items-center text-faint cursor-grab active:cursor-grabbing hover:text-orange-text"
+          >
+            <IconGrip size={13} />
+          </span>
+          <div className="flex-1 min-w-0 flex items-center gap-[11px] cursor-pointer"
+            onClick={() => setExpanded(open ? null : p.id)}
+            title={open ? t("tools.phraseCollapse") : t("tools.phraseExpand")}>
+            <span className="w-[132px] flex-none truncate text-[12.5px] font-medium">{p.name}</span>
+            {p.keyword ? <Pill tone="accent" mono>{p.keyword}</Pill> : null}
+            <span className="flex-1 min-w-0 truncate text-[12px] text-muted">{p.content.split("\n")[0]}</span>
+            {long ? <span className="flex-none whitespace-nowrap text-[10.5px] text-faint font-mono">{t("tools.phraseChars", { n: p.content.length })}</span> : null}
+          </div>
+          <button className="flex-none whitespace-nowrap px-[8px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-orange hover:text-orange-text"
+            onClick={() => setModal({ id: p.id, name: p.name, keyword: p.keyword || "", content: p.content })}>{t("common.edit")}</button>
+          <button className="flex-none whitespace-nowrap px-[8px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-danger hover:text-danger"
+            onClick={() => void askDelete(p.id)}>{t("common.delete")}</button>
         </div>
-      ) : (
-        <div className="flex-1 min-w-0 flex items-center gap-[11px] cursor-pointer" onClick={() => setEdit({ ...p })}>
-          <span className="w-[132px] flex-none truncate text-[12.5px] font-medium">{p.name}</span>
-          {p.keyword ? <Pill tone="accent" mono>{p.keyword}</Pill> : null}
-          <span className="flex-1 min-w-0 truncate text-[12px] text-muted">{p.content}</span>
-        </div>
-      )}
-    </div>
-  );
+        {open ? (
+          <div className="mx-[16px] mb-[10px] p-[10px_12px] rounded-[9px] bg-bg border border-border-soft text-[12.5px] leading-[1.7] whitespace-pre-wrap break-words max-h-[180px] overflow-y-auto">
+            {p.content}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -247,35 +271,61 @@ export function PhrasesTool() {
           <Pill>{t("tools.phraseCount", { n: phrases.length })}</Pill>
           <div className="flex-1" />
           <span className="flex-none whitespace-nowrap text-[11.5px] text-faint">{t("tools.phraseListHint")}</span>
+          {/* 新增走同一个弹窗（批次 011 稿：行内那排 200px 的小输入框写不了三段话，撤掉）。 */}
+          <button className={btnPrimary} onClick={() => setModal({ id: null, name: "", keyword: "", content: "" })}>
+            {t("tools.phraseNew")}
+          </button>
         </div>
 
         <div className="flex flex-col" onDragEnd={endDrag}>
           {phrases.length
-            ? phrases.map((p) => row(p, edit?.id === p.id))
+            ? phrases.map((p) => row(p))
             : <div className="p-[18px_16px] text-[12px] text-faint">{t("settings.phrasesEmpty")}</div>}
-        </div>
-
-        <div className="flex items-center gap-[8px] p-[12px_16px] bg-bg">
-          <input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder={t("settings.phraseName")} className={inputSmall} />
-          <input value={draft.keyword} onChange={(e) => setDraft({ ...draft, keyword: e.target.value })} placeholder={t("settings.phraseKeyword")} className={`${inputSmall} font-mono`} />
-          <input value={draft.content} onChange={(e) => setDraft({ ...draft, content: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder={t("settings.phraseContent")} className={inputHotkey} />
-          {/* 没填内容时按钮真禁用（add 里也再判一次，回车路径同样拦得住） */}
-          <button className={btnPrimary} disabled={!draft.content.trim()} onClick={add}>{t("common.add")}</button>
         </div>
       </section>
 
       <div className="text-[11.5px] text-faint leading-[1.6]">{t("settings.phrasesHint")}</div>
+
+      {/* 编辑 / 新增弹窗（宽 560，批次 011 稿）：名称 + 触发词并排，内容区大块可拉伸。 */}
+      {modal ? (
+        <Modal width={560} title={modal.id ? t("tools.phraseEditTitle") : t("tools.phraseNew")}
+          onClose={() => setModal(null)}
+          footer={<>
+            <span className="flex-1" />
+            <button className={btnGhost} onClick={() => setModal(null)}>{t("common.cancel")}</button>
+            <button className={btnPrimary} disabled={!modalValid} onClick={commitModal}>{t("common.save")}</button>
+          </>}>
+          <div className="flex flex-wrap gap-[8px]">
+            <input autoFocus value={modal.name} onChange={(e) => setModal({ ...modal, name: e.target.value })}
+              placeholder={t("settings.phraseName")}
+              className="border border-border bg-bg text-text rounded-[8px] px-[10px] py-[7px] text-[13px] outline-none focus:border-orange"
+              style={{ flex: "1 1 240px", minWidth: 0 }} />
+            <input value={modal.keyword} onChange={(e) => setModal({ ...modal, keyword: e.target.value })}
+              placeholder={t("settings.phraseKeyword")}
+              className="border border-border bg-bg text-text rounded-[8px] px-[10px] py-[7px] text-[13px] font-mono outline-none focus:border-orange"
+              style={{ flex: "0 1 168px", minWidth: 0 }} />
+          </div>
+          <div className="flex items-baseline gap-[8px] mt-[10px] mb-[6px]">
+            <span className="flex-none text-[11.5px] font-semibold tracking-[.05em] text-faint">{t("settings.phraseContent")}</span>
+            <span className="flex-1" />
+            <span className="flex-none text-[10.5px] text-faint font-mono">{t("tools.phraseChars", { n: modal.content.length })}</span>
+          </div>
+          <textarea
+            value={modal.content}
+            onChange={(e) => setModal({ ...modal, content: e.target.value })}
+            placeholder={t("tools.phraseContentPh")}
+            className="w-full border border-border bg-bg text-text rounded-[9px] px-[11px] py-[9px] text-[12.5px] leading-[1.7] outline-none focus:border-orange resize-y"
+            style={{ minHeight: 220, maxHeight: 300 }}
+          />
+        </Modal>
+      ) : null}
 
       {menu ? (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}
           items={[{
             label: t("common.delete"),
             danger: true,
-            onClick: () => {
-              if (edit?.id === menu.id) setEdit(null);
-              snapshot();
-              save(phrases.filter((x) => x.id !== menu.id));
-            },
+            onClick: () => { void askDelete(menu.id); },
           }]} />
       ) : null}
     </>
