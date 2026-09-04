@@ -2376,8 +2376,16 @@ export class WorkflowEngine {
     if (src === "none") return "";
     if (src === "text") return String(node?.config.argText || "");
     if (src === "selection") {
-      const { text, files } = await this.grabSelection("auto");
-      return text.trim() ? text : files.join("\n");
+      // 只认**文字**选区，抓到文件引用一律不要（返回空串，面板只填前缀，用户自己打词）。
+      //
+      // 实锤（sam，2026-09-04）：翻译热键弹出的面板里出现「fy /Users/…/textview-entry.ts」。
+      // 原来这里是 "auto"（没文本就用文件路径）—— 按热键时前台焦点正落在编辑器 /
+      // Finder 的**文件列表**上，模拟 ⌘C 复制到的是文件引用而不是文字，auto 就把
+      // 路径当参数塞了进去；「剪贴板里之前没有」正因为这条路径是 ⌘C 当场制造的。
+      // Hotkey 的参数语义是「选中的那段字」；真要把文件喂给工作流，走 Universal
+      // Action（它的 source 可配、且明说了文件路径这条路）。
+      const { text } = await this.grabSelection("text");
+      return text;
     }
     const { clipboard } = await import("electron");
     return clipboard.readText() || "";
@@ -2428,7 +2436,14 @@ export class WorkflowEngine {
     for (let i = 0; i < 15; i++) {
       await new Promise((r) => setTimeout(r, 40));
       const t = clipboard.readText(), f = readClipboardFiles(clipboard);
-      if (`${t}\u0000${f.join("\u0000")}` !== before) { text = t; files = f; break; }
+      if (`${t}\u0000${f.join("\u0000")}` !== before) {
+        // 只把**真变了的那部分**当抓取结果：⌘C 复制的是文件引用时，文本槽常常
+        // 原样留着旧值 —— 无脑取 t 会把剪贴板里躺着的旧文字误当「选区」交出去
+        // （和 hotkeyArg 那个塞路径的坑是一对，2026-09-04 一起堵上）。
+        if (t !== prevText) text = t;
+        files = f;
+        break;
+      }
     }
     try {
       clipboard.writeText(prevText);
