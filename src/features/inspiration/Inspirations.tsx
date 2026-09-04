@@ -10,12 +10,13 @@ import * as legacy from "../../app/shell";
 import { btn, btnRow, btnGhost, btnPrimary, select as selectCls, ConfirmDialog, Modal, EmptyState, filterChip, filterChipCount } from "../../components/ui";
 import { PageShell, HeaderSearch, ListDetail, CardList, ListCard, DetailHead, SectionHeader, detailIconBtn, SyncSpinner, Skeleton } from "../../components/layout";
 import { showToast } from "../../components/overlay";
+import { ImageViewer, openInViewerWindow } from "../../components/ImageViewer";
 import {
   IconArrowRight, IconBulb, IconChat, IconCheck, IconCopy, IconKeyboard,
   IconPencil, IconPhone, IconPlus, IconTrash,
 } from "../../components/icons";
 import {
-  createInspiration, deleteInspirations, fetchTaskDetail, organizeStateOf,
+  createInspiration, deleteInspirations, fetchTaskDetail, fileUrl, organizeStateOf,
   requestInspirationResearch, researchInFlight, researchStateOf, updateInspiration,
 } from "../../services/server";
 import type { Inspiration, TaskItem } from "../../services/server";
@@ -143,12 +144,22 @@ export function Inspirations() {
     showToast(t("inspiration.deletedToast"), { tone: "ok" });
   };
 
+  // 列表栏三种空法（shared.emptyState）：首屏骨架 / 无结果（有搜索、有标签、或筛了状态但别的状态下有货）/ 真空。
+  // 状态筛选原来不算「无结果」—— 筛「已归档」一条没有时画的是带橙钮的真空态；裁定 8 之后那会和页头凑成两颗橙，
+  // 所以按规范的三分法归位：整体有货只是这个状态下没有 = 无结果（清掉筛选连状态一起清）；整体一条都没有才是真空。
+  const loadingFirst = st.loading && !st.list.length;
+  const noResult = !!q.trim() || !!tag || (!!filter && st.counts.all > 0);
+  // 裁定 8（tokens.pageTemplate.shared.emptyHeaderPrimary）：真空态时页头不渲染「记灵感」，橙留给空态里那颗。
+  // 「真空」= 首屏骨架已过 && 列表一条都没有 && 不是无结果。判定和下面画空态的那条分支一字不差，页面上永远只有一颗橙。
+  // （本页拿不到离线态：拉取失败回空列表，和真空同形 —— 那时列表栏画的也是这同一个空态，仍只有一颗橙。）
+  const blank = !loadingFirst && !list.length && !noResult;
+
   return (
     <PageShell header={{
       title: t("inspiration.title"),
       subtitle: t("inspiration.countLine", { n: st.counts.all, open: st.counts.open }),
       status: st.refreshing ? <SyncSpinner /> : undefined,
-      primary: { label: t("inspiration.add"), onClick: () => setEditing(null) },
+      primary: blank ? undefined : { label: t("inspiration.add"), onClick: () => setEditing(null) },
       secondary: [{ label: t("common.refresh"), onClick: () => legacy.manualRefreshInsp() }],
       // 第二行从左到右：搜索 · 排序 · 四档状态芯片 · （撑开）· 标签下拉。
       // 搜索框收到 200（默认 240）、标签下拉封顶 150：这一行东西多，最小窗口（900 − 176 导航）下也得放得下。
@@ -179,27 +190,27 @@ export function Inspirations() {
     }}>
       <ListDetail
         listEmpty={!list.length}
-        list={st.loading && !st.list.length ? (
+        list={loadingFirst ? (
           <Skeleton rows={3} />
         ) : list.length ? (
           <CardList>
             {list.map((i) => <Card key={i.id} item={i} on={current?.id === i.id} tag={tag} onPick={() => pick(i.id)} />)}
           </CardList>
-        ) : (
+        ) : noResult ? (
           /* 空态走通用空态件（compact，放列表栏内；右侧只留底色）。
-             硬规则说橙色只出现在主操作、当前选中、进度三处，空态图标不属于任何一处。 */
-          (q.trim() || tag) ? (
-            <EmptyState compact
-              title={t("inspiration.noResult")}
-              actionLabel={t("inspiration.clearFilter")}
-              onAction={() => { setQ(""); setTag(null); }} />
-          ) : (
-            <EmptyState compact
-              title={t("inspiration.emptyTitle")}
-              body={t("inspiration.emptyHint")}
-              actionLabel={t("inspiration.emptyAction")}
-              onAction={() => setEditing(null)} />
-          )
+             硬规则说橙色只出现在主操作、当前选中、进度三处，空态图标不属于任何一处。
+             无结果：清掉筛选把搜索、标签、状态一起清 —— 三样里任一样都可能是把列表筛空的那个。 */
+          <EmptyState compact
+            title={t("inspiration.noResult")}
+            actionLabel={t("inspiration.clearFilter")}
+            onAction={() => { setQ(""); setTag(null); if (filter) setFilter(""); }} />
+        ) : (
+          /* 真空：这颗「记一条灵感」就是这一页唯一的橙 —— 页头的主按钮此时不渲染（裁定 8，见上面的 blank）。 */
+          <EmptyState compact
+            title={t("inspiration.emptyTitle")}
+            body={t("inspiration.emptyHint")}
+            actionLabel={t("inspiration.emptyAction")}
+            onAction={() => setEditing(null)} />
         )}
         detail={current ? (
           <Detail
@@ -292,6 +303,12 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
   const [copied, setCopied] = useState(false);
   const [task, setTask] = useState<TaskItem | null>(null);
   const m = metaOf(item.status);
+  // 附件（批次 013：带图记灵感时服务端把原图挂上）。点开走通用 ImageViewer：先试独立图片窗
+  // （批次 011，不遮详情），没有桥（网页预览 / 测试）退回窗口内 overlay —— 与记账弹窗同一套。
+  const atts = item.atts || [];
+  const [viewer, setViewer] = useState<string | null>(null);
+  const viewerItems = atts.map((a) => ({ src: fileUrl(a.file_id), alt: a.label }));
+  const openImg = (src: string) => { if (!openInViewerWindow(viewerItems, src)) setViewer(src); };
 
   // 关联任务的标题 / 状态 / 时间不在灵感行里，按 task_id 单独取一次（只有选中项会取）。
   useEffect(() => {
@@ -349,6 +366,18 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
           <SectionHeader>{t("inspiration.rawLabel")}</SectionHeader>
           <div className="text-[12.5px] leading-[1.75] whitespace-pre-wrap bg-card border border-border rounded-[10px] p-[11px_12px]"
             style={{ textWrap: "pretty" } as React.CSSProperties}>{item.raw}</div>
+          {/* 附件缩略条（批次 013）：正文下面 8px，缩略 78 / 圆角 8 / 1px --border / --chip 底 / cover / gap 6 ——
+              与聊天里带附件的文字气泡同一形态（tokens.launcherImage.chatForm）。只在详情画，卡片上不画。 */}
+          {atts.length ? (
+            <div className="flex flex-wrap gap-[6px] mt-[8px]">
+              {atts.map((a) => (
+                <button key={a.file_id} title={a.label} onClick={() => openImg(fileUrl(a.file_id))}
+                  className="flex-none w-[78px] h-[78px] p-0 rounded-[8px] border border-border bg-chip overflow-hidden cursor-zoom-in">
+                  <img src={fileUrl(a.file_id)} alt={a.label} className="w-full h-full object-cover block" />
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
 
         {item.summary ? (
@@ -416,6 +445,8 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
         <IconArrowRight size={13} />{t("inspiration.sendToChat")}
       </button>
     </div>
+    {/* 独立图片窗开不了时的回落形态（overlay，portal 到应用根，不受详情栏进场动画影响）。 */}
+    <ImageViewer src={viewer} items={viewerItems} onClose={() => setViewer(null)} />
   </>);
 }
 

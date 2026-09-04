@@ -79,7 +79,13 @@ function wsUrl(): string {
 }
 
 // 消息的引用注脚（批次 011 消息菜单）：气泡顶部的被引用块 / 输入框上方的引用条都用它。
-export interface MsgQuote { id?: number; role: string; text: string }
+export interface MsgQuote {
+  id?: number;
+  role: string;
+  text: string;
+  /** 被引消息带的附件张数（批次 013：带附件的文字消息）。引用条 / 气泡内引用块靠它画尾部的图片图标 +「N」。 */
+  atts?: number;
+}
 // 消息附加信息（服务端 meta JSON 列）：取消收尾的标注、执行过的工具清单、引用。
 export interface MsgMeta {
   interrupted?: boolean;                      // 流式中停：半截保留，时间戳后缀「已中断」
@@ -88,13 +94,43 @@ export interface MsgMeta {
   quote?: MsgQuote;
 }
 
+// ── 识图（批次 013：快捷入口带图 → 服务端「识图先行」）────────────────────────
+// 事件（服务端 → 本端）：
+//   vision_reading    { conversation }                       正在看图（占位气泡换「正在看图…」）
+//   vision_confirm    VisionConfirmCard                       记账意图：识出的字段 + 没看清的项 → 确认卡
+//   vision_confirm_resolved { confirm_id, approved, text? }   卡已处理（本端或别的端点的）；approved 时 text 是
+//                                                             「已记入：…」那行（服务端同时落成一条秘书消息）
+//   vision_failed     { confirm_id, conversation, reason, att, user_message_id }  识不出 → 三段式错误卡
+/** 确认卡上四个就地可改的字段（金额用「元」字符串，和记账接口的 yuan 口径一致）。 */
+export interface VisionFields {
+  yuan: string;                 // "32.00"
+  direction: "expense" | "income";
+  cat: string;                  // 分类 slug
+  sub?: string;
+  merchant: string;
+  at_ms: number;
+}
+export interface VisionConfirmCard {
+  confirm_id: string;
+  kind: "money";
+  conversation: string;
+  /** 原图 file_id（确认后会挂成这笔账的凭证附件）。 */
+  att: string;
+  fields: VisionFields;
+  /** 模型没看清的字段名（yuan / cat / merchant / at_ms 之一）：只标那一项。 */
+  unsure: string[];
+  user_message_id?: number;
+}
+
 export interface HistoryRow {
   id: number;
   role: string;
   content: string;
   created_at?: string;
   conversation?: string;
-  /** text / image（atts 是文件 id）/ system（取消提示这类系统行）。老服务端没有 → 当 text。 */
+  /** text / image（atts 是文件 id）/ system（取消提示这类系统行）。老服务端没有 → 当 text。
+   *  批次 013：text 也可以带 atts —— 快捷入口发出的「带附件的文字消息」（文字 + 底部缩略条，
+   *  删除 / 引用的对象是整条）；聊天里手发的图仍是独立一条 image。 */
   kind?: string;
   atts?: string[];
   meta?: MsgMeta;
@@ -422,7 +458,7 @@ export async function deleteTasks(ids: string[]): Promise<{ deleted: number; bus
 
 /** kind 对外四种（操控记录在服务端就并进了 task）。money 是记账一期加的：
  *  流水删除也走统一回收站 —— 同一个产品里「删除」不该有两种下场（2026-08-24 拍板保留）。 */
-export type TrashKind = "idea" | "task" | "reminder" | "money";
+export type TrashKind = "idea" | "task" | "reminder" | "money" | "phrase";
 
 export interface TrashItem {
   kind: TrashKind;
@@ -439,7 +475,7 @@ export interface TrashList {
 }
 
 const EMPTY_TRASH: TrashList = {
-  items: [], counts: { idea: 0, task: 0, reminder: 0, money: 0 }, keep_days: 30,
+  items: [], counts: { idea: 0, task: 0, reminder: 0, money: 0, phrase: 0 }, keep_days: 30,
 };
 
 export async function fetchTrash(): Promise<TrashList> {
@@ -489,6 +525,65 @@ export function purgeTrash(entries: TrashEntry[]): Promise<number> {
 /** 清空回收站。**只清通用区** —— 保险箱那一区服务端动不了，要解锁后单独清。 */
 export function purgeAllTrash(): Promise<number> {
   return trashAction("/trash/purge", { all: true });
+}
+
+// ── 聊天消息回收站（批次 013 · 总设置 → 回收站的第三类）─────────────────────
+// 消息软删（message_delete）后进这里，30 天到期服务端连附件文件一起清。
+// 和通用区不是一张表：消息的 id 是整数、按会话分、附件是 file_id 数组，所以单独一组接口。
+export interface TrashMessage {
+  id: number;
+  role: string;
+  content: string;
+  conversation: string;      // 'assistant' 或 'device:<id>'（会话名由本端映射）
+  kind: string;              // text / image / system
+  atts: string[];
+  deleted_at_ms: number;
+  left_days: number;
+  bytes: number;             // 附件占用（字节），没有附件 = 0
+}
+export interface TrashMessages {
+  items: TrashMessage[];
+  keep_days: number;
+  total_bytes: number;
+}
+const EMPTY_TRASH_MSGS: TrashMessages = { items: [], keep_days: 30, total_bytes: 0 };
+
+export async function fetchMessageTrash(): Promise<TrashMessages> {
+  try {
+    const r = await fetch(`${getServerUrl()}/messages/trash?limit=200`);
+    if (!r.ok) return EMPTY_TRASH_MSGS;
+    const d = await r.json();
+    // 老服务端回的是裸数组（批次 011）；新服务端回 {items, keep_days, total_bytes}。
+    const items: TrashMessage[] = (Array.isArray(d) ? d : Array.isArray(d?.items) ? d.items : []).map((m: any) => ({
+      id: Number(m.id) || 0,
+      role: String(m.role || "user"),
+      content: String(m.content || ""),
+      conversation: String(m.conversation || "assistant"),
+      kind: String(m.kind || "text"),
+      atts: Array.isArray(m.atts) ? m.atts.map(String) : [],
+      deleted_at_ms: Number(m.deleted_at_ms) || 0,
+      left_days: typeof m.left_days === "number" ? m.left_days : 30,
+      bytes: Number(m.bytes) || 0,
+    }));
+    return {
+      items,
+      keep_days: typeof d?.keep_days === "number" ? d.keep_days : 30,
+      total_bytes: Number(d?.total_bytes) || items.reduce((n, m) => n + m.bytes, 0),
+    };
+  } catch {
+    return EMPTY_TRASH_MSGS;
+  }
+}
+
+/** 找回一条消息：回到原会话的原位置（服务端广播 message_restored，聊天页重拉那个会话）。 */
+export function restoreMessage(id: number): Promise<number> {
+  return trashAction("/messages/restore", { id });
+}
+
+/** 彻底删除消息（连附件文件一起，各端同步）。ids 空 + all=true 表示清空聊天消息那一区。 */
+export function purgeMessages(ids: number[], all = false): Promise<number> {
+  if (!all && !ids.length) return Promise.resolve(0);
+  return trashAction("/messages/purge", all ? { all: true } : { ids });
 }
 
 // ── 记账 ─────────────────────────────────────────────────────────────────────
@@ -796,12 +891,14 @@ export function uploadFileProgress(
 
 /** 给一笔账挂上已上传的文件。服务端限一笔 4 张，超了回 400 → null。
  *  成功回这笔账**全量**的附件列表，界面直接用它对齐（别自己往数组里 push）。 */
-export async function addMoneyAtt(entryId: string, fileId: string, label: string): Promise<MoneyAtt[] | null> {
+/** copy=true（批次 013）：file_id 是聊天消息的文件（识图卡「改成手动填」带过来的原图），让服务端先复制一份再挂 ——
+ *  聊天消息和这笔账各归各删，谁清了文件另一边都不 404。 */
+export async function addMoneyAtt(entryId: string, fileId: string, label: string, copy = false): Promise<MoneyAtt[] | null> {
   try {
     const r = await fetch(`${getServerUrl()}/money/entries/${encodeURIComponent(entryId)}/atts`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ file_id: fileId, label }),
+      body: JSON.stringify({ file_id: fileId, label, ...(copy ? { copy: true } : {}) }),
     });
     if (!r.ok) return null;
     const d = await r.json();
@@ -990,6 +1087,9 @@ export interface Inspiration {
   /** idle | queued | running | done | failed */
   research_status?: string;
   research_at?: string;
+  /** 附件（批次 013：带图消息记灵感时服务端自动把原图挂上）。图片地址 = fileUrl(file_id)。
+   *  可选：老服务端没有这个字段。 */
+  atts?: { file_id: string; label: string }[];
 }
 
 export const organizeStateOf = (i: Inspiration): string => i.organize_status || "done";
@@ -1204,11 +1304,16 @@ class ChatConnection {
   //（服务端会把「目标设备=这台」作为上下文，端侧任务直接派给它）。
   // mode：三态开关 auto/chat/execution（输入框旁的「自动/聊天/执行」切换）。
   // quote：引用注脚（批次 011）——服务端落进这条消息的 meta.quote 并随广播带给各端。
-  sendMessage(content: string, autoApproveOperate = false, conversation = "assistant", mode = "auto", quote?: MsgQuote): boolean {
+  // atts：批次 013「带附件的文字消息」（快捷入口带图）。文件先走 POST /files/upload 拿 file_id，
+  // 这里只送 id 列表（一期 1 张，服务端最多收 4）。带 atts 时 content 允许为空（纯图交给秘书）。
+  // 服务端先回 message_saved（kind=text，带 id）再识图：记账意图回 vision_confirm 确认卡，
+  // 其它意图把图读成文字拼进上下文走正常回复（提醒 / 灵感会把图挂成附件）。
+  sendMessage(content: string, autoApproveOperate = false, conversation = "assistant", mode = "auto", quote?: MsgQuote, atts?: string[]): boolean {
     return this.rawSend({
       type: "message", content, client_id: getClientId(),
       auto_approve_operate: autoApproveOperate, conversation, mode,
       ...(quote ? { quote } : {}),
+      ...(atts && atts.length ? { atts } : {}),
     });
   }
 
@@ -1234,6 +1339,15 @@ class ChatConnection {
   sendConfirm(confirmId: string, approved: boolean): boolean {
     // B 批改名：确认单号叫 confirm_id，不再冒充任务 id。
     return this.rawSend({ type: "confirm_response", confirm_id: confirmId, approved });
+  }
+
+  // 识图结果确认卡（批次 013）：用户改完字段点「记入」→ approved=true + fields（服务端据此入账并把
+  // 原图挂成凭证）；「改成手动填」/ 放弃 → approved=false，服务端只销卡（本端自己开记一笔弹窗）。
+  sendVisionConfirm(confirmId: string, approved: boolean, fields?: VisionFields): boolean {
+    return this.rawSend({
+      type: "vision_confirm_response", confirm_id: confirmId, approved,
+      ...(fields ? { fields } : {}),
+    });
   }
 
   // 问答卡：多题答完后一次性提交（秘书在派活前把歧义问清楚）。

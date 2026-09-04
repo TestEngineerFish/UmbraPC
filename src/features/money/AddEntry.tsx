@@ -25,6 +25,7 @@ import { ImageViewer, openInViewerWindow } from "../../components/ImageViewer";
 // 跨功能引用刻意为之 —— 再抄一份就会两处漂移。
 import { combineDateTime, toDateInput, toTimeInput } from "../notify/reminderKit";
 import { amountToCents, catIcon, catColor, isExpr, tzOffsetMin, yuan } from "./moneyKit";
+import type { MoneyDraft } from "./Money";
 
 const BTN_GHOST = btn("ghost");
 const BTN_PRIMARY = btn("primary");
@@ -38,26 +39,37 @@ const KEY_ROWS: string[][] = [
 ];
 
 
-export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
+export function AddEntry({ cats, entries, initial, draft, onClose, onSaved }: {
   cats: MoneyCat[];
   /** 本月流水，只用来算「最近用过」的分类。 */
   entries: MoneyEntry[];
   /** 传了就是编辑：id / 来源 / 导入批次这些身份字段原样保留，只改内容。 */
   initial: MoneyEntry | null;
+  /** 新建时的预填草稿（批次 013：识图确认卡「改成手动填」/ 识不出「手动填一笔」带过来）。
+   *  draft.atts 是已上传好的原图 file_id，保存成功后挂到这笔账上。initial 有值时忽略。 */
+  draft?: MoneyDraft | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const { t } = useTranslation();
-  const [amount, setAmount] = useState(initial ? (initial.cents / 100).toFixed(2) : "");
-  const [dir, setDir] = useState<"expense" | "income">(initial?.direction || "expense");
-  const [cat, setCat] = useState(initial?.cat || "food");
-  const [sub, setSub] = useState(initial?.sub || "");
-  const [note, setNote] = useState(initial?.merchant || "");
-  const [atMs, setAtMs] = useState(initial?.at_ms || Date.now());
+  // 草稿只在新建时起作用（编辑一笔已有的账，身份字段和内容都以 initial 为准）。
+  // 缺的字段走默认：方向默认支出；分类沿用手记的默认「餐饮」，收入方向取该方向第一个可用分类
+  // （弹窗随草稿在分类表到位前就开了，取不到就落「其他」，和 switchDir 同一兜底）；时间默认现在。
+  const d = initial ? null : draft || null;
+  const [amount, setAmount] = useState(initial ? (initial.cents / 100).toFixed(2) : d?.cents ? (d.cents / 100).toFixed(2) : "");
+  const [dir, setDir] = useState<"expense" | "income">(initial?.direction || d?.direction || "expense");
+  const [cat, setCat] = useState(initial?.cat || d?.cat || (
+    d?.direction === "income" ? (cats.find((c) => c.direction === "income" && c.enabled)?.slug || "other_in") : "food"));
+  const [sub, setSub] = useState(initial?.sub || d?.sub || "");
+  const [note, setNote] = useState(initial?.merchant || d?.merchant || "");
+  const [atMs, setAtMs] = useState(initial?.at_ms || d?.at_ms || Date.now());
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   /** 附件本地态：initial 是快照，删掉一张后要立刻从界面消失。 */
   const [atts, setAtts] = useState<MoneyAtt[]>(initial?.atts || []);
+  /** 草稿带来的图（批次 013）：已经在服务端了（聊天里传的原图），但账还没落库、没地方挂 ——
+   *  先在附件区预览出来，保存成功后逐张 addMoneyAtt 挂上。挂过一次就清空，「保存并继续」的下一笔不再带。 */
+  const [draftAtts, setDraftAtts] = useState<{ file_id: string; label: string }[]>(d?.atts || []);
   /** 新建这一笔时先攒在本地的图（账还没落库，服务端没地方挂）——
    *  保存成功后逐张上传挂接。url 是 ObjectURL，撤下时要 revoke，不然内存一直占着。 */
   const [pending, setPending] = useState<{ key: string; file: File; url: string }[]>([]);
@@ -68,6 +80,7 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
   const [viewer, setViewer] = useState<string | null>(null);
   const viewerItems = [
     ...atts.map((a) => ({ src: fileUrl(a.file_id), alt: a.origin ? t("money.attOrigin") : a.label })),
+    ...draftAtts.map((a) => ({ src: fileUrl(a.file_id), alt: a.label })),
     ...pending.map((p) => ({ src: p.url, alt: p.file.name })),
   ];
   // 批次 011：优先开独立图片窗 —— 记账弹窗不被遮住，对着凭证还能继续填数；
@@ -76,8 +89,22 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
 
   useEffect(() => { amountRef.current?.focus(); }, []);
 
+  // 草稿里的分类要等分类表到位才核得了（弹窗随草稿在 Money 页挂载那一刻就开，cats 还是空的）：
+  // 识图猜的 slug 不在该方向的可用分类里（猜错方向 / 分类已停用 / 服务端换过名）就退回该方向
+  // 第一个可用分类 —— 不核的话格子里没有选中项，保存却会写出一条方向和分类打架的流水。
+  // 只核这一次；之后用户自己选的不动。编辑态（initial）不核：历史流水指向停用分类是合法的。
+  const draftCatChecked = useRef(!d);
+  useEffect(() => {
+    if (draftCatChecked.current || !cats.length) return;
+    draftCatChecked.current = true;
+    if (cats.some((c) => c.slug === cat && c.direction === dir && c.enabled)) return;
+    const first = cats.find((c) => c.direction === dir && c.enabled);
+    if (first) { setCat(first.slug); setSub(""); }
+  }, [cats, cat, dir]);
+
   // ── 附件（批次 004 正式形态：一笔最多 4 张，拖进来或点「加图」）─────────────
-  const attCount = atts.length + pending.length;
+  // 草稿带来的图也占名额：保存后它们就是这笔账的附件。
+  const attCount = atts.length + draftAtts.length + pending.length;
   const attRoom = attCount < 4;
 
   /** 编辑态：立刻上传 + 挂接（账已存在）。逐张来，哪张失败点名哪张 ——
@@ -177,6 +204,19 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
       updated_at_ms: Date.now(),
     });
     if (!r) { setBusy(false); setFailed(true); return; }   // 稿：内容都还在，联网后再点一次保存
+    // 草稿带来的图（批次 013，聊天里已经传上服务端的原图）此刻才有地方挂：逐张 addMoneyAtt 挂到这笔账上。
+    // 挂失败吐司点名那张、不阻断 —— 账已经记上了；挂过一次就清空，「保存并继续」的下一笔不再带。
+    if (draftAtts.length) {
+      let latest: MoneyAtt[] | null = null;
+      for (const a of draftAtts) {
+        // copy=true：这张是聊天消息的文件，让服务端复制一份挂上（两边各归各删）。
+        const added = await addMoneyAtt(eid, a.file_id, a.label, true);
+        if (!added) { showToast(t("money.attAttachFailed", { name: a.label }), { tone: "warn" }); continue; }
+        latest = added;   // 服务端回全量列表，直接对齐
+      }
+      setDraftAtts([]);
+      if (latest) setAtts(latest);
+    }
     // 新建时攒下的图此刻才有地方挂：账落库了，逐张上传 + 挂接。
     // 挂失败只影响那张图（有点名吐司），账本身已经记上 —— 不因图把整次保存判失败。
     if (pending.length) {
@@ -372,6 +412,18 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
                 </button>
               ) : null}
+            </div>
+          ))}
+          {/* 草稿带来的图（批次 013）：已在服务端、账还没落库。标签条写「保存后挂上」，不给 × ——
+              它是识图那笔的凭证，和原始截图同一待遇（真要不要，保存后在编辑态里摘）。 */}
+          {draftAtts.map((a) => (
+            <div key={a.file_id} className="relative flex-none w-[72px] h-[72px] rounded-[9px] border border-border bg-chip overflow-hidden">
+              <button className="w-full h-full p-0 block bg-transparent border-none cursor-zoom-in" title={a.label} onClick={() => openImg(fileUrl(a.file_id))}>
+                <img src={fileUrl(a.file_id)} alt={a.label} className="w-full h-full object-cover" />
+              </button>
+              <div className="absolute left-0 right-0 bottom-0 px-[5px] py-[2px] bg-[rgba(11,10,9,.62)] text-white text-[10px] font-semibold whitespace-nowrap overflow-hidden text-ellipsis">
+                {t("money.attAfterSave")}
+              </div>
             </div>
           ))}
           {pending.map((p) => (

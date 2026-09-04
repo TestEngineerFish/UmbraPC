@@ -106,6 +106,12 @@ export function Abilities() {
 
   // 选中项被删掉（或设备重注册后不在了）时退回占位，不留一个指向空的详情。
   const selM = selected ? ds.providers.find((p) => p.provider === selected) : undefined;
+  // 裁定 8（tokens.pageTemplate.shared.emptyHeaderPrimary）：真空态时页头不渲染「新增程序」，橙留给空态里那颗。
+  // 本页没有搜索 / 筛选，「一张卡都没有」只有一种来源要区分：providers 是设备引擎注册成功那一刻才填进来的
+  // （deviceTransport：拿到注册信息 → 发 register → 服务端回 registered 才转 online），所以
+  //   status 不是 online && 没 provider = 还没就绪 / 离线 —— 不是真空，主按钮照常在；
+  //   status 是 online && 没 provider = 引擎注册了但一个 Provider 都没有 —— 真空，主按钮让给空态里那颗。
+  const blank = ds.status === "online" && !ds.providers.length;
 
   return (
     <PageShell
@@ -114,7 +120,7 @@ export function Abilities() {
         subtitle: t("abilities.deviceHint", { name: ds.deviceName }),
         // 表单开着时主按钮**不出现**：详情列里的「保存」就是这一页唯一的橙实心（骨架规矩：一页只准一颗），
         // 灰掉的主按钮也还是第二颗；原来的抽屉带遮罩，开着时本来就点不到「新增」。
-        primary: form.open ? undefined : { label: t("abilities.addProgram"), onClick: () => { setSelected(null); openAdd(); } },
+        primary: form.open || blank ? undefined : { label: t("abilities.addProgram"), onClick: () => { setSelected(null); openAdd(); } },
       }}
       settings={{
         title: t("abilities.settingsTitle"),
@@ -140,7 +146,11 @@ export function Abilities() {
           </CardList>
           <div className="px-[14px] pb-[14px] text-[11px] text-faint leading-[1.6]">{t("abilities.footer")}</div>
         </>) : (
-          <EmptyState compact title={t("abilities.notReady")} />
+          // 真空态（引擎在线但没 Provider）时「新增程序」从页头挪到这里（裁定 8）；没就绪 / 离线时不给 ——
+          // 那时页头的主按钮还在。表单开着时也不给：详情列里的「保存」已经是这一页那颗橙。
+          <EmptyState compact title={t("abilities.notReady")}
+            actionLabel={blank && !form.open ? t("abilities.addProgram") : undefined}
+            onAction={() => { setSelected(null); openAdd(); }} />
         )}
         detail={form.open ? (
           <ProvEditor form={form} setForm={setForm} onSave={save} onCancel={() => setForm(CLOSED)} />

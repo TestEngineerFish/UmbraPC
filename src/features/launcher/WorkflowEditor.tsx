@@ -6,12 +6,12 @@ import type { ComponentType } from "react";
 import {
   IconAlert, IconBell, IconBook, IconBranch, IconBug, IconBulb, IconCalc, IconCalendar, IconChat, IconCheck,
   IconChevronDown, IconChevronRight, IconClip, IconClock, IconCloud, IconCode, IconCommand, IconCopy, IconDice,
-  IconDots, IconDownload,
+  IconDownload,
   IconExternal, IconEye,
   IconFit, IconMinus,
   IconEyeOff, IconFile, IconFilter, IconFlow, IconFolder, IconGear, IconGlobe, IconGrid, IconGrip, IconInfinity, IconKeyboard,
-  IconLink, IconList, IconMusic, IconPanel, IconPencil, IconPlay, IconPlus, IconRedo, IconRefresh, IconRocket,
-  IconRuler, IconScissors, IconSearch, IconTag, IconTarget, IconTerminal, IconText, IconTrash, IconUndo,
+  IconLink, IconList, IconMusic, IconPencil, IconPlus, IconRefresh, IconRocket,
+  IconRuler, IconScissors, IconSearch, IconTag, IconTarget, IconTerminal, IconText, IconTrash,
   IconVolume, IconWindow, IconX,
 } from "../../components/icons";
 import {
@@ -27,6 +27,10 @@ import { displayAccel } from "../../components/hotkey";
 import { ContextMenu } from "./menu";
 import type { MenuItem } from "./menu";
 import { askConfirm, showToast } from "../../components/overlay";
+// 页头（批次 013 · 变体 E）：第一行走通用 PageHeader，第二行是运行 + 画布工具条。⋯ 菜单是 PageHeader
+// 自带的 ContextMenu（components/ui 的 MenuAction，没有子菜单），和画布 / 列表行用的 ./menu 不是同一个。
+import { WorkflowHeader } from "./WorkflowHeader";
+import type { MenuAction } from "../../components/ui";
 
 // 对象清单里每一项的图标：统一是 icons.tsx 里那套线性图标组件（只吃 size，颜色跟父级 color 走）。
 type IconComp = ComponentType<{ size?: number }>;
@@ -75,7 +79,7 @@ interface LauncherAPI {
   getPrefabs(): Promise<WFPrefab[]>; setPrefabs(p: WFPrefab[]): Promise<void>;
   pickPath(): Promise<string>; pickApp(): Promise<string>; fileIcon(p: string): Promise<string>;
   getTrace(wfId?: string): Promise<TraceRun[]>; clearTrace(): Promise<void>;
-  // 顶栏「运行」：带参手动跑一条工作流。nodeId 留空 = 自动挑第一个可用触发器。
+  // 页头工具条「运行」：带参手动跑一条工作流。nodeId 留空 = 自动挑第一个可用触发器。
   runWorkflow(wfId: string, nodeId: string, arg: string): Promise<{ ok: boolean; from: string; feedback: string; error: string }>;
   onTrace(cb: (r: TraceRun) => void): () => void;
   // W10：把配置项里的密钥交给密码保险箱，拿回一条 vault://... 引用存进工作流。
@@ -104,9 +108,6 @@ const MOD_LABEL: Record<string, string> = { "": "↵", cmd: "⌘↵", alt: "⌥�
 const WORLD_W = 4000, WORLD_H = 3000;
 // 右侧对象库的开合状态（记在本地，跟着人走而不是跟着工作流走）。
 const LS_LIB = "umbra.wf.lib";
-// 顶栏连体图标条里单个按钮的公共类名。分隔线（border-r）与选中态背景在使用处按需拼，
-// 因为「有右边线 / 没右边线」和「橙底 / 透明底」都属于同类工具类，靠 className 顺序覆盖不了。
-const TB = "w-8 h-[30px] flex-none flex items-center justify-center bg-transparent";
 // 工作流的内置图标。顺序就是弹窗里图标网格的排列顺序。
 // 全是线性描边图标 —— 设计规范禁掉了填充图标、彩色图标、emoji 和用字符代替图标。
 export const WF_ICONS: { key: string; Icon: IconComp }[] = [
@@ -538,7 +539,7 @@ function Palette({ canConnect, onPick, onClose }: { canConnect: boolean; onPick:
 }
 
 // ── 右侧对象库（布局参考 Alfred 的 Objects 面板）──
-// 默认收起（顶栏「对象库」按钮切换），画布因此能占满整个宽度；需要挑对象时再拉出来。
+// 默认收起（页头工具条「对象库」按钮切换），画布因此能占满整个宽度；需要挑对象时再拉出来。
 // 分组可逐个折叠，顶部一个搜索框 + 全部展开/全部折叠两个箭头。
 // 每个分类右侧的数字是这一类有几个对象；悬停某一项能看到它的说明。
 // 对象库。**点击不再加节点** —— 点击是「选中并展开它的说明」，再点一次收起。
@@ -755,8 +756,8 @@ function Field({ label, v, danger }: { label: string; v: string; danger?: boolea
   );
 }
 
-// embedded=true：嵌在主窗口「工具 → 工作流编排」右侧，占满父容器而不是整屏，
-// 右上角按钮从「完成」换成「独立窗口」（onPopout）——内嵌时没有窗口可关。
+// embedded=true：嵌在主窗口「工具 → 工作流编排」右侧，占满父容器而不是整屏；
+// 页头（变体 E）里没有「完成」（内嵌时没有窗口可关），「在独立窗口打开」（onPopout）收在 ⋯ 菜单里。
 export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () => void; embedded?: boolean; onPopout?: () => void }) {
   const [wfs, setWfs] = useState<WF[]>([]);
   const [curId, setCurId] = useState<string>("");
@@ -791,11 +792,11 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   useEffect(() => { localStorage.setItem(LS_LIB, lib ? "1" : "0"); }, [lib]);
   // W8 调试抽屉：runs 只保留当前工作流的记录（主进程侧留最近 N 次全量）。
   const [drawer, setDrawer] = useState(false);
-  // 顶栏「运行」：现填的参数（相当于用户在快捷入口里输入的那段），以及一次运行的进行中标志。
+  // 页头第二行「运行」：现填的参数（相当于用户在快捷入口里输入的那段），以及一次运行的进行中标志。
   const [runArg, setRunArg] = useState("");
   const [running, setRunning] = useState(false);
   const [runs, setRuns] = useState<TraceRun[]>([]);
-  // 顶栏一闪而过的提示（导入导出结果），比 alert 温和。
+  // 页头第二行右端一闪而过的提示（导入导出结果、运行结果），比 alert 温和。
   const [note, setNote] = useState("");
   // 左侧工作流列的搜索词（名称 + 描述里搜）。只影响列表显示，不动选中项。
   const [wfQ, setWfQ] = useState("");
@@ -817,7 +818,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   // 重做栈：撤销时把「撤销前的样子」压进来，任何新改动都把它清空（分叉了就没有重做可言）。
   // 只活在渲染进程内存里 —— 撤销栈本身也不落盘，重开编辑器两者一起归零，语义一致。
   const redoRef = useRef<WF[][]>([]);
-  // 两个栈的深度镜像成 state，只为了让顶栏按钮能真的 disabled（ref 变化不触发重渲染）。
+  // 两个栈的深度镜像成 state，只为了让页头工具条的撤销 / 重做钮能真的 disabled（ref 变化不触发重渲染）。
   const [hist, setHist] = useState({ u: 0, r: 0 });
   const syncHist = useCallback(() => setHist({ u: undoRef.current.length, r: redoRef.current.length }), []);
   const panRef = useRef(pan); panRef.current = pan;
@@ -1453,7 +1454,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
   };
 
   // 打开当前工作流自己的目录：脚本节点默认就在这里跑，随行的 runtime/、index.js 之类放进去即可写相对路径。
-  // 顶栏直接给了按钮（高频），所以「⋯」菜单里不再重复放一份。
+  // 页头第二行的工具条直接给了按钮（高频），所以「⋯」菜单里不再重复放一份。
   const openWfDir = () => {
     if (!curIdRef.current) return;
     void (async () => {
@@ -1462,7 +1463,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     })();
   };
 
-  // 顶栏「运行」：把现填的参数喂给工作流跑一遍。
+  // 页头第二行「运行」：把现填的参数喂给工作流跑一遍。
   // 选中了某个节点就从那个节点跑（方便只调一段链路），没选就让主进程挑第一个可用触发器。
   // 跑完自动把调试抽屉拉出来 —— 手动运行的唯一目的就是看轨迹，还要再点一下才看得到很蠢。
   const runNow = async () => {
@@ -1479,89 +1480,66 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
     }
   };
 
-  // 顶栏「⋯」菜单：低频操作都收在这里（变量表、导入导出、启用停用、复位视图）。
-  // 菜单往按钮左下角贴（按钮本身在最右边，直接按 x=rect.left 会把菜单甩出窗口）。
-  const openMoreMenu = (e: React.MouseEvent<HTMLButtonElement>) => {
-    const r = e.currentTarget.getBoundingClientRect();
-    const items: MenuItem[] = [];
-    if (cur) {
-      items.push({ label: "变量表…", icon: <IconTag size={14} />, onClick: () => setShowVars(true) });
-      items.push({ sep: true });
-    }
+  // 页头「⋯」菜单（PageHeader 自带的 ContextMenu，168 宽，点了项就收）：低频 / 破坏性动作都收在这里。
+  // 分组：变量表 ｜ 导入导出 ｜ 启停 · 复位视图 · 在独立窗口打开（内嵌时）｜ 删除工作流（红字，末尾单独一组）。
+  // 没选中工作流时只剩导入 / 导出全部 / 复位视图 —— 列表空着的时候「导入 JSON」是唯一的进货口，不能跟着藏。
+  const more: MenuAction[] = [
+    ...(cur ? [
+      { label: "变量表…", icon: <IconTag size={13} />, onClick: () => setShowVars(true) },
+      { divider: true },
+    ] : []),
     // 导入导出（W9）：走浏览器的文件选择/下载，不额外开主进程通道。
-    items.push({ label: "导入 JSON…", icon: <IconDownload size={14} />, onClick: () => fileRef.current?.click() });
-    if (cur) items.push({ label: "导出当前工作流", icon: <IconExternal size={14} />, onClick: () => exportWfs([cur], `${cur.name || "workflow"}.json`) });
-    items.push({ label: "导出全部工作流", icon: <IconGrid size={14} />, onClick: () => exportWfs(wfs, "umbra-workflows.json") });
-    items.push({ sep: true });
-    if (cur) items.push({ label: cur.enabled === false ? "启用这条工作流" : "停用这条工作流", icon: cur.enabled === false ? <IconCheck size={14} /> : <IconEyeOff size={14} />, onClick: () => updateCur((w) => ({ ...w, enabled: w.enabled === false })) });
-    items.push({ label: "复位视图", icon: <IconRefresh size={14} />, onClick: () => { setScale(1); setPan({ x: 0, y: 0 }); } });
-    setMenu({ x: Math.max(8, r.right - 200), y: r.bottom + 6, items });
-  };
+    { label: "导入 JSON…", icon: <IconDownload size={13} />, onClick: () => fileRef.current?.click() },
+    ...(cur ? [{ label: "导出当前工作流", icon: <IconExternal size={13} />, onClick: () => exportWfs([cur], `${cur.name || "workflow"}.json`) }] : []),
+    { label: "导出全部工作流", icon: <IconGrid size={13} />, onClick: () => exportWfs(wfs, "umbra-workflows.json") },
+    { divider: true },
+    ...(cur ? [{
+      label: cur.enabled === false ? "启用这条工作流" : "停用这条工作流",
+      icon: cur.enabled === false ? <IconCheck size={13} /> : <IconEyeOff size={13} />,
+      onClick: () => updateCur((w) => ({ ...w, enabled: w.enabled === false })),
+    }] : []),
+    { label: "复位视图", icon: <IconRefresh size={13} />, onClick: () => { setScale(1); setPan({ x: 0, y: 0 }); } },
+    // 内嵌在主窗口里时才有「拉到独立窗口」；独立窗口本身没有再往外拉的去处。
+    ...(embedded ? [{ label: "在独立窗口打开", icon: <IconWindow size={13} />, onClick: () => onPopout?.() }] : []),
+    // 删除走列表行右键同一条路：先弹 WfDelConfirm 二次确认，确认了才 delWf。
+    ...(cur ? [
+      { divider: true },
+      { label: "删除工作流", icon: <IconTrash size={13} />, danger: true, onClick: () => setWfDel(cur.id) },
+    ] : []),
+  ];
 
   return (
     <div className={`flex flex-col ${embedded ? "h-full" : "h-screen"} bg-bg text-text`}>
-      {/* 顶栏 52px（对齐设计稿）：左边一块身份信息 —— 橙底图标方块 + 名称 + 启停徽章 + 描述，
-          右边一组连体图标按钮（撤销/重做 · 调试/对象库/更多），低频操作仍收在「⋯」菜单里。
-          画布缩放在画布自己的右上角浮层，顶栏因此一行放得下，内嵌到主窗口右侧也不挤。 */}
-      <div className="h-[52px] flex-none flex items-center gap-[10px] px-[14px] border-b border-border bg-card">
-        {cur ? (<>
-          {/* 头部这块是**只读**的：名称/描述/图标都在「编辑工作流」弹窗里改。
-              原来这里是三个无边框输入框，改一个字就落一次盘、还各带一条撤销记录，
-              而且和弹窗里同一份字段两套写法，迟早对不上。 */}
-          <span className="w-7 h-7 flex-none rounded-lg overflow-hidden bg-orange-soft text-orange-text flex items-center justify-center">
-            <WfIcon w={cur} size={15} />
-          </span>
-          <span className="flex flex-col gap-px min-w-0 max-w-[300px]">
-            <span className="flex items-center gap-[7px] min-w-0">
-              <span className="min-w-0 truncate text-[14px] font-semibold" title={cur.name}>{cur.name}</span>
-              {cur.enabled === false
-                ? <span className="flex-none whitespace-nowrap px-[7px] py-px rounded-full bg-chip text-muted text-[10.5px] font-semibold">已停用</span>
-                : <span className="flex-none whitespace-nowrap px-[7px] py-px rounded-full bg-success-soft text-success text-[10.5px] font-semibold">已启用</span>}
-              <button className="flex-none whitespace-nowrap text-[11px] text-muted bg-transparent hover:text-orange-text" title="改名称、描述、图标" onClick={() => setWfDlg({ id: cur.id })}>编辑…</button>
-              <button className="flex-none whitespace-nowrap text-[11px] text-muted bg-transparent hover:text-orange-text" title="配置项：给使用者填的表单（密钥进保险箱）" onClick={() => setShowCfg(true)}>配置工作流…</button>
-            </span>
-            <span className="text-[11px] leading-[1.55] text-faint truncate" title={cur.desc || "还没写描述"}>{cur.desc || "还没写描述"}</span>
-          </span>
-        </>) : <span className="text-[12.5px] text-muted whitespace-nowrap">← 左侧新建或选择一个工作流</span>}
-        <span className="flex-1" />
-        {note ? <span className="text-[11.5px] text-orange flex-none whitespace-nowrap">{note}</span> : null}
-        <input ref={fileRef} type="file" accept=".json,application/json" className="hidden"
-          onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void importFile(f); }} />
-        {/* 运行：一个参数输入框 + 一个运行按钮。参数等价于用户在快捷入口里输入的那段，
-            跑的是「回车」分支，走的和真实触发同一条执行路径，所以轨迹可以直接当真。 */}
-        {cur ? (
-          <div className="flex-none flex items-center bg-bg border border-border rounded-lg overflow-hidden">
-            <input value={runArg} onChange={(e) => setRunArg(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") void runNow(); }}
-              placeholder="运行参数（可留空）"
-              title="相当于在快捷入口里输入的那段文字，下游用 {query} 取它"
-              className="w-[150px] h-[30px] flex-none bg-transparent border-none outline-none px-[10px] text-[12px] font-mono" />
-            <button
-              className={`${TB} border-l border-border ${running ? "text-faint" : "text-orange-text hover:bg-orange-soft"}`}
-              disabled={running}
-              title={selNode ? "从选中的节点开始跑（回车分支）" : "从第一个触发器开始跑（回车分支）"}
-              onClick={() => void runNow()}
-            ><IconPlay size={14} /></button>
-          </div>
-        ) : null}
-        {/* 连体图标条：整条一个外框，按钮之间用发丝线分隔，最后一个不带右边线。 */}
-        <div className="flex-none flex items-center bg-bg border border-border rounded-lg overflow-hidden">
-          <button className={`${TB} border-r border-border ${hist.u ? "text-muted hover:bg-hover" : "text-faint"}`} disabled={!hist.u} title="撤销 ⌘Z" onClick={() => { if (hist.u) undo(); }}><IconUndo size={15} /></button>
-          <button className={`${TB} border-r border-border ${hist.r ? "text-muted hover:bg-hover" : "text-faint"}`} disabled={!hist.r} title="重做 ⇧⌘Z" onClick={() => { if (hist.r) redo(); }}><IconRedo size={15} /></button>
-          <button className={`${TB} border-r border-border ${cur ? "text-muted hover:bg-hover" : "text-faint"}`} disabled={!cur} title="打开这条工作流的目录（脚本节点默认就在这里跑）" onClick={openWfDir}><IconFolder size={15} /></button>
-          <button className={`${TB} border-r border-border ${drawer ? "bg-orange-soft text-orange-text" : "text-muted hover:bg-hover"}`} title="调试：最近若干次执行的逐节点轨迹" onClick={() => setDrawer((v) => !v)}><IconBug size={15} /></button>
-          <button className={`${TB} border-r border-border ${lib ? "bg-orange-soft text-orange-text" : "text-muted hover:bg-hover"}`} title="对象库（右侧面板）" onClick={() => setLib((v) => !v)}><IconPanel size={15} /></button>
-          <button className={`${TB} text-muted hover:bg-hover`} title="更多" onClick={openMoreMenu}><IconDots size={15} /></button>
-        </div>
-        {embedded ? (
-          <button className="flex-none w-[30px] h-[30px] flex items-center justify-center bg-card border border-border rounded-lg text-muted hover:bg-hover" title="在独立窗口里打开编辑器（画布更大）" onClick={() => onPopout?.()}><IconExternal size={15} /></button>
-        ) : (
-          <button className="flex-none whitespace-nowrap text-[12.5px] px-[13px] py-[6px] bg-orange hover:bg-orange-deep text-white rounded-lg font-semibold" onClick={() => onClose?.()}>完成</button>
-        )}
-      </div>
+      {/* 页头（批次 013 · 变体 E，见 WorkflowHeader.tsx 文件头）：第一行 = 身份（22 图标块 + 名称 + 启停胶囊 +
+          「N 个节点 · 上次 14:22 成功」）｜ 次级「编辑信息」（独立窗口再加「完成」）｜ 齿轮 = 配置工作流 ｜ ⋯；
+          第二行 = 运行参数 + 「▶ 运行」+ 撤销 / 重做 / 目录 / 调试 / 对象库 + 右端 note。
+          头部这块是**只读**的：名称/描述/图标都在「编辑工作流」弹窗里改（原来是三个无边框输入框，改一个字
+          就落一次盘、还各带一条撤销记录，而且和弹窗里同一份字段两套写法，迟早对不上）。
+          描述不上页头，进左侧列表头部。画布缩放在画布自己的右上角浮层，不占页头。
+          上次运行取 runs[0]（新的在前）；换工作流后到新轨迹拉回来之前 runs 还是上一条的，按 wfId 挡一下。 */}
+      <WorkflowHeader
+        wf={cur || null}
+        icon={cur ? <WfIcon w={cur} size={13} /> : undefined}
+        lastRun={cur && runs[0]?.wfId === cur.id ? { at: runs[0].at, ok: !runs[0].steps.some((s) => s.error || s.stopped) } : null}
+        embedded={embedded}
+        onEditInfo={() => { if (cur) setWfDlg({ id: cur.id }); }}
+        onDone={onClose ? () => onClose() : undefined}
+        onSettings={() => setShowCfg(true)}
+        more={more}
+        runArg={runArg} onRunArg={setRunArg} onRun={() => void runNow()} running={running} runFromNode={!!selNode}
+        canUndo={!!hist.u} onUndo={() => { if (hist.u) undo(); }}
+        canRedo={!!hist.r} onRedo={() => { if (hist.r) redo(); }}
+        onOpenDir={openWfDir}
+        drawer={drawer} onToggleDrawer={() => setDrawer((v) => !v)}
+        lib={lib} onToggleLib={() => setLib((v) => !v)}
+        note={note}
+      />
+      {/* 导入 JSON 的隐藏文件选择框：⋯ 菜单里的「导入 JSON…」点它。 */}
+      <input ref={fileRef} type="file" accept=".json,application/json" className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ""; if (f) void importFile(f); }} />
 
       <div className="flex flex-1 min-h-0">
-        {/* 左：工作流列 200px（对齐设计稿）。头部一行标题 + 新建，下面一个搜索框；
+        {/* 左：工作流列 200px（对齐设计稿）。头部一行标题 + 新建，下面是当前工作流的描述（有才画）和一个搜索框；
             列表每行是「拖拽手柄 + 图标方块 + 名称/说明两行 + 启停圆点」。 */}
         <div className="w-[200px] flex-none border-r border-border bg-card flex flex-col min-h-0">
           <div className="flex-none flex flex-col gap-[9px] px-3 pt-[13px] pb-[10px] border-b border-border-soft">
@@ -1571,6 +1549,13 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
                 <IconPlus size={11} />新建
               </button>
             </div>
+            {/* 当前工作流的描述（变体 E：描述不上页头，进列表头部）。11.5px --faint 两行截断；
+                没写描述就不画 —— 「还没写描述」是新建时填进去的占位值，不算描述（WfDialog 也这么认）。 */}
+            {cur?.desc && cur.desc !== "还没写描述" ? (
+              <div className="text-[11.5px] leading-[1.55] text-faint [display:-webkit-box] [-webkit-line-clamp:2] [-webkit-box-orient:vertical] overflow-hidden [text-wrap:pretty]" title={cur.desc}>
+                {cur.desc}
+              </div>
+            ) : null}
             <div className="flex items-center gap-[7px] bg-bg border border-border rounded-lg px-[9px] py-[5px]">
               <span className="flex-none text-faint"><IconSearch size={12} /></span>
               <input value={wfQ} onChange={(e) => setWfQ(e.target.value)} placeholder="搜索工作流"
@@ -1828,7 +1813,7 @@ export function WorkflowEditor({ onClose, embedded, onPopout }: { onClose?: () =
           ) : null}
         </div>
 
-        {/* 右：对象库（默认收起，顶栏 ▤ 按钮切换） */}
+        {/* 右：对象库（默认收起，页头工具条「对象库」钮切换） */}
         {lib ? (
           <ObjectLibrary prefabs={prefabs} canAdd={!!cur}
             onDragItem={armDrag}

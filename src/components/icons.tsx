@@ -61,15 +61,6 @@ export function IconFlow(p: IconProps) {
   );
 }
 
-// 常用语：对话气泡 + 省略号。
-export function IconPhrase(p: IconProps) {
-  return (
-    <svg {...base(p)}>
-      <path d="M21 11.5a8.4 8.4 0 0 1-11.9 7.6L4 20l1-4.6A8.4 8.4 0 1 1 21 11.5z" />
-      <path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01" />
-    </svg>
-  );
-}
 
 // 密码保险箱：挂锁。
 export function IconLock(p: IconProps) {
@@ -223,10 +214,13 @@ export function IconArrowLeft(p: IconProps) {
 }
 
 // 常用语（一级导航，批次 012 答复定的形：左侧一条竖条 + 右侧三条不等长横线，同 Lucide text-quote）。
-export function IconTextQuote(p: IconProps) {
+/** 常用语 phrase（umbra-icons 1.2.0 正式版，批次 013）：竖条贴左 5、三条横线 9 / 6 / 8 不等长——
+ *  等长会读成「列表」，与 task 撞形。导航渲染 15；也用在「换标签」菜单项与标签管理行的 26 图标块。 */
+export function IconPhrase(p: IconProps) {
   return (
     <svg {...base(p)} strokeWidth={1.9}>
-      <path d="M5 5v14M10 6h10M10 12h7M10 18h9" />
+      <path d="M5 5v14" />
+      <path d="M10 7h9M10 12h6M10 17h8" />
     </svg>
   );
 }

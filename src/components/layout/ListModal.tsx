@@ -8,11 +8,12 @@ import { SectionHeader } from "./ListDetail";
 import { showToast } from "../overlay";
 import { IconCopy } from "../icons";
 
-/** T2 的滚动容器：padding 18/20，内容最宽 920（full 时满铺，给表格类）。 */
+/** T2 的滚动容器：padding 20/24/24 + 组间 18（批次 013《PC 常用语与带图入口》01 / 05 节的实测值，
+ *  与 T3 内容区 20/24 同档；012 骨架小样里的 16/20 是示意），内容最宽 920（full 时满铺，给表格类）。 */
 export function ListModal({ full, children }: { full?: boolean; children: React.ReactNode }) {
   return (
     <div className="flex-1 min-h-0 overflow-y-auto">
-      <div className={`flex flex-col gap-[16px] ${full ? "p-0" : "p-[18px_20px_28px] max-w-[920px]"}`}>{children}</div>
+      <div className={`flex flex-col gap-[18px] ${full ? "p-0" : "p-[20px_24px_24px] max-w-[920px]"}`}>{children}</div>
     </div>
   );
 }

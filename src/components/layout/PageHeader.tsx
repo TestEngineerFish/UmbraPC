@@ -19,10 +19,18 @@ export interface HeaderButton {
   onClick: () => void;
   disabled?: boolean;
   title?: string;
+  /** danger = 红描边（回收站「清空回收站」这类破坏性次级动作）；默认 ghost 描边。 */
+  tone?: "danger";
+  /** 按钮前的 12px 图标（如变体 E 的「▶ 运行」）。 */
+  icon?: React.ReactNode;
 }
 
 export interface PageHeaderProps {
   title: string;
+  /** 标题前的对象身份块（变体 E：22 图标块），--chip 底 / 圆角 6 由调用方画。 */
+  lead?: React.ReactNode;
+  /** 标题后的徽章（变体 E：「已启用」胶囊）。 */
+  badge?: React.ReactNode;
   /** 副标题：渲染成「· xxx」，可传节点（带状态点 / 计数）。 */
   subtitle?: React.ReactNode;
   /** 状态 / 同步戳槽位（12px --faint）；传 SyncStamp 或一段文字。 */
@@ -37,6 +45,10 @@ export interface PageHeaderProps {
   secondRow?: React.ReactNode;
   /** 设置视图变体：左侧返回钮 + 标题；给了它就不画齿轮 / 主按钮。 */
   back?: { label: string; onBack: () => void };
+  /** 变体 E（批次 013 · 画布工作台）：第二行当工具条时传 true —— 第二行不再是搜索 / 筛选那档的
+   *  内边距 16，改成 padding 0 16 + gap 8 且允许调用方放输入框与图标钮。取值其实一样，
+   *  这个开关只用来在代码里标明「这是唯一被允许把主按钮放进第二行的页面」。 */
+  toolbarRow?: boolean;
 }
 
 // 图标钮：28×28 / 圆角 7 / --muted，hover 加 --hover 底 + --text。无描边（和 kit.icon 的 26 档不同，
@@ -54,26 +66,30 @@ export function PageHeader(p: PageHeaderProps) {
     // 菜单贴钮下沿、右对齐（ContextMenu 宽 168，自己夹在视口内）。
     setMenuAt({ x: Math.max(8, r.right - 168), y: r.bottom + 4 });
   };
-  const hasTextBtns = !!p.primary || !!(p.secondary && p.secondary.length);
-  const hasIconBtns = !p.back && (!!p.onSettings || !!(p.more && p.more.length));
+  // 设置视图（back）里不画主按钮 / 齿轮（规范：视图内没有主按钮、改动即时生效）；⋯ 与次级钮允许（回收站的「清空回收站」）。
+  const primary = p.back ? undefined : p.primary;
+  const hasTextBtns = !!primary || !!(p.secondary && p.secondary.length);
+  const hasIconBtns = (!p.back && !!p.onSettings) || !!(p.more && p.more.length);
   return (
     <div className="flex-none">
       <div className={`h-[52px] flex items-center gap-[10px] bg-card border-b border-border ${p.back ? "pl-[10px]" : "pl-[18px]"} pr-[14px]`}>
         {p.back ? (
           <button className={headerIconBtn} title={p.back.label} onClick={p.back.onBack}><IconArrowLeft size={15} /></button>
         ) : null}
+        {p.lead ? <span className="flex-none flex items-center">{p.lead}</span> : null}
         <span className="flex-none max-w-[46%] truncate text-[16px] font-semibold tracking-[-.005em]">{p.title}</span>
+        {p.badge ? <span className="flex-none flex items-center">{p.badge}</span> : null}
         {p.subtitle ? (
           <span className="flex-1 min-w-0 truncate text-[12px] text-faint flex items-center gap-[6px] [font-variant-numeric:tabular-nums]">
             <span className="flex-none">·</span>{p.subtitle}
           </span>
         ) : <span className="flex-1 min-w-[8px]" />}
         {/* 从右往左：⋯ · 齿轮 · 状态 · 次级 · 主按钮 —— DOM 顺序反过来写。 */}
-        {p.primary ? (
-          <button className={btn("primary", "sm")} disabled={p.primary.disabled} title={p.primary.title} onClick={p.primary.onClick}>{p.primary.label}</button>
+        {primary ? (
+          <button className={`${btn("primary", "sm")}${primary.icon ? " gap-[6px]" : ""}`} disabled={primary.disabled} title={primary.title} onClick={primary.onClick}>{primary.icon}{primary.label}</button>
         ) : null}
         {(p.secondary || []).slice(0, 2).map((b, i) => (
-          <button key={i} className={btn("ghost", "sm")} disabled={b.disabled} title={b.title} onClick={b.onClick}>{b.label}</button>
+          <button key={i} className={`${btn(b.tone === "danger" ? "danger" : "ghost", "sm")}${b.icon ? " gap-[6px]" : ""}`} disabled={b.disabled} title={b.title} onClick={b.onClick}>{b.icon}{b.label}</button>
         ))}
         {p.status ? <span className="flex-none flex items-center text-[12px] text-faint whitespace-nowrap">{p.status}</span> : null}
         {hasTextBtns && hasIconBtns ? <span className="flex-none w-px h-[18px] bg-border mx-[2px]" /> : null}

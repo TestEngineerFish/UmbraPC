@@ -499,11 +499,13 @@ app.whenReady().then(async () => {
   // 快捷入口：复用剪贴板的存储实例（避免两份读写同一文件）。
   launcher = new LauncherManager(store, app.getPath("userData"), winOpts, reregisterShortcuts);
   // 快捷入口「发给秘书」：跳出主窗口聊天页并发送这条消息。
-  launcher.setChatSender((text: string) => {
+  // 批次 013 起消息是 { text, atts? }（atts = 面板已传好的图片 file_id），整个对象原样发给主窗口，
+  // 主窗口 shell.ts 按有没有 atts 分流到 sendTextWithAtts / sendText。
+  launcher.setChatSender((msg: { text: string; atts?: string[] }) => {
     showMainWindow();
     const w = mainWindow;
     if (w && !w.isDestroyed()) {
-      const post = () => w.webContents.send("umbra:launcher-send-chat", text);
+      const post = () => w.webContents.send("umbra:launcher-send-chat", msg);
       if (w.webContents.isLoading()) w.webContents.once("did-finish-load", post); else post();
     }
   });

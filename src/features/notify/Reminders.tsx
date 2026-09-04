@@ -170,6 +170,12 @@ export function Reminders() {
     setEditing({ ...r, atts: r.atts || [] });
   };
 
+  // 裁定 8（tokens.pageTemplate.shared.emptyHeaderPrimary）：真空态时页头不渲染「新建提醒」，橙留给空态里那颗。
+  // 本页没有搜索 / 筛选，也没有加载态与离线态（数据在主进程，list() 是一次 IPC，同步戳才管服务端连没连上），
+  // 「真空」就是 groups 为空（= items 一条都没有），和下面画空态的判定用同一个值。
+  // （叫 isBlank 不叫 blank：blank() 是上面那个新建提醒的默认值工厂。）
+  const isBlank = groups.length === 0;
+
   return (
     <PageShell header={{
       title: t("notify.title"),
@@ -183,10 +189,10 @@ export function Reminders() {
           onSync={doSync}
         />
       ),
-      primary: { label: t("notify.newReminder"), onClick: () => openEditor(blank(), true) },
+      primary: isBlank ? undefined : { label: t("notify.newReminder"), onClick: () => openEditor(blank(), true) },
     }}>
       {/* 列表：T2 分组卡。分组头 = 分组名 + 条数，卡内逐行。 */}
-      {groups.length === 0 ? (
+      {isBlank ? (
         <EmptyState
           title={t("notify.empty")}
           body={t("notify.emptyBody")}

@@ -22,9 +22,13 @@ import {
   setAutoApproveOperate,
   createInspiration,
   uploadFileProgress,
+  uploadFile,
+  fetchMoneyCats,
   type KnownDevice,
+  type MoneyCat,
   type MsgMeta,
   type MsgQuote,
+  type VisionFields,
 } from "../../services/server";
 // 常用语存在快捷入口的主进程侧（云端同步走它的通道）——「存为常用语」直接进同一份列表。
 import { hasLauncher, launcherApi } from "../tools/bridges";
@@ -33,6 +37,18 @@ import { openInViewerWindow } from "../../components/ImageViewer";
 import { getDesktopConfig } from "../../services/desktop";
 import { hasNotify, notifyApi } from "../notify/bridge";
 import { mdToHtml } from "./markdown";
+// 识图三态（批次 013 稿 04 ③④⑤）的纯 HTML 拼接与块形状在 vision.ts；状态与事件在本文件。
+import {
+  ICON_IMAGE, readingHtml, vcardHtml, vcardSummary, vfailHtml, fromDateTimeLocal,
+  type VCardBlock, type VFailBlock,
+} from "./vision";
+import { amountToCents } from "../money/moneyKit";
+// 识图确认卡的「改成手动填」/ 识不出的「手动填一笔」→ 带草稿开记账页的「记一笔」；
+// ⋯ 菜单的「回收站」→ 总设置的回收站子页并预选「聊天消息」芯片。
+// 这两处是直接 import（批次 013 要求）而不是 shell 回填：Money / Settings 都只在点击时才碰
+// shell 的导出，模块求值阶段没人用到对方，ESM 的循环引用在这里是安全的。
+import { gotoMoneyAdd } from "../money/Money";
+import { gotoSettings } from "../settings/Settings";
 import { t } from "../../i18n";
 import { askConfirm, showToast } from "../../components/overlay";
 // 这一层是 vanilla，用不了 React 组件，但**用得了样式工厂** —— kit 返回的是 Tailwind
@@ -43,8 +59,16 @@ import { btn, btnWide } from "../../components/kit";
 type Block =
   // id：服务端消息表里的行号 —— 删除 / 引用都指着它。刚发出还没拿到回执时是 undefined
   //（reply 回执带 user_message_id 补上）；failed = 没送出去（右键给「重新发送」）。
-  | { kind: "user"; text: string; ts?: string | number; id?: number; failed?: boolean; quote?: MsgQuote }
-  | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number; id?: number; meta?: MsgMeta }
+  // atts（批次 013）：带附件的文字消息（kind=text + atts，快捷入口带图发出来的）——文字在上、
+  // 底部一条 78 缩略条；删除 / 引用的对象是整条。file_id 列表，渲染地址现拼（fileSrc）。
+  // 在途时靠 atts 认领 message_saved（file_id 一次上传一个，天然唯一，不用另起匹配号）。
+  | { kind: "user"; text: string; ts?: string | number; id?: number; failed?: boolean; quote?: MsgQuote; atts?: string[] }
+  // reading（批次 013 ③）：占位阶段收到 vision_reading → 三点换成「正在看图…」+ 旋转弧；
+  // 只在 thinking 时有意义，第一个 delta 到了自然退场。
+  | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number; id?: number; meta?: MsgMeta; reading?: boolean }
+  // 识图确认卡 / 识不出卡（批次 013 ④⑤），形状在 vision.ts。
+  | VCardBlock
+  | VFailBlock
   // 图片消息（批次 011 ③）：多张图合成**一条**。srcs 是渲染地址（上传中=本地 ObjectURL，
   // 落库后=服务端 /files/ 地址）；state 走 上传中→已发 / 失败三态；files 留着供「重新发送」
   //（图片还在本地，重发不用重新选）。localKey 是本端在途消息的匹配号（message_saved 认领用）。
@@ -243,7 +267,11 @@ function rowToBlock(m: { role: string; content: string; created_at?: string; id?
   if (m.kind === "system" || m.role === "system") {
     return { kind: "system", id: m.id, text: m.content, ts: m.created_at, meta };
   }
-  if (m.role === "user") return { kind: "user", id: m.id, text: m.content, ts: m.created_at, quote: meta.quote };
+  if (m.role === "user") {
+    // kind=text 也可能带 atts（批次 013：快捷入口带图发出的文字消息）—— 非空才挂到块上。
+    const atts = (m.atts || []).filter(Boolean);
+    return { kind: "user", id: m.id, text: m.content, ts: m.created_at, quote: meta.quote, ...(atts.length ? { atts } : {}) };
+  }
   if (m.role === "device") return { kind: "device", text: m.content, ts: m.created_at };
   return { kind: "assistant", id: m.id, thinking: false, streaming: false, text: m.content, trace: [], traceOpen: false, ts: m.created_at, meta };
 }
@@ -434,6 +462,8 @@ function onMessage(msg: any): void {
     case "tool_call": {
       const a = assistantOf(target);
       if (a) {
+        // 到了跑工具这一步，读图早结束了 —— 占位不该还写着「正在看图…」（批次 013 ③）。
+        a.reading = false;
         if (a.text.trim()) { a.trace.push("💭 " + a.text.trim()); a.text = ""; }
         let args = "";
         try { args = JSON.stringify(msg.args || {}); } catch { args = String(msg.args); }
@@ -460,10 +490,14 @@ function onMessage(msg: any): void {
         if (msg.message_id) a.id = Number(msg.message_id);
       }
       if (msg.user_message_id) {
-        // 从占位往前找最近一条还没有 id 的用户消息（正常就是紧挨着的上一条）。
-        for (let i = s.blocks.length - 1; i >= 0; i--) {
-          const b = s.blocks[i];
-          if (b.kind === "user" && b.id === undefined && !b.failed) { b.id = Number(msg.user_message_id); break; }
+        const uid = Number(msg.user_message_id);
+        // 带附件的那条已经由 message_saved 先认领过（批次 013）→ 别再往前找，不然会把 id 错发给
+        // 更早一条还没回执的消息。没认领过才从占位往前找最近一条还没有 id 的用户消息（正常就是紧挨着的上一条）。
+        if (!s.blocks.some((b) => b.kind === "user" && b.id === uid)) {
+          for (let i = s.blocks.length - 1; i >= 0; i--) {
+            const b = s.blocks[i];
+            if (b.kind === "user" && b.id === undefined && !b.failed) { b.id = uid; break; }
+          }
         }
       }
       s.assistantIdx = null;
@@ -496,6 +530,7 @@ function onMessage(msg: any): void {
       // 图片消息落库回执：把在途气泡认领成正式消息（id 到手，删除 / 引用有对象了）。
       const s = cs(target);
       const sig = ((msg.atts || []) as string[]).join(",");
+      let claimed = false;
       for (const b of s.blocks) {
         if (b.kind === "image" && b.state === "uploading" && b.sentSig === sig) {
           b.id = Number(msg.id) || undefined;
@@ -505,9 +540,112 @@ function onMessage(msg: any): void {
           b.state = "sent";
           b.files = undefined; b.sentSig = undefined;
           if (b.localKey) delete upAborts[b.localKey];
+          claimed = true;
           break;
         }
       }
+      // 带附件的文字消息（批次 013，kind=text + atts）：同一事件，靠 kind 区分。从后往前找
+      // 还没拿到 id、附件一致的那条用户消息 —— file_id 一次上传一个，天然唯一，不会认错。
+      // 图片那条循环没认领到才走这里（两种消息的 atts 不可能相同，顺序只是保险）。
+      if (!claimed && sig && (msg.kind || "text") !== "image") {
+        for (let i = s.blocks.length - 1; i >= 0; i--) {
+          const b = s.blocks[i];
+          if (b.kind === "user" && b.id === undefined && !b.failed && b.atts && b.atts.join(",") === sig) {
+            b.id = Number(msg.id) || undefined;
+            break;
+          }
+        }
+      }
+      break;
+    }
+    // ── 批次 013：识图三态 ────────────────────────────────────────────────
+    case "vision_reading": {
+      // 只发给发起端：占位气泡从三点换成「正在看图…」+ 旋转弧（稿 ③）。没有占位（比如
+      // 图是别的端发的）就什么也不做 —— 这条事件不该凭空长出气泡。
+      const a = assistantOf(target);
+      if (!a || !a.thinking) return;
+      a.reading = true;
+      break;
+    }
+    case "vision_confirm": {
+      // 识图结果确认卡（只有记账出，稿 ④）。广播给所有端；离线补发同 confirm_request，
+      // 所以按 confirm_id 去重 —— 重复收到的卡什么都不动（占位也不动）。
+      // 这一轮不会再有 reply —— 占位气泡在这里撤掉（只撤自己的那个，见 dropPlaceholder）。
+      if (!msg.confirm_id) return;
+      const s = cs(target);
+      if (s.blocks.some((b) => b.kind === "vcard" && b.confirmId === msg.confirm_id)) return;
+      dropPlaceholder(target);
+      const f = (msg.fields || {}) as Partial<VisionFields> & { cat_name?: unknown };
+      const fields: VisionFields = {
+        yuan: String(f.yuan ?? ""),
+        direction: f.direction === "income" ? "income" : "expense",
+        cat: String(f.cat || "other"),
+        sub: String(f.sub || ""),
+        merchant: String(f.merchant || ""),
+        at_ms: Number(f.at_ms) || Date.now(),
+      };
+      s.blocks.push({
+        kind: "vcard", confirmId: String(msg.confirm_id), att: String(msg.att || ""), fields,
+        // 服务端随卡给的分类显示名：分类清单没拉回来之前的兜底（不显示 slug 裸串）。
+        catName: f.cat_name ? String(f.cat_name) : undefined,
+        unsure: Array.isArray(msg.unsure) ? (msg.unsure as unknown[]).map(String) : [],
+        userMsgId: msg.user_message_id ? Number(msg.user_message_id) : undefined,
+        state: "open", ts: Date.now(),
+      });
+      ensureMoneyCats();  // 分类下拉 / 色块要分类清单，拉一次缓存
+      s.lastText = t(fields.direction === "income" ? "chat.vcardTitleIncome" : "chat.vcardTitleExpense");
+      s.lastAt = Date.now();
+      break;
+    }
+    case "vision_confirm_resolved": {
+      // 卡已处理（本端或别的端点的）：approved → 「已记入」+ 追加那条秘书消息（服务端已落库，
+      // message_id 是它的 id）；否则 → 「已改成手动填」。跨会话找卡（和 confirm_resolved 同款）。
+      // stale:true = 服务端已经不认这张卡（重启 / 已被别的端处理 / 超时后再点）：**不是**「改成手动填」——
+      // 已记入 / 已手动填的卡不动，其余置成「已失效」只读态，并吐司同一句。
+      const cid = String(msg.confirm_id || "");
+      const approved = Boolean(msg.approved);
+      const stale = Boolean(msg.stale);
+      let staled = false;
+      for (const id of Object.keys(convs)) {
+        for (const b of convs[id].blocks) {
+          if (b.kind !== "vcard" || b.confirmId !== cid) continue;
+          if (stale) {
+            if (b.state !== "approved" && b.state !== "manual") { b.state = "stale"; staled = true; }
+          } else {
+            b.state = approved ? "approved" : "manual";
+          }
+        }
+      }
+      clearVcardTimer(cid);  // 等回音的 20 秒定时器：回音来了（不管哪种）就不用再等
+      if (stale) {
+        if (staled) showToast(t("chat.vcardStale"), { tone: "warn" });
+        break;
+      }
+      const s = cs(target);
+      if (approved && msg.text) {
+        const mid = msg.message_id ? Number(msg.message_id) : undefined;
+        // 同一事件广播给所有端，本端也可能因为重连收到两次 —— 按 message_id 去重。
+        if (!(mid && s.blocks.some((b) => "id" in b && b.id === mid))) {
+          s.blocks.push({ kind: "assistant", id: mid, thinking: false, streaming: false, text: String(msg.text), trace: [], traceOpen: false, ts: Date.now() });
+        }
+        s.lastText = String(msg.text);
+        s.lastAt = Date.now();
+      }
+      break;
+    }
+    case "vision_failed": {
+      // 识不出（稿 ⑤）：三段式错误卡。发起端 + 广播都收，按 confirm_id 去重（重复的什么都不动）；
+      // 然后撤掉自己的占位气泡。
+      const s = cs(target);
+      const cid = String(msg.confirm_id || "");
+      if (cid && s.blocks.some((b) => b.kind === "vfail" && b.confirmId === cid)) return;
+      dropPlaceholder(target);
+      s.blocks.push({
+        kind: "vfail", confirmId: cid, att: String(msg.att || ""), reason: String(msg.reason || ""),
+        userMsgId: msg.user_message_id ? Number(msg.user_message_id) : undefined, ts: Date.now(),
+      });
+      s.lastText = t("chat.visionFailTitle");
+      s.lastAt = Date.now();
       break;
     }
     case "message_deleted": {
@@ -632,8 +770,13 @@ function onMessage(msg: any): void {
         s.blocks.push({ kind: "system", id: msg.id ? Number(msg.id) : undefined, text: msg.text || "", ts, meta });
         s.lastText = msg.text || "";
       } else if (msg.role === "user") {
-        s.blocks.push({ kind: "user", text: msg.text || "", ts, quote: meta.quote });
-        s.lastText = msg.text || "";
+        // 批次 013：kind=text 也可能带 atts（别的端从快捷入口带图发的）；id 一并收下，
+        // 删除 / 引用才有对象。同 id 已经在了（重连补发）就不重复画。
+        const mid = msg.id ? Number(msg.id) : undefined;
+        if (mid && s.blocks.some((b) => b.kind === "user" && b.id === mid)) return;
+        const atts = ((msg.atts || []) as string[]).filter(Boolean);
+        s.blocks.push({ kind: "user", id: mid, text: msg.text || "", ts, quote: meta.quote, ...(atts.length ? { atts } : {}) });
+        s.lastText = msg.text || (atts.length ? t("chat.imageMsgPreview") : "");
       } else {
         s.blocks.push({ kind: "assistant", id: msg.id ? Number(msg.id) : undefined, thinking: false, streaming: false, text: msg.text || "", trace: [], traceOpen: false, ts, meta });
         s.lastText = msg.text || "";
@@ -644,6 +787,9 @@ function onMessage(msg: any): void {
     case "error": {
       const s = cs(target);
       if (s.assistantIdx !== null) { const a = assistantOf(target); if (a) { a.thinking = false; a.streaming = false; } s.assistantIdx = null; }
+      // 带 confirm_id 的错误（批次 013）：识图确认卡的「记入」被服务端拒了 → 卡放回可点态、
+      // 清掉等回音的定时器；错误块照画，原因写在那里。
+      if (msg.confirm_id) reopenVcard(String(msg.confirm_id));
       s.blocks.push({ kind: "error", text: msg.message || t("chat.error") });
       break;
     }
@@ -661,6 +807,54 @@ function assistantOf(conv: string): Extract<Block, { kind: "assistant" }> | null
   if (s.assistantIdx === null) return null;
   const b = s.blocks[s.assistantIdx];
   return b && b.kind === "assistant" ? b : null;
+}
+
+// 撤掉**自己的**占位气泡（批次 013：识图确认卡 / 识不出卡到了，这一轮不会再有 reply）。
+// 只认「thinking 且 reading」的占位：vision_reading 只发给发起端，所以 reading 就是「这个占位
+// 是那条带图消息压出来的」的记号 —— 别的占位（比如卡是别的端发的图触发的、本端正好在等另一条
+// 回复）一律不碰。removeBlockAt 顺带把各处下标对齐。
+function dropPlaceholder(conv: string): void {
+  const s = cs(conv);
+  const idx = s.assistantIdx;
+  if (idx === null) return;
+  const b = s.blocks[idx];
+  if (b && b.kind === "assistant" && b.thinking && b.reading === true) removeBlockAt(conv, idx);
+}
+
+// 识图确认卡「记入」后等回音的定时器（confirm_id → 句柄）。回音来了（resolved / error）就清掉；
+// 20 秒没等到 → 卡置「已失效」+ 吐司「稍后看记账页」—— 不放回可点态，再点必然 stale。
+const vcardTimers: Record<string, number> = {};
+function clearVcardTimer(cid: string): void {
+  const h = vcardTimers[cid];
+  if (h === undefined) return;
+  window.clearTimeout(h);
+  delete vcardTimers[cid];
+}
+// 服务端拒了「记入」（error 带 confirm_id）：waiting 的卡放回 open，可以改了再点。
+function reopenVcard(cid: string): void {
+  clearVcardTimer(cid);
+  for (const id of Object.keys(convs)) {
+    for (const b of convs[id].blocks) {
+      if (b.kind === "vcard" && b.confirmId === cid && b.state === "waiting") b.state = "open";
+    }
+  }
+}
+
+// 记账分类清单（识图确认卡的分类下拉 / 色块用）：拉一次缓存，拉到后重绘一遍把 slug 换成名字。
+// 拉失败不报错 —— 卡照样能用（名字按内置表兜底，下拉里至少有当前那一项）；30 秒内不重试，
+// 免得服务端没起来时每次重绘都去敲一下。
+let moneyCats: MoneyCat[] | null = null;
+let moneyCatsLoading = false;
+let moneyCatsFailedAt = 0;
+function ensureMoneyCats(): void {
+  if (moneyCats || moneyCatsLoading || Date.now() - moneyCatsFailedAt < 30000) return;
+  moneyCatsLoading = true;
+  void fetchMoneyCats().then((cats) => {
+    moneyCatsLoading = false;
+    if (!cats) { moneyCatsFailedAt = Date.now(); return; }
+    moneyCats = cats;
+    if (cs(activeConv).blocks.some((b) => b.kind === "vcard")) renderMessages();
+  });
 }
 
 // 按消息 id 移除一个块（本地删除 / message_deleted 广播共用）。
@@ -913,13 +1107,29 @@ function toolsKeptHtml(meta: MsgMeta | undefined, center: boolean): string {
 // 字节 → 「1.8 MB」（上传进度行用；<0.1MB 的图也照 MB 说，单位一致才好比大小）。
 const fmtMB = (n: number) => `${(Math.max(0, n) / 1048576).toFixed(1)} MB`;
 
+// 被引消息带附件时（批次 013 ②），引用文字尾部跟一枚 14px 图片图标 +「N」（N = 张数）。
+// 内联在那段可截断的文字里，跟着文字一起被 2 行截断，不另占一行。
+function quoteAttsTag(n: number | undefined): string {
+  if (!n || n <= 0) return "";
+  return `<span title="${esc(t("chat.quoteImgCount", { n }))}" style="display:inline-flex;align-items:center;gap:3px;margin-left:5px;vertical-align:-3px;color:var(--muted);white-space:nowrap;">${svgIcon(ICON_IMAGE, 14, 1.7)}<span style="font-size:11px;font-weight:600;">${n}</span></span>`;
+}
+
 // 气泡顶部的被引用块（批次 011 ②）：--chip 底 + 左 2px 橙条，2 行截断，点它回到原消息。
 function quoteChipHtml(q: MsgQuote): string {
   const who = q.role === "user" ? t("chat.quoteMe") : t("chat.secretary");
   return `<div data-qjump="${q.id || ""}" style="display:flex;align-items:stretch;gap:7px;margin-bottom:7px;padding:6px 9px;background:var(--chip);border-radius:7px;${q.id ? "cursor:pointer;" : ""}">
       <span style="flex:none;width:2px;border-radius:999px;background:var(--orange);"></span>
-      <span style="flex:1;min-width:0;font-size:11.5px;color:var(--muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;">${esc(t("chat.quoteWho", { who }))}：${esc(q.text)}</span>
+      <span style="flex:1;min-width:0;font-size:11.5px;color:var(--muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;white-space:normal;">${esc(t("chat.quoteWho", { who }))}：${esc(q.text)}${quoteAttsTag(q.atts)}</span>
     </div>`;
+}
+
+// 带附件的文字气泡里的缩略条（批次 013 ②）：文字下 8px，缩略 78 / 圆角 8 / 1px --border /
+// --chip 底 / cover。点开走现有看图（data-imgat，容器 data-attmsg 认块）。
+// 没有文字（纯图交给秘书）时缩略条就是正文，不留那 8px。
+function userAttsHtml(atts: string[], i: number, hasText: boolean): string {
+  const imgs = atts.map((id, j) =>
+    `<img data-imgat="${j}" src="${esc(fileSrc(id))}" alt="${esc(t("chat.imageAlt"))}" draggable="false" style="flex:none;width:78px;height:78px;border-radius:8px;border:1px solid var(--border);background:var(--chip);object-fit:cover;display:block;cursor:zoom-in;">`).join("");
+  return `<div data-attmsg="${i}" style="display:flex;gap:6px;flex-wrap:wrap;${hasText ? "margin-top:8px;" : ""}">${imgs}</div>`;
 }
 
 function blockHtml(b: Block, i: number, sel = false): string {
@@ -928,7 +1138,9 @@ function blockHtml(b: Block, i: number, sel = false): string {
   const haloAttr = sel ? ` data-halo="1"` : "";
 
   if (b.kind === "user") {
-    const bubble = `<div${haloAttr} style="max-width:100%;background:var(--user-bubble);padding:10px 13px;border-radius:12px 12px 4px 12px;line-height:1.65;white-space:pre-wrap;${halo}">${b.quote ? quoteChipHtml(b.quote) : ""}${esc(b.text)}</div>`;
+    // 带附件（批次 013 ②）：文字在上、缩略条在下。壳仍是 pre-wrap，所以几段之间**不能有换行空白**。
+    const atts = b.atts && b.atts.length ? userAttsHtml(b.atts, i, !!b.text) : "";
+    const bubble = `<div${haloAttr} style="max-width:100%;background:var(--user-bubble);padding:10px 13px;border-radius:12px 12px 4px 12px;line-height:1.65;white-space:pre-wrap;${halo}">${b.quote ? quoteChipHtml(b.quote) : ""}${esc(b.text)}${atts}</div>`;
     // 发送失败：气泡左侧一颗实心红「!」圆钮（右键菜单给「重新发送」）。
     const failMark = b.failed
       ? `<span title="${esc(t("chat.sendFailed"))}" style="flex:none;width:17px;height:17px;border-radius:999px;background:var(--danger);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">!</span>`
@@ -958,7 +1170,10 @@ function blockHtml(b: Block, i: number, sel = false): string {
       : "";
     // 注意：这里不能用 white-space:pre-wrap —— Markdown 渲染已把换行转成块/段落/<br>，
     // 再 pre-wrap 会把 md 源码里的换行重复显示成大片空白。
-    const bubbleCore = `<div${haloAttr} style="min-width:0;background:var(--card);border:1px solid var(--border);padding:11px 13px;border-radius:12px 12px 12px 4px;line-height:1.65;min-height:20px;overflow-wrap:break-word;${halo}">${b.thinking ? dots : ""}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
+    // 占位：三点；识图中（批次 013 ③）换成「正在看图…」+ 旋转弧 —— 这时候它在看的是图，
+    // 还写「思考中」用户会以为卡住了。
+    const placeholder = b.thinking ? (b.reading ? readingHtml() : dots) : "";
+    const bubbleCore = `<div${haloAttr} style="min-width:0;background:var(--card);border:1px solid var(--border);padding:11px 13px;border-radius:12px 12px 12px 4px;line-height:1.65;min-height:20px;overflow-wrap:break-word;${halo}">${placeholder}${assistantBody(b.text)}${b.streaming && b.text ? `<span style="display:inline-block;width:2px;height:15px;background:var(--orange);vertical-align:-2px;margin-left:1px;animation:umblink 1s steps(1) infinite;"></span>` : ""}</div>`;
     // 停止钮（批次 011 ①）：**常显**在占位/流式气泡尾部，25px 描边小钮，hover 转红。
     // 等回复的那几秒正是最需要看见它的时候，不藏进 hover。
     const bubble = b.streaming
@@ -970,6 +1185,9 @@ function blockHtml(b: Block, i: number, sel = false): string {
   }
 
   if (b.kind === "image") return imageBlockHtml(b, i, sel);
+  // 识图确认卡 / 识不出卡（批次 013 ④⑤）。分类清单没拉到时先按内置表显示，拉到会重绘。
+  if (b.kind === "vcard") { ensureMoneyCats(); return vcardHtml(b, i, moneyCats, sel); }
+  if (b.kind === "vfail") return vfailHtml(b, i);
 
   if (b.kind === "job") {
     // 卡里嵌着待处理的授权 —— 那不是「90%」，那是**待确认**（停下来等你点头）。
@@ -1356,6 +1574,8 @@ function renderHeader(): void {
   el.querySelector("#uheadmenu")?.addEventListener("click", (e) => e.stopPropagation());
   el.querySelector("#uhm-settings")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); openSettingsCb?.(); });
   el.querySelector("#uhm-copy")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); void copyActiveHistory(); });
+  // 「回收站」（批次 013）：跳总设置的回收站子页并预选「聊天消息」芯片 —— 快捷方式，不是第二份界面。
+  el.querySelector("#uhm-trash")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); gotoSettings("trash", { trashChip: "chat" }); });
   el.querySelector("#uhm-clear")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); void clearActiveHistory(); });
   el.querySelector("#udetailbtn")?.addEventListener("click", () => {
     detailOpen = !detailOpen;
@@ -1372,6 +1592,7 @@ function renderHeader(): void {
 // /conversations 只能列举、不能新建，也没有「一个设备下多条会话」的数据结构。
 // 加个按钮点了只能弹个假吐司，或者退化成「清空聊天」的同义词，两种都更糟。
 // 等服务端真支持多会话了再补，那时它还要连带影响左侧联系人列表的结构。
+// 批次 013 加「回收站」：放在「复制聊天」之后、分隔线之前（垃圾桶图标 umbra-icons `trash`）。
 function headMenuHtml(): string {
   const row = (id: string, label: string, path: string, danger = false) =>
     `<div id="${id}" style="display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:6px;font-size:12.5px;color:${danger ? "var(--danger)" : "var(--text)"};white-space:nowrap;cursor:pointer;">`
@@ -1381,6 +1602,7 @@ function headMenuHtml(): string {
   return `<div id="uheadmenu" style="position:absolute;right:14px;top:44px;z-index:40;width:168px;background:var(--card);border:1px solid var(--border);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.13);padding:4px;">`
     + row("uhm-settings", t("chat.settingsTitle"), `<circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M4.9 19.1l2.2-2.2M16.9 7.1l2.2-2.2"></path>`)
     + row("uhm-copy", t("chat.copyHistory"), `<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>`)
+    + row("uhm-trash", t("settings.secTrash"), `<path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"></path>`)
     + `<div style="height:1px;background:var(--border-soft);margin:4px 6px;"></div>`
     + row("uhm-clear", t("chat.clearHistory"), `<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path>`, true)
     + `</div>`;
@@ -1505,6 +1727,8 @@ function refreshComposer(): void {
     wrap.style.position = "relative";
     // 「+」在输入框左侧、发送在右侧（分居两端，底部对齐，批次 011 ③）；
     // 引用条 / 待发图片条叠在输入行上方同一区。
+    // 发送钮**贴底**（批次 013）：和「+」同高 38、圆角 9、13px，两颗都吃这一行的 align-items:flex-end；
+    // 尺寸走内联 style 盖过工厂的 32 档 —— Tailwind 同属性类的先后由生成顺序决定，靠类名覆盖不可靠。
     wrap.innerHTML = `
       <div id="uslash"></div>
       <div id="uideabanner"></div>
@@ -1516,7 +1740,7 @@ function refreshComposer(): void {
           <span id="uchip"></span>
           <textarea id="draft" rows="2" class="flex-1 min-w-[120px] resize-none border-none bg-transparent text-text px-[4px] py-[3px] text-[13.5px] leading-[1.5] font-[inherit] max-h-[120px] outline-none"></textarea>
         </div>
-        <button id="sendbtn" class="${btn("primary")} gap-[6px] self-center" ${clearing ? "disabled" : ""}>${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
+        <button id="sendbtn" class="${btn("primary")} gap-[6px]" style="height:38px;padding:0 15px;border-radius:9px;font-size:13px;" ${clearing ? "disabled" : ""}>${esc(t("chat.send"))}<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg></button>
       </div>
       <div id="uchiphint" style="padding:0 16px 10px;"></div>
       <input id="uimgfile" type="file" accept="image/*" multiple style="display:none;">`;
@@ -1627,7 +1851,7 @@ function renderQuoteBar(): void {
   const who = quoteRef.role === "user" ? t("chat.quoteMe") : t("chat.secretary");
   el.innerHTML = `<div style="display:flex;align-items:stretch;gap:9px;margin:8px 16px 0;padding:7px 10px;background:var(--chip);border-radius:9px;">
       <span style="flex:none;width:2px;border-radius:999px;background:var(--orange);"></span>
-      <span style="flex:1;min-width:0;font-size:11.5px;color:var(--muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;align-self:center;"><span style="font-weight:600;color:var(--text);">${esc(t("chat.quoteWho", { who }))}</span>：${esc(quoteRef.text)}</span>
+      <span style="flex:1;min-width:0;font-size:11.5px;color:var(--muted);line-height:1.55;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;align-self:center;"><span style="font-weight:600;color:var(--text);">${esc(t("chat.quoteWho", { who }))}</span>：${esc(quoteRef.text)}${quoteAttsTag(quoteRef.atts)}</span>
       <button data-quoteoff="1" title="${esc(t("chat.quoteOff"))}" style="flex:none;align-self:center;width:18px;height:18px;border:none;background:transparent;color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
     </div>`;
 }
@@ -1827,8 +2051,9 @@ function msgMenuItemsFor(b: Block): MsgMenuItem[] {
     return items;
   }
   if (b.kind === "job") return [MI.copySum(), MI.openTask()];
-  if (b.kind === "confirm" || b.kind === "done") return [MI.copySum()];
-  return [];  // system / error / locate / question / device：不接右键
+  // 识图确认卡只给「复制摘要」（批次 013 稿定，和确认卡同规则）；识不出卡是错误卡，不接右键。
+  if (b.kind === "confirm" || b.kind === "done" || b.kind === "vcard") return [MI.copySum()];
+  return [];  // system / error / locate / question / device / vfail：不接右键
 }
 
 function closeMsgMenu(): void {
@@ -1905,7 +2130,8 @@ async function saveImageToDisk(src: string, name: string): Promise<void> {
 
 // 引用一条消息：装进输入框上方的引用条，发送时随消息带走（meta.quote）。
 function quoteBlock(b: Block): void {
-  if (b.kind === "user") quoteRef = { id: b.id, role: "user", text: b.text.slice(0, 200) };
+  // 带附件的文字消息（批次 013）：quote 多带一个 atts = 张数，引用条 / 气泡内引用块靠它画图片图标 +「N」。
+  if (b.kind === "user") quoteRef = { id: b.id, role: "user", text: b.text.slice(0, 200), ...(b.atts && b.atts.length ? { atts: b.atts.length } : {}) };
   else if (b.kind === "assistant") quoteRef = { id: b.id, role: "assistant", text: b.text.slice(0, 200) };
   else if (b.kind === "image") quoteRef = { id: b.id, role: "user", text: t("chat.quoteImage", { n: b.srcs.length }) };
   else return;
@@ -1965,11 +2191,13 @@ function doMsgAction(act: string, idx: number): void {
     refreshComposer();
     (container?.querySelector("#draft") as HTMLTextAreaElement | null)?.focus();
   } else if (act === "resend" && b.kind === "user") {
-    const text = b.text, q = b.quote;
+    const text = b.text, q = b.quote, atts = b.atts;
     removeBlockAt(activeConv, idx);
     renderMessages();
     quoteRef = q || null;
-    sendTo(activeConv, text);
+    // 带附件的（批次 013）：file_id 早就传上去了，重发只是再送一遍 WS 消息，附件跟着走。
+    if (atts && atts.length) sendTextWithAtts(text, atts);
+    else sendTo(activeConv, text);
     return;
   } else if (act === "del") {
     void (async () => {
@@ -2003,6 +2231,7 @@ function doMsgAction(act: string, idx: number): void {
     if (b.kind === "job") void copyToClipboard(`${b.goal}（${b.pct}%，${b.status}）${b.message || ""}`);
     else if (b.kind === "confirm") void copyToClipboard(b.summary);
     else if (b.kind === "done") void copyToClipboard(`${t("chat.done")}：${b.goal}`);
+    else if (b.kind === "vcard") void copyToClipboard(vcardSummary(b, moneyCats));
   } else if (act === "opentask" && b.kind === "job") {
     openTaskCb?.(b.taskId);
   }
@@ -2048,11 +2277,157 @@ function retryImageSend(idx: number): void {
   void runImageSend(activeConv, b);
 }
 
-// 点开一条图片消息（独立图片窗优先，批次 011 ④；没有桥回落灯箱）。
-function openImageMsg(b: Extract<Block, { kind: "image" }>, at: number): void {
-  const items = b.srcs.map((u, j) => ({ src: u, alt: t("chat.imageAlt") + (b.srcs.length > 1 ? ` ${j + 1}` : "") }));
-  const src = b.srcs[Math.max(0, Math.min(at, b.srcs.length - 1))];
+// 点开一组图（独立图片窗优先，批次 011 ④；没有桥回落灯箱）。图片消息与带附件的文字消息共用。
+function openImageSet(srcs: string[], at: number): void {
+  if (!srcs.length) return;
+  const items = srcs.map((u, j) => ({ src: u, alt: t("chat.imageAlt") + (srcs.length > 1 ? ` ${j + 1}` : "") }));
+  const src = srcs[Math.max(0, Math.min(at, srcs.length - 1))];
   if (!openInViewerWindow(items, src)) openLightbox(src);
+}
+// 点开一条图片消息。
+function openImageMsg(b: Extract<Block, { kind: "image" }>, at: number): void {
+  openImageSet(b.srcs, at);
+}
+
+// ── 批次 013 ④⑤：识图确认卡 / 识不出卡的动作 ────────────────────────────────
+// 把卡里三个 input 的当前值收进块（分类下拉走 change 就地存了）。点按钮前调一遍兜底 ——
+// input 事件基本都存过了，但浏览器自动填充这类不走 input 的改动也得认。
+function syncVcardFromDom(idx: number, b: VCardBlock): void {
+  if (!container) return;
+  const yuan = container.querySelector(`[data-vcyuan="${idx}"]`) as HTMLInputElement | null;
+  if (yuan) b.fields.yuan = yuan.value;
+  const merch = container.querySelector(`[data-vcmerch="${idx}"]`) as HTMLInputElement | null;
+  if (merch) b.fields.merchant = merch.value;
+  const date = container.querySelector(`[data-vcdate="${idx}"]`) as HTMLInputElement | null;
+  if (date) { const ms = fromDateTimeLocal(date.value); if (!isNaN(ms)) b.fields.at_ms = ms; }
+}
+
+// 收齐四个字段。金额走 amountToCents（记一笔同一把尺：算式也认、≤0 与超限都拦），
+// 拦下时吐司说清 —— 静默不发会像按钮坏了。
+function vcardCollect(b: VCardBlock): VisionFields | null {
+  const raw = b.fields.yuan;
+  const cents = amountToCents(raw);
+  if (cents == null) {
+    showToast(/\d/.test(raw) ? t("money.recNeedAmount") : t("money.exprBad"), { tone: "warn" });
+    return null;
+  }
+  return {
+    yuan: (cents / 100).toFixed(2), direction: b.fields.direction, cat: b.fields.cat,
+    sub: b.fields.sub || "", merchant: b.fields.merchant.trim(), at_ms: b.fields.at_ms,
+  };
+}
+
+// 「记入」→ approved + fields；卡进等待态（按钮禁用），resolved 回来才切「已记入」。
+// 没连上不改状态：这一步必须到服务端，本地假装记了会让用户以为账已经在了。
+function vcardRecord(idx: number): void {
+  const b = cs(activeConv).blocks[idx];
+  if (!b || b.kind !== "vcard" || b.state !== "open") return;
+  syncVcardFromDom(idx, b);
+  const fields = vcardCollect(b);
+  if (!fields) return;
+  b.fields = fields;
+  if (!chatConn.sendVisionConfirm(b.confirmId, true, fields)) {
+    showToast(t("chat.notConnected"), { tone: "fail" });
+    renderMessages();
+    return;
+  }
+  b.state = "waiting";
+  renderMessages();
+  // 20 秒没等到回音（发出去后连接断了这类）：卡置「已失效」+ 吐司「服务端没有响应，稍后看记账页有没有
+  // 这一笔」。**不放回可点态** —— 服务端那边多半已经处理掉了（或者根本没收到），再点必然 stale；
+  // 账到底记没记，去记账页看一眼最靠谱。真记上了的话 resolved 迟早会来，再把它切成「已记入」。
+  const conv = activeConv;
+  clearVcardTimer(b.confirmId);
+  vcardTimers[b.confirmId] = window.setTimeout(() => {
+    delete vcardTimers[b.confirmId];
+    if (b.state !== "waiting") return;
+    b.state = "stale";
+    showToast(t("chat.vcardTimeout"), { tone: "fail" });
+    if (conv === activeConv) renderMessages();
+  }, 20000);
+}
+
+// 「改成手动填」→ approved=false 只销卡（服务端不入账），本端自己开记账页的「记一笔」，
+// 把识出来（可能已改过）的字段 + 原图带成草稿。没连上也照开：用户要的是手动填，不是等网 ——
+// 本地先切「已改成手动填」，服务端那张卡等它自己超时；重连补发同 confirm_id 会被去重掉。
+function vcardManual(idx: number): void {
+  const b = cs(activeConv).blocks[idx];
+  if (!b || b.kind !== "vcard" || b.state !== "open") return;
+  syncVcardFromDom(idx, b);
+  if (!chatConn.sendVisionConfirm(b.confirmId, false)) showToast(t("chat.notConnected"), { tone: "warn" });
+  b.state = "manual";
+  renderMessages();
+  const f = b.fields;
+  gotoMoneyAdd({
+    cents: amountToCents(f.yuan) ?? undefined,
+    direction: f.direction, cat: f.cat, sub: f.sub || "", merchant: f.merchant.trim(), at_ms: f.at_ms,
+    atts: b.att ? [{ file_id: b.att, label: "原始截图" }] : [],
+  });
+}
+
+// 识不出卡的「手动填一笔」：空草稿 + 原图。
+function vfailManual(idx: number): void {
+  const b = cs(activeConv).blocks[idx];
+  if (!b || b.kind !== "vfail") return;
+  gotoMoneyAdd({ atts: b.att ? [{ file_id: b.att, label: "原始截图" }] : [] });
+}
+
+// 那条带图消息的原文：优先按 user_message_id 找，找不到（历史没拉到那页）就找带着同一张图的
+// 最近一条用户消息。
+function vfailSourceText(conv: string, b: VFailBlock): string {
+  const blocks = cs(conv).blocks;
+  if (b.userMsgId) {
+    const hit = blocks.find((x) => x.kind === "user" && x.id === b.userMsgId);
+    if (hit && hit.kind === "user") return hit.text;
+  }
+  for (let i = blocks.length - 1; i >= 0; i--) {
+    const x = blocks[i];
+    if (x.kind === "user" && x.atts && x.atts.includes(b.att)) return x.text;
+  }
+  return "";
+}
+// 「换一张图」重发的正文：服务端靠动作前缀选「识图 → 确认卡」那条路（主进程 SLASH_PREFIX 拼的
+// 「记一笔：」等；聊天里的芯片是「【记一笔】」形）。原文找不到就只发「记一笔：」（带图允许空正文）；
+// 原文没有前缀也补上 —— 识不出卡只有记账那条路才出，补「记一笔：」不会补错。
+const MONEY_PREFIX = "记一笔：";
+const ACTION_PREFIX_RE = /^(?:记一笔|记一条灵感|加一条常用语|提醒我)：|^【[^】]+】/;
+function vfailRetryText(conv: string, b: VFailBlock): string {
+  const raw = vfailSourceText(conv, b).trim();
+  if (!raw) return MONEY_PREFIX;
+  return ACTION_PREFIX_RE.test(raw) ? raw : MONEY_PREFIX + raw;
+}
+
+// 「换一张图」：开文件选择 → uploadFile 拿新 file_id → 同一段文字带新图重发（sendTextWithAtts）。
+// 选中后卡进上传中（按钮禁用）；传成了把这张错误卡撤掉 —— 新一轮的结果会另出卡 / 气泡，
+// 旧卡留着只会让人以为还没处理。传失败卡留着、按钮放开，吐司说没传上。
+function vfailRetry(idx: number): void {
+  const conv = activeConv;
+  const b = cs(conv).blocks[idx];
+  if (!b || b.kind !== "vfail" || b.busy) return;
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  input.addEventListener("change", () => {
+    const f = input.files?.[0];
+    if (!f) return;
+    if (!f.type.startsWith("image/")) { showToast(t("chat.imgOnly"), { tone: "warn" }); return; }
+    if (f.size > IMG_MAX_BYTES) { showToast(t("chat.imgOverLimit", { n: 1, size: fmtMB(f.size) }), { tone: "warn" }); return; }
+    b.busy = true;
+    if (conv === activeConv) renderMessages();
+    void uploadFile(f).then((r) => {
+      b.busy = false;
+      if (!r) {
+        showToast(t("money.attUploadFailed", { name: f.name }), { tone: "fail" });
+        if (conv === activeConv) renderMessages();
+        return;
+      }
+      const text = vfailRetryText(conv, b);
+      const cur = cs(conv).blocks.indexOf(b);  // 上传期间可能进过别的消息，按引用重新定位
+      if (cur >= 0) removeBlockAt(conv, cur);
+      sendTextWithAtts(text, [r.file_id]);
+    });
+  });
+  input.click();
 }
 
 function onMsgsContextMenu(e: MouseEvent): void {
@@ -2212,6 +2587,43 @@ export function sendText(text: string): void {
   sendTo(MAIN, text);
 }
 
+// 带附件的文字消息（批次 013：快捷入口带图 → 主进程 chatSender → shell.onLauncherSendChat → 这里；
+// 识不出卡的「换一张图」重发也走它）。atts 是**已经传好**的 file_id（上传在面板 / 卡里各自做完），
+// 这里只管：切到主会话、乐观出一条带缩略条的用户气泡、压占位气泡、WS 送 content + atts。
+// 落库回执 message_saved（kind=text）按 atts 认领 id；随后服务端先识图（vision_reading →
+// 确认卡 / 识不出卡 / 正常 delta+reply 三选一），本端只按事件画。
+// 带 atts 时正文允许为空 = 纯图交给秘书。没有 atts 就退化成普通文字消息（别走两套发送态）。
+export function sendTextWithAtts(text: string, atts: string[]): void {
+  const t2 = (text || "").trim();
+  const ids = (atts || []).filter(Boolean).slice(0, 4);  // 服务端最多收 4（PC 一期只发 1）
+  if (!ids.length) { sendTo(MAIN, t2); return; }
+  if (clearing) return; // 清空历史进行中，暂不发送，避免与会话重置竞争
+  stick = true;
+  forceScroll = true;
+  const s = cs(MAIN);
+  const now = Date.now();
+  // 引用条跟普通发送同一规矩：随消息带走（meta.quote），发完清条。
+  const quote = quoteRef || undefined;
+  quoteRef = null;
+  const userBlk: Extract<Block, { kind: "user" }> = { kind: "user", text: t2, ts: now, quote, atts: ids };
+  s.blocks.push(userBlk);
+  // 占位气泡与 sendTo 同款（展开轨迹的理由见那边）；vision_reading 到了换成「正在看图…」。
+  s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now });
+  s.assistantIdx = s.blocks.length - 1;
+  s.lastText = t2 || t("chat.imageMsgPreview");
+  s.lastAt = now;
+  if (!chatConn.sendMessage(t2, operateAutoApprove(), MAIN, "auto", quote, ids)) {
+    // 失败态与普通文字消息一致：撤占位、消息标失败（右键「重新发送」，附件跟着走）、错误块说原因。
+    s.blocks.pop();
+    s.assistantIdx = null;
+    userBlk.failed = true;
+    s.blocks.push({ kind: "error", text: t("chat.notConnected") });
+  }
+  if (activeConv !== MAIN) switchConv(MAIN);
+  else renderMessages();
+  renderContacts();
+}
+
 // 灵感页「让 Umbra 去做这件事」的新通路（稿：不再直发、不再切模式）：
 // 跳过来时**预填**「创建任务」芯片 + 灵感正文，配一条来源横幅 ——
 // 用户看一眼、补两句再回车，比背着他直接发出去多一步确认，少一次误发。
@@ -2250,7 +2662,7 @@ function conversationToText(convId: string): string {
   const s = cs(convId);
   const lines: string[] = [`【会话】${convLabel(convId)}　导出时间 ${new Date().toLocaleString()}`, ""];
   for (const b of s.blocks) {
-    if (b.kind === "user") lines.push(`[我] ${b.text}`, "");
+    if (b.kind === "user") lines.push(`[我] ${b.text}${b.atts && b.atts.length ? `${b.text ? " " : ""}[图片 ×${b.atts.length}]` : ""}`, "");
     else if (b.kind === "assistant") {
       if (b.trace.length) lines.push("[工具轨迹]", ...b.trace.map((x) => `  ${x}`));
       if (b.text) lines.push(`[秘书] ${b.text}`);
@@ -2272,6 +2684,10 @@ function conversationToText(convId: string): string {
       lines.push(`[系统] ${b.text}`, "");
     } else if (b.kind === "locate") {
       lines.push(`[找位置] ${b.target || b.hint}${b.resolved ? `（${b.resolved}）` : "（待处理）"}`, "");
+    } else if (b.kind === "vcard") {
+      lines.push(`[识图确认卡] ${vcardSummary(b, moneyCats)}${b.state === "open" || b.state === "waiting" ? "（待确认）" : ""}`, "");
+    } else if (b.kind === "vfail") {
+      lines.push(`[识图失败] ${b.reason || t("chat.visionFailBody")}`, "");
     }
   }
   return lines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
@@ -2448,6 +2864,38 @@ export function mount(el: HTMLElement): void {
         if (sendBtn) sendBtn.disabled = !t2.value.trim();
       }
     }
+    // 识图确认卡的三个 input（批次 013 ④）：同样随敲随存、不重渲染 —— 别的端来一条消息整区重绘时，
+    // 值从块里回填，改到一半的不丢。金额存原串，点「记入」再归一化（算式也认）。
+    if (t2 && t2.dataset && (t2.dataset.vcyuan !== undefined || t2.dataset.vcmerch !== undefined || t2.dataset.vcdate !== undefined)) {
+      const i = Number(t2.dataset.vcyuan ?? t2.dataset.vcmerch ?? t2.dataset.vcdate);
+      const b = cs(activeConv).blocks[i];
+      if (b && b.kind === "vcard" && b.state === "open") {
+        if (t2.dataset.vcyuan !== undefined) b.fields.yuan = t2.value;
+        else if (t2.dataset.vcmerch !== undefined) b.fields.merchant = t2.value;
+        else { const ms = fromDateTimeLocal(t2.value); if (!isNaN(ms)) b.fields.at_ms = ms; }
+      }
+    }
+  });
+  // 确认卡的分类下拉（叠在自绘框上的透明 <select>）：换了分类要重绘色块 + 名字；
+  // 二级跟着旧分类走，换分类就清掉 —— 「餐饮 · 午餐」换成「出行」还挂着「午餐」是错的。
+  msgsEl.addEventListener("change", (ev) => {
+    const sel = ev.target as HTMLSelectElement;
+    if (!sel || !sel.dataset || sel.dataset.vccat === undefined) return;
+    const i = Number(sel.dataset.vccat);
+    const b = cs(activeConv).blocks[i];
+    if (!b || b.kind !== "vcard" || b.state !== "open") return;
+    if (sel.value !== b.fields.cat) { b.fields.cat = sel.value; b.fields.sub = ""; }
+    syncVcardFromDom(i, b);
+    renderMessages();
+  });
+  // 金额 / 商家框里按 Enter = 「记入」（记一笔弹窗同一习惯：Enter 保存）。
+  msgsEl.addEventListener("keydown", (ev) => {
+    const t2 = ev.target as HTMLInputElement;
+    if (ev.key !== "Enter" || ev.isComposing || !t2 || !t2.dataset) return;
+    const i = t2.dataset.vcyuan ?? t2.dataset.vcmerch;
+    if (i === undefined) return;
+    ev.preventDefault();
+    vcardRecord(Number(i));
   });
   // 跟踪是否贴底：上滑超过阈值即停止自动跟随，回到底部附近恢复跟随。
   msgsEl.addEventListener("scroll", () => {
@@ -2466,9 +2914,15 @@ function onMsgsClick(e: Event): void {
   const el = (e.target as HTMLElement).closest(
     "[data-trace],[data-approve],[data-approve-always],[data-deny],[data-img],[data-qopt],[data-qprev],[data-qnext],[data-qsubmit],[data-reconnect],[data-jobact],"
     + "[data-locshot],[data-locclear],[data-locfbtoggle],[data-locfbsend],[data-locpause],[data-locsend],[data-locresume],"
-    + "[data-stopreply],[data-goseenav],[data-qjump],[data-upcancel],[data-upretry],[data-imgat]",
+    + "[data-stopreply],[data-goseenav],[data-qjump],[data-upcancel],[data-upretry],[data-imgat],"
+    + "[data-vcrecord],[data-vcmanual],[data-vfmanual],[data-vfretry]",
   ) as HTMLElement | null;
   if (!el) return;
+  // ── 批次 013 ④⑤：识图确认卡 / 识不出卡 ──
+  if (el.dataset.vcrecord !== undefined) { vcardRecord(Number(el.dataset.vcrecord)); return; }
+  if (el.dataset.vcmanual !== undefined) { vcardManual(Number(el.dataset.vcmanual)); return; }
+  if (el.dataset.vfmanual !== undefined) { vfailManual(Number(el.dataset.vfmanual)); return; }
+  if (el.dataset.vfretry !== undefined) { vfailRetry(Number(el.dataset.vfretry)); return; }
   // ── 错误块的「重新连接」──
   // 用 data-* 而不是 id：一屏里可能有多条错误块，id 会重复。
   if (el.dataset.reconnect !== undefined) {
@@ -2499,6 +2953,13 @@ function onMsgsClick(e: Event): void {
     return;
   }
   if (el.dataset.imgat !== undefined) {
+    // 带附件的文字消息的缩略条（批次 013 ②）：容器是 data-attmsg，点开同一套看图。
+    const attHolder = el.closest("[data-attmsg]") as HTMLElement | null;
+    if (attHolder) {
+      const ub = cs(activeConv).blocks[Number(attHolder.dataset.attmsg)];
+      if (ub && ub.kind === "user" && ub.atts) openImageSet(ub.atts.map(fileSrc), Number(el.dataset.imgat) || 0);
+      return;
+    }
     const holder = el.closest("[data-imgmsg]") as HTMLElement | null;
     const b = holder ? cs(activeConv).blocks[Number(holder.dataset.imgmsg)] : undefined;
     if (b && b.kind === "image" && b.state === "sent") openImageMsg(b, Number(el.dataset.imgat) || 0);

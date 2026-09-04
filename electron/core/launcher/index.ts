@@ -59,6 +59,23 @@ interface ManagerOpts {
   distDir: string;
 }
 
+// 快捷入口 → 主窗口聊天页的一条消息（批次 013 起带图）。
+// atts = 已经传到服务端的图片 file_id（面板一期只发 1 张，协议上限 4 张）；
+// 带 atts 时 text 允许为空串（纯图交给秘书）。main.ts 原样发给主窗口的 umbra:launcher-send-chat。
+export interface LauncherChatMessage { text: string; atts?: string[] }
+
+// 渲染层送来的 atts 清洗：只认非空字符串，去重，最多 4 个（服务端协议上限）。
+// IPC 参数不可信，别的都当没传。
+function cleanAtts(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const v of raw) {
+    const s = typeof v === "string" ? v.trim() : "";
+    if (s && !out.includes(s)) out.push(s);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
 
 // 标签名去重、去空白、去空串，保序。
 function uniqTags(names: string[]): string[] {
@@ -96,7 +113,7 @@ export class LauncherManager {
     // 同步结果落地后广播，让设置页和快捷入口面板都拿到最新的常用语。
     this.phraseSync = new PhraseSync(cfg, () => this.broadcastPhrases());
     this.engine = new WorkflowEngine(cfg, {
-      sendAssistant: (t) => this.chatSender?.(t),
+      sendAssistant: (t) => this.chatSender?.({ text: t }),
       hide: (rf) => this.hide(rf),
       showPanel: (pre) => this.show(pre),
       showLargeType: (t) => { void this.showLargeType(t); },
@@ -613,12 +630,17 @@ export class LauncherManager {
   }
 
   // 「发给秘书」：把当前输入直接发到 PC 聊天主会话（跳转聊天页 + 发送）。由 main.ts 注入回调。
-  private chatSender?: (text: string) => void;
-  setChatSender(fn: (text: string) => void): void { this.chatSender = fn; }
-  private async sendAssistant(text: string): Promise<string> {
+  //
+  // 批次 013：消息可以带一张图（面板先把图传到服务端拿 file_id，这里只透传 id 列表）。
+  // 回调的入参从裸字符串改成 { text, atts? }：带 atts 时 text 允许为空 —— 纯图交给秘书
+  // 也是一条合法消息（协议里 content 为空串 + atts 非空）。
+  private chatSender?: (msg: LauncherChatMessage) => void;
+  setChatSender(fn: (msg: LauncherChatMessage) => void): void { this.chatSender = fn; }
+  private async sendAssistant(text: string, atts?: string[]): Promise<string> {
     const t = (text || "").trim();
-    if (!t || !this.chatSender) return "";
-    this.chatSender(t);          // 主进程 → 主窗口：跳聊天页并发送
+    const files = cleanAtts(atts);
+    if ((!t && !files.length) || !this.chatSender) return "";
+    this.chatSender(files.length ? { text: t, atts: files } : { text: t });   // 主进程 → 主窗口：跳聊天页并发送
     await this.hide(false);      // 关闭快捷入口（焦点交给主窗口）
     return "";
   }
@@ -656,12 +678,15 @@ export class LauncherManager {
     phrase: "加一条常用语：",
     rem: "提醒我：",
   };
-  private async slashSend(kind: string, text: string): Promise<{ ok: boolean }> {
+  // atts（批次 013）：面板已经传好的图片 file_id。带图时内容允许为空 ——「记一笔：」+ 一张小票
+  // 就够秘书看图记账；前缀照拼，秘书仍靠它选工具。
+  private async slashSend(kind: string, text: string, atts?: string[]): Promise<{ ok: boolean }> {
     const t = (text || "").trim();
     const prefix = LauncherManager.SLASH_PREFIX[kind];
-    if (!t || !prefix || !this.chatSender) return { ok: false };
+    const files = cleanAtts(atts);
+    if ((!t && !files.length) || !prefix || !this.chatSender) return { ok: false };
     if (!(await this.assistantOnline())) return { ok: false };
-    this.chatSender(prefix + t);
+    this.chatSender(files.length ? { text: prefix + t, atts: files } : { text: prefix + t });
     // 不在这里 hide：渲染层要先闪一帧「已交给秘书」再收起（稿定，收起本身就是反馈）。
     return { ok: true };
   }
@@ -756,10 +781,20 @@ export class LauncherManager {
     const { ipcMain, globalShortcut } = await import("electron");
     ipcMain.handle("launcher:query", (_e, q: string) => this.query(q));
     ipcMain.handle("launcher:run", (_e, id: string, mod?: string) => this.runResult(id, mod || ""));
-    ipcMain.handle("launcher:sendAssistant", (_e, text: string) => this.sendAssistant(text));
+    // atts（批次 013）：面板传好的图片 file_id 列表，透传给主窗口；不传就是老的纯文字。
+    ipcMain.handle("launcher:sendAssistant", (_e, text: string, atts?: unknown) => this.sendAssistant(String(text || ""), cleanAtts(atts)));
     // 「/」功能菜单（批次 009）：发送 + 可达性探测（菜单态与「问秘书」兜底项的离线灰都靠它）。
-    ipcMain.handle("launcher:slashSend", (_e, kind: string, text: string) => this.slashSend(String(kind || ""), String(text || "")));
+    ipcMain.handle("launcher:slashSend", (_e, kind: string, text: string, atts?: unknown) =>
+      this.slashSend(String(kind || ""), String(text || ""), cleanAtts(atts)));
     ipcMain.handle("launcher:assistantOnline", () => this.assistantOnline());
+    // 服务端地址 + 令牌（批次 013，面板带图）：面板窗口没有主窗口那套 desktop.ts 灌配置的流程，
+    // 渲染层 getServerUrl() 在它那里只会落到 localStorage/默认值，拿不到用户真正配的地址；
+    // 上传 /files/upload 又是唯一带鉴权的接口，所以直接从主进程配置取一份给面板自己 POST。
+    // 令牌的暴露面和主窗口的 umbra:getRegisterInfo 相同（同一个 preload、同一份配置）。
+    ipcMain.handle("launcher:getServerInfo", () => {
+      const c = this.cfg.get();
+      return { serverUrl: String(c.serverUrl || "").replace(/\/+$/, ""), token: String(c.token || "") };
+    });
     // ⌘Y 预览（W3 的 quicklookurl）：http(s) 交给默认浏览器，其余当作路径交给系统默认程序打开。
     // 面板不收起 —— 预览的意义就是「看一眼再决定选哪个」。
     ipcMain.handle("launcher:quicklook", async (_e, target: string) => {

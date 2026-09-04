@@ -134,13 +134,18 @@ export function Workspaces() {
 
   const filtering = !!kw || filter !== "all";
   const clearFilter = () => { setQ(""); setFilter("all"); };
+  // 裁定 8（tokens.pageTemplate.shared.emptyHeaderPrimary）：真空态时页头不渲染「新增」，橙留给空态里那颗。
+  // 「真空」= 一个工作区都没有（全量 list 为空，不是筛出来的 shown）&& 没搜索没筛选 && 首屏骨架已过。
+  // 搜 / 筛没结果是无结果态，主按钮照常在。（本页拿不到离线态：拉取失败回空列表，和真空同形，
+  // 那时列表栏画的也是这同一个空态，页面上仍只有一颗橙。）
+  const blank = !loading && !list.length && !filtering;
 
   return (
     <PageShell header={{
       title: t("workspaces.title"),
       subtitle: t("workspaces.countLine", { n: list.length, auto: autoN }),
       status: refreshing ? <SyncSpinner /> : undefined,
-      primary: { label: t("common.add"), onClick: () => { setErr(""); setAdding(true); } },
+      primary: blank ? undefined : { label: t("common.add"), onClick: () => { setErr(""); setAdding(true); } },
       secondary: [{ label: t("common.refresh"), onClick: () => void refresh() }],
       secondRow: (<>
         <HeaderSearch value={q} onChange={setQ} placeholder={t("workspaces.searchPlaceholder")} />

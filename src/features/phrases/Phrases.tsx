@@ -1,61 +1,60 @@
-// 常用语（一级导航，批次 012）。套页面骨架的 **T2 列表 + 弹窗**：
-//   页头：「常用语 · N 条」+ 同步戳 + 主按钮「新增短语」+ 齿轮（常用语设置）
-//   内容：按**标签**分组（分组头 = 标签名 + 条数，「无标签」永远排最后），卡内逐行；
-//         点行原地展开只读全文；hover 行尾 24 铅笔进编辑弹窗；删除只在右键菜单；
-//         组内拖手柄调序（跨组不拖 —— 换标签去编辑弹窗改）；新增保存后落顶部并高亮 1.2s。
-//   设置视图（T3）：标签管理（新增 / 改名 / 合并 / 删除 / 排序）+ 唤起快捷键 + 云端同步。
+// 常用语（一级导航）。批次 013 正式稿：《PC 常用语与带图入口.dc.html》01–03 节 / tokens.phrasePage + phraseTags。
+// 套页面骨架的 **T2 列表 + 弹窗**：
+//   页头：「常用语 · N 条」+ 同步戳 + 主「新增短语」+ 齿轮（常用语设置）；没有第二行（几十条短语不值得一条搜索加筛选轨）；
+//         没有值得放的低频动作，所以 ⋯ 不出；**一条都没有时主按钮不渲染**（裁定 8：橙留给空态里那颗）。
+//   内容：按**标签**分组，分组顺序 = 设置里的标签顺序，「无标签」永远最后；卡内逐行（行取值见 PhraseRow）。
+//         点行原地展开只读全文；hover 出铅笔进 560 编辑弹窗；复制常驻；删除 / 换标签只在右键菜单；
+//         组内拖手柄调序（跨组不拖 —— 换标签走右键或编辑弹窗）。
+//   新增 / 换标签：保存后落在**所属标签分组的第一行**（不是整页顶部——分好组了还往顶上塞会读成标签没生效），
+//         --orange-soft 渐隐 1.2s，列表滚到那一行为止（nearest，不居中）；改了标签的那条从旧组消失、在新组高亮出现。
+//   设置视图（T3，两组叠放）：见 PhrasesSettings。
 //
 // 触发词 → 标签（sam 定，一条一个）：数据上标签名就是 Phrase.keyword，老触发词自动成为标签；
 // 编辑时只能从清单里**选**，要新标签去设置视图建（和记账分类同一个纪律）。
-// 数据仍在主进程（umbra-config.json + 云端同步），这里只做展示与派发。
+// 数据仍在主进程（umbra-config.json + 云端同步），这里只做展示与派发；删除走墓碑同步，这轮起服务端把它进回收站（30 天）。
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ContextMenu, EmptyState, Modal, RowsCard, SettingRow, RowHint, ErrorCard, btn, select as selectCls, field } from "../../components/ui";
-import { PageShell, ListModal, Group, GroupRow, RowExpand, useFlashId, SettingsPage, SettingsSection, detailIconBtn } from "../../components/layout";
+import { ContextMenu, EmptyState, Modal, btn, select as selectCls, field, fieldLabel, textarea as textareaCls } from "../../components/ui";
+import { PageShell, ListModal, Skeleton, useFlashId } from "../../components/layout";
 import { askConfirm, showToast } from "../../components/overlay";
-import { SyncStamp } from "../../components/SyncStamp";
-import { HotkeyButton, useHotkeyConflict, OWNER_LABEL } from "../tools/hotkeys";
-import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
-import { IconGrip, IconPencil, IconUp, IconDown } from "../../components/icons";
-import { launcherApi, clipApi, hasClip, hasLauncher, type Phrase, type PhraseSyncState } from "../tools/bridges";
+import { IconPhrase, IconTrash } from "../../components/icons";
+import { displayAccel } from "../../components/hotkey";
+import { launcherApi, hasLauncher, type Phrase } from "../tools/bridges";
+import { PhraseRow } from "./PhraseRow";
+import { PhrasesSettings } from "./PhrasesSettings";
+import { FLIP_MS, GlyphCopy, GlyphPencil, SyncStatus, tagOf, usePhrasesShortcut } from "./shared";
 
-// 常用语快捷键的出厂值（⌘⌥V，和剪贴板的 ⌘⇧V 同族好记）。
-const DEFAULT_PHRASES_SHORTCUT = "Command+Alt+V";
-// 拖拽重排的动画时长。再长就显得拖沓，再短又看不出「让位」的过程。
-const FLIP_MS = 180;
-
-/** 同步状态 + 立即同步按钮（页头同步戳位）。 */
-function SyncStatus() {
-  const { t } = useTranslation();
-  const api = launcherApi();
-  const [sync, setSync] = useState<PhraseSyncState | null>(null);
-  const refresh = () => { void api.phrasesSyncState().then(setSync).catch(() => {}); };
-  useEffect(() => {
-    refresh();
-    const off = api.onPhrasesChanged(() => refresh());
-    return () => { off(); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  return (
-    <SyncStamp state={sync ? { ...sync, offText: t("tools.phraseSyncOff") } : null}
-      title={t("tools.phraseSyncNow")}
-      onSync={async () => { await api.phrasesSyncNow(); refresh(); }} />
-  );
+/** 把 item 放到它所属标签分组的第一行：分组内按数组顺序画，所以挪到同标签的第一条之前就行；
+ *  这个标签还没有别的短语时放哪都一样，放数组头。 */
+function placeFirst(list: Phrase[], item: Phrase): Phrase[] {
+  const rest = list.filter((p) => p.id !== item.id);
+  const at = rest.findIndex((p) => tagOf(p) === tagOf(item));
+  if (at < 0) rest.unshift(item); else rest.splice(at, 0, item);
+  return rest;
 }
 
 export function Phrases() {
   const { t } = useTranslation();
   const api = launcherApi();
   const [phrases, setPhrases] = useState<Phrase[]>([]);
+  // 首趟 getPhrases 回来前是「还不知道有没有」：画骨架，不判空、不藏主按钮 —— 否则进页先闪一帧空态。
+  const [loaded, setLoaded] = useState(false);
   const [tags, setTags] = useState<string[]>([]);
   const [modal, setModal] = useState<{ id: string | null; name: string; tag: string; content: string } | null>(null);
+  const [retag, setRetag] = useState<{ id: string; tag: string } | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; id: string } | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [flashId, flash] = useFlashId();
-  const fromHandle = useRef(false);
+  const [shortcut, setShortcut] = usePhrasesShortcut();
+  const copyTimer = useRef<number | null>(null);
+  // 最新的列表：拖拽落盘要读它，不能读渲染闭包里的 phrases —— dragover 里的 setPhrases 是连续事件优先级，
+  // drop / dragend 跑到时那一步可能还没提交，闭包里的会比屏幕上少最后一步。每次渲染同步赋值，moveTo 里再抢先赋一次。
+  const phrasesRef = useRef(phrases);
+  phrasesRef.current = phrases;
 
   const reload = () => {
-    void api.getPhrases().then((p) => setPhrases(p || []));
+    void api.getPhrases().then((p) => setPhrases(p || [])).catch(() => {}).finally(() => setLoaded(true));
     void api.getPhraseTags().then((tg) => setTags(tg || []));
   };
   useEffect(() => {
@@ -66,6 +65,7 @@ export function Phrases() {
     return off;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useEffect(() => () => { if (copyTimer.current) window.clearTimeout(copyTimer.current); }, []);
 
   // 落盘。主进程会盖改动时间戳、收集删除墓碑并排一次云端推送。
   const save = (list: Phrase[]) => { setPhrases(list); void api.setPhrases(list); };
@@ -73,37 +73,15 @@ export function Phrases() {
   // 按标签分组：清单顺序在前，「无标签」永远最后；清单里没有但短语用到的标签也得有一组（老数据兜底）。
   const groups = useMemo(() => {
     const order = [...tags];
-    for (const p of phrases) { const k = (p.keyword || "").trim(); if (k && !order.includes(k)) order.push(k); }
-    const out: { tag: string; rows: Phrase[] }[] = order.map((tag) => ({ tag, rows: phrases.filter((p) => (p.keyword || "").trim() === tag) }));
-    const none = phrases.filter((p) => !(p.keyword || "").trim());
+    for (const p of phrases) { const k = tagOf(p); if (k && !order.includes(k)) order.push(k); }
+    const out: { tag: string; rows: Phrase[] }[] = order.map((tag) => ({ tag, rows: phrases.filter((p) => tagOf(p) === tag) }));
+    const none = phrases.filter((p) => !tagOf(p));
     if (none.length) out.push({ tag: "", rows: none });
     return out.filter((g) => g.rows.length);
   }, [phrases, tags]);
 
-  const modalValid = !!modal && !!modal.name.trim() && !!modal.content.trim();
-  const commitModal = () => {
-    if (!modal || !modalValid) return;
-    const kw = modal.tag.trim() || undefined;
-    if (modal.id) {
-      save(phrases.map((p) => (p.id === modal.id ? { ...p, name: modal.name.trim(), content: modal.content, keyword: kw } : p)));
-    } else {
-      // 新条落**顶部**（稿定），保存后高亮 1.2s。
-      const id = `ph${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
-      save([{ id, name: modal.name.trim(), content: modal.content, keyword: kw }, ...phrases]);
-      flash(id);
-    }
-    setModal(null);
-  };
-
-  const askDelete = async (id: string) => {
-    const p = phrases.find((x) => x.id === id);
-    if (!p) return;
-    const ok = await askConfirm({ message: t("tools.phraseDeleteAsk", { name: p.name }), confirmText: t("common.delete"), danger: true });
-    if (!ok) return;
-    if (expanded === id) setExpanded(null);
-    snapshot();
-    save(phrases.filter((x) => x.id !== id));
-  };
+  const openNew = () => setModal({ id: null, name: "", tag: "", content: "" });
+  const openEdit = (p: Phrase) => setModal({ id: p.id, name: p.name, tag: p.keyword || "", content: p.content });
 
   // ── 组内拖拽调序（FLIP，沿用 011 那套；跨组不拖）──────────────────────────
   const [dragId, setDragId] = useState<string | null>(null);
@@ -111,6 +89,8 @@ export function Phrases() {
   const prevRects = useRef(new Map<string, DOMRect>());
   const orderDirty = useRef(false);
   const lockUntil = useRef(0);
+  // 刚落组首的那条不参与 FLIP：稿说的是「从旧组消失、在新组高亮出现」，不是从旧组滑过去。
+  const skipFlip = useRef<string | null>(null);
   const snapshot = () => {
     const m = new Map<string, DOMRect>();
     rowRefs.current.forEach((el, id) => m.set(id, el.getBoundingClientRect()));
@@ -121,19 +101,21 @@ export function Phrases() {
       const before = prevRects.current.get(id);
       if (!before) return;
       const dy = before.top - el.getBoundingClientRect().top;
-      if (!dy || id === dragId) return;
+      if (!dy || id === dragId || id === skipFlip.current) return;
       el.style.transition = "none";
       el.style.transform = `translateY(${dy}px)`;
       requestAnimationFrame(() => { el.style.transition = `transform ${FLIP_MS}ms cubic-bezier(.2,.7,.3,1)`; el.style.transform = ""; });
     });
     prevRects.current.clear();
+    skipFlip.current = null;
   }, [phrases, dragId]);
   const moveTo = (targetId: string, clientY: number) => {
     if (!dragId || dragId === targetId || Date.now() < lockUntil.current) return;
-    const from = phrases.findIndex((p) => p.id === dragId);
-    const to = phrases.findIndex((p) => p.id === targetId);
+    const cur = phrasesRef.current;    // 同样读 ref：连着两次 dragover 之间可能还没重渲染
+    const from = cur.findIndex((p) => p.id === dragId);
+    const to = cur.findIndex((p) => p.id === targetId);
     if (from < 0 || to < 0) return;
-    if ((phrases[from].keyword || "").trim() !== (phrases[to].keyword || "").trim()) return;   // 跨组不拖
+    if (tagOf(cur[from]) !== tagOf(cur[to])) return;   // 跨组不拖
     const el = rowRefs.current.get(targetId);
     if (!el) return;
     const r = el.getBoundingClientRect();
@@ -141,56 +123,122 @@ export function Phrases() {
     if (to > from ? clientY < mid : clientY > mid) return;
     lockUntil.current = Date.now() + FLIP_MS;
     snapshot();
-    const list = phrases.slice();
+    const list = cur.slice();
     const [it] = list.splice(from, 1);
     list.splice(to, 0, it);
     orderDirty.current = true;
+    phrasesRef.current = list;      // 先于渲染记下来：紧接着的 drop / dragend 要落盘的就是它
     setPhrases(list);
   };
+  // drop 与 dragend 都会到这里（drop 在前）：第一次把顺序落盘，第二次 orderDirty 已清，只是收尾。
   const endDrag = () => {
     setDragId(null);
     lockUntil.current = 0;
-    if (orderDirty.current) { orderDirty.current = false; void api.setPhrases(phrases); }
+    if (orderDirty.current) { orderDirty.current = false; void api.setPhrases(phrasesRef.current); }
   };
 
-  const openEdit = (p: Phrase) => setModal({ id: p.id, name: p.name, tag: p.keyword || "", content: p.content });
+  // ── 新增 / 换标签的落位：组首 + 高亮 1.2s + 滚到那一行 ──────────────────────
+  const land = (list: Phrase[], item: Phrase) => {
+    snapshot();                     // 让位的那些行 FLIP 过去
+    skipFlip.current = item.id;
+    save(placeFirst(list, item));
+    flash(item.id);
+  };
+  useEffect(() => {
+    if (!flashId) return;
+    const el = rowRefs.current.get(flashId);
+    if (!el) return;
+    // 滚到那一行为止（nearest），不做居中滚动。
+    el.scrollIntoView({ block: "nearest" });
+    // --orange-soft 渐隐 1.2s：先满色停一小段再淡出。用 WAAPI 而不是切 class——切 class 要么淡入淡出各 1.2s，
+    // 要么把行的 hover 过渡也拖到 1.2s；动画结束后底色回到 class 决定的 hover / 展开态。
+    if (typeof el.animate !== "function") return;
+    const soft = getComputedStyle(el).getPropertyValue("--orange-soft").trim() || "transparent";
+    el.animate(
+      [{ backgroundColor: soft, offset: 0 }, { backgroundColor: soft, offset: 0.25 }, { backgroundColor: "transparent", offset: 1 }],
+      { duration: 1200, easing: "ease-out" },
+    );
+  }, [flashId]);
 
-  const row = (p: Phrase) => {
-    const open = expanded === p.id;
-    const long = p.content.includes("\n") || p.content.length > 60;
-    return (
-      <div key={p.id}
-        ref={(el) => { if (el) rowRefs.current.set(p.id, el); else rowRefs.current.delete(p.id); }}
-        draggable
-        onDragStart={(e) => {
-          if (!fromHandle.current) { e.preventDefault(); return; }
+  // ── 编辑 / 新增弹窗 ────────────────────────────────────────────────────────
+  const modalValid = !!modal && !!modal.name.trim() && !!modal.content.trim();
+  const commitModal = () => {
+    if (!modal || !modalValid) return;
+    const kw = modal.tag.trim() || undefined;
+    if (modal.id) {
+      const prev = phrases.find((p) => p.id === modal.id);
+      if (!prev) { setModal(null); return; }
+      const next: Phrase = { ...prev, name: modal.name.trim(), content: modal.content, keyword: kw };
+      // 换了标签：从旧组消失、在新组第一行高亮出现；只改名字或内容的原位不动。
+      if (tagOf(prev) !== tagOf(next)) land(phrases, next);
+      else save(phrases.map((p) => (p.id === modal.id ? next : p)));
+    } else {
+      const id = `ph${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+      land(phrases, { id, name: modal.name.trim(), content: modal.content, keyword: kw });
+    }
+    setModal(null);
+  };
+
+  // ── 换标签（右键 → 480 弹窗）─────────────────────────────────────────────────
+  const retagTarget = retag ? phrases.find((p) => p.id === retag.id) : undefined;
+  const retagChanged = !!retag && !!retagTarget && tagOf(retagTarget) !== retag.tag.trim();
+  const commitRetag = () => {
+    if (!retag || !retagTarget) { setRetag(null); return; }
+    if (retagChanged) land(phrases, { ...retagTarget, keyword: retag.tag.trim() || undefined });
+    setRetag(null);
+  };
+
+  // ── 复制全文：行内钮 / 展开区的钮 / 右键都走这里；成功后行内钮换勾 2 秒 ────────
+  const copy = async (p: Phrase) => {
+    try { await navigator.clipboard.writeText(p.content); }
+    catch { showToast(t("layout.copyFailed"), { tone: "fail" }); return; }
+    setCopiedId(p.id);
+    if (copyTimer.current) window.clearTimeout(copyTimer.current);
+    copyTimer.current = window.setTimeout(() => setCopiedId(null), 2000);
+    showToast(t("phrases.copiedFull", { name: p.name }), { tone: "ok" });
+  };
+
+  // ── 删除：二次确认走统一模板（这轮常用语真进回收站了）────────────────────────
+  const askDelete = async (id: string) => {
+    const p = phrases.find((x) => x.id === id);
+    if (!p) return;
+    const ok = await askConfirm({
+      title: t("phrases.deleteTitle", { name: p.name }),
+      message: t("phrases.deleteBody"),
+      confirmText: t("common.delete"),
+      danger: true,
+    });
+    if (!ok) return;
+    if (expanded === id) setExpanded(null);
+    snapshot();
+    save(phrases.filter((x) => x.id !== id));
+    showToast(t("phrases.deleted"), { tone: "ok" });
+  };
+
+  const row = (p: Phrase) => (
+    <PhraseRow key={p.id} p={p}
+      open={expanded === p.id}
+      copied={copiedId === p.id}
+      dragging={dragId === p.id}
+      rowRef={(el) => { if (el) rowRefs.current.set(p.id, el); else rowRefs.current.delete(p.id); }}
+      drag={{
+        // 只有手柄是拖拽源（PhraseRow 里 draggable 只挂在手柄上），所以到这里的一定是从手柄拖起来的。
+        onStart: (e) => {
           lockUntil.current = 0; setDragId(p.id);
           e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", p.id);
-        }}
-        onDragEnd={endDrag}
-        onDragOver={(e) => { if (dragId) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; moveTo(p.id, e.clientY); } }}
-        onDrop={(e) => { e.preventDefault(); endDrag(); }}
-        className={dragId === p.id ? "opacity-45" : ""}>
-        <GroupRow flash={flashId === p.id} active={open}
-          onClick={() => setExpanded(open ? null : p.id)}
-          onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, id: p.id }); }}>
-          <span onMouseDown={() => { fromHandle.current = true; }} onMouseUp={() => { fromHandle.current = false; }}
-            onClick={(e) => e.stopPropagation()}
-            title={t("tools.dragToReorder")}
-            className="flex-none flex items-center text-faint cursor-grab active:cursor-grabbing hover:text-orange-text">
-            <IconGrip size={13} />
-          </span>
-          <span className="w-[132px] flex-none truncate text-[12.5px] font-medium">{p.name}</span>
-          <span className="flex-1 min-w-0 truncate text-[12px] text-muted">{p.content.split("\n")[0]}</span>
-          {long ? <span className="flex-none whitespace-nowrap text-[10.5px] text-faint font-mono">{t("tools.phraseChars", { n: p.content.length })}</span> : null}
-          <span className="flex-none opacity-0 group-hover/row:opacity-100 transition-opacity duration-[130ms]">
-            <button className={detailIconBtn} title={t("common.edit")} onClick={(e) => { e.stopPropagation(); openEdit(p); }}><IconPencil size={13} /></button>
-          </span>
-        </GroupRow>
-        {open ? <RowExpand text={p.content} /> : null}
-      </div>
-    );
-  };
+          // 拖影用整行（此刻还没压淡，截下来的是正常态），偏移量按光标在行内的位置算，拖起来不跳。
+          const el = rowRefs.current.get(p.id);
+          if (el) { const r = el.getBoundingClientRect(); e.dataTransfer.setDragImage(el, e.clientX - r.left, e.clientY - r.top); }
+        },
+        onEnd: endDrag,
+        onOver: (e) => { if (dragId) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; moveTo(p.id, e.clientY); } },
+        onDrop: (e) => { e.preventDefault(); endDrag(); },
+      }}
+      onToggle={() => setExpanded(expanded === p.id ? null : p.id)}
+      onEdit={() => openEdit(p)}
+      onCopy={() => void copy(p)}
+      onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY, id: p.id }); }} />
+  );
 
   if (!hasLauncher) {
     return (
@@ -200,209 +248,111 @@ export function Phrases() {
     );
   }
 
+  const menuTarget = menu ? phrases.find((x) => x.id === menu.id) : undefined;
+
   return (
     <PageShell
       header={{
         title: t("nav.phrases"),
         subtitle: t("phrases.countN", { n: phrases.length }),
         status: <SyncStatus />,
-        primary: { label: t("tools.phraseNew"), onClick: () => setModal({ id: null, name: "", tag: "", content: "" }) },
+        // 裁定 8：一条都没有时主按钮不渲染，一页只留空态里那颗橙。首屏没回来前不算「没有」，主按钮照常在。
+        primary: loaded && !phrases.length ? undefined : { label: t("tools.phraseNew"), onClick: openNew },
       }}
       settings={{
         title: t("phrases.settingsTitle"),
         backLabel: t("phrases.backLabel"),
-        content: <PhrasesSettings phrases={phrases} tags={tags} onTags={(next) => { setTags(next); void api.setPhraseTags(next); }} onPhrases={save} />,
+        status: t("phrases.instant"),
+        content: (
+          <PhrasesSettings phrases={phrases} tags={tags}
+            onTags={(next) => { setTags(next); void api.setPhraseTags(next); }} onPhrases={save}
+            shortcut={shortcut} onShortcut={setShortcut} />
+        ),
       }}>
-      {phrases.length ? (
+      {!loaded ? (
+        // 首屏骨架（通用件）：三行不动画，首趟数据回来就换成列表或空态。
+        <Skeleton rows={4} />
+      ) : phrases.length ? (
         <ListModal>
           {groups.map((g) => (
-            <Group key={g.tag || "__none"} title={g.tag || t("phrases.untagged")} count={t("phrases.tagCount", { n: g.rows.length })}>
-              <div onDragEnd={endDrag}>{g.rows.map(row)}</div>
-            </Group>
+            // 分组头 = 标签名 11/600/.06em + 条数 11px tabular，padding 0 2px；头与卡 gap 7；卡 --card + 1px + 圆角 12。
+            <section key={g.tag || "__none"} className="flex flex-col gap-[7px]">
+              <div className="flex items-center gap-[8px] px-[2px]">
+                <span className="flex-none text-[11px] font-semibold tracking-[.06em] text-faint whitespace-nowrap">{g.tag || t("phrases.untagged")}</span>
+                <span className="flex-none text-[11px] text-faint whitespace-nowrap [font-variant-numeric:tabular-nums]">{t("phrases.tagCount", { n: g.rows.length })}</span>
+              </div>
+              <div className="bg-card border border-border rounded-[12px] overflow-hidden">
+                {g.rows.map(row)}
+              </div>
+            </section>
           ))}
-          <div className="text-[11.5px] text-faint leading-[1.6] px-[2px]">{t("settings.phrasesHint")}</div>
         </ListModal>
       ) : (
-        <EmptyState title={t("settings.phrasesEmpty")} actionLabel={t("tools.phraseNew")}
-          onAction={() => setModal({ id: null, name: "", tag: "", content: "" })} />
+        // 空态（稿 01 节）：38 图标块 + 「还没有常用语」13/600 + 一句 12px --muted + 橙钮 28。快捷键文案取实际录制的键位。
+        <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-[9px] text-center px-[18px]">
+          <span className="w-[38px] h-[38px] flex-none rounded-[10px] bg-chip text-faint flex items-center justify-center"><IconPhrase size={19} /></span>
+          <span className="text-[13px] font-semibold">{t("settings.phrasesEmpty")}</span>
+          <span className="text-[12px] text-muted leading-[1.7] max-w-[360px]">{t("phrases.emptyBody", { key: displayAccel(shortcut) })}</span>
+          <button className={`${btn("primary", "sm")} mt-[2px]`} onClick={openNew}>{t("tools.phraseNew")}</button>
+        </div>
       )}
 
-      {/* 编辑 / 新增弹窗（560 那档）：名称 + 标签（从清单里选）并排，内容区大块可拉伸。 */}
+      {/* 编辑 / 新增弹窗（560 那档）：名称 + 标签（从清单里选）并排，内容 5 行；底部左侧一句提示 + 取消 / 保存。 */}
       {modal ? (
         <Modal width={560} title={modal.id ? t("tools.phraseEditTitle") : t("tools.phraseNew")}
           onClose={() => setModal(null)}
           footer={<>
-            <span className="flex-1" />
+            <span className="flex-1 min-w-0 text-[11px] text-faint leading-[1.6]">{t("phrases.pickTagHint")}</span>
             <button className={btn("ghost")} onClick={() => setModal(null)}>{t("common.cancel")}</button>
             <button className={btn("primary")} disabled={!modalValid} onClick={commitModal}>{t("common.save")}</button>
           </>}>
-          <div className="flex flex-wrap gap-[8px]">
-            <input autoFocus value={modal.name} onChange={(e) => setModal({ ...modal, name: e.target.value })}
-              placeholder={t("settings.phraseName")} className={field("card")} style={{ flex: "1 1 240px", minWidth: 0 }} />
-            <select value={modal.tag} onChange={(e) => setModal({ ...modal, tag: e.target.value })}
-              className={selectCls()} style={{ flex: "0 1 168px", minWidth: 0 }} title={t("phrases.tagLabel")}>
-              <option value="">{t("phrases.noTag")}</option>
-              {tags.map((tg) => <option key={tg} value={tg}>{tg}</option>)}
-            </select>
+          <div className="flex gap-[12px]">
+            <label className="flex flex-col gap-[6px]" style={{ flex: "1 1 220px", minWidth: 180 }}>
+              <span className={fieldLabel}>{t("settings.phraseName")}</span>
+              <input autoFocus value={modal.name} onChange={(e) => setModal({ ...modal, name: e.target.value })}
+                placeholder={t("settings.phraseName")} className={`w-full ${field("card")}`} />
+            </label>
+            <label className="flex flex-col gap-[6px]" style={{ flex: "0 0 160px" }}>
+              <span className={fieldLabel}>{t("phrases.tagLabel")}</span>
+              <select value={modal.tag} onChange={(e) => setModal({ ...modal, tag: e.target.value })} className={`w-full ${selectCls()}`}>
+                <option value="">{t("phrases.noTag")}</option>
+                {tags.map((tg) => <option key={tg} value={tg}>{tg}</option>)}
+              </select>
+            </label>
           </div>
-          <div className="flex items-baseline gap-[8px] mt-[10px] mb-[6px]">
-            <span className="flex-none text-[11.5px] font-semibold tracking-[.05em] text-faint">{t("settings.phraseContent")}</span>
-            <span className="flex-1" />
-            <span className="flex-none text-[10.5px] text-faint font-mono">{t("tools.phraseChars", { n: modal.content.length })}</span>
-          </div>
-          <textarea value={modal.content} onChange={(e) => setModal({ ...modal, content: e.target.value })}
-            placeholder={t("tools.phraseContentPh")}
-            className="w-full border border-border bg-bg text-text rounded-[9px] px-[11px] py-[9px] text-[12.5px] leading-[1.7] outline-none focus:border-orange resize-y"
-            style={{ minHeight: 220, maxHeight: 300 }} />
-          {!tags.length ? <div className="text-[11.5px] text-faint">{t("phrases.noTagsYet")}</div> : null}
+          <label className="flex flex-col gap-[6px]">
+            <span className={fieldLabel}>{t("phrases.content")}</span>
+            <textarea rows={5} value={modal.content} onChange={(e) => setModal({ ...modal, content: e.target.value })}
+              placeholder={t("tools.phraseContentPh")} className={`w-full ${textareaCls("card")}`} />
+          </label>
         </Modal>
       ) : null}
 
-      {menu ? (
+      {/* 换标签（480）：标签下拉 + 主钮「换标签」。选的还是原标签时按钮不亮。 */}
+      {retag && retagTarget ? (
+        <Modal width={480} title={t("phrases.retagTitle", { name: retagTarget.name })} onClose={() => setRetag(null)}
+          footer={<>
+            <span className="flex-1" />
+            <button className={btn("ghost")} onClick={() => setRetag(null)}>{t("common.cancel")}</button>
+            <button className={btn("primary")} disabled={!retagChanged} onClick={commitRetag}>{t("phrases.retag")}</button>
+          </>}>
+          <select autoFocus value={retag.tag} onChange={(e) => setRetag({ ...retag, tag: e.target.value })} className={`w-full ${selectCls()}`}>
+            <option value="">{t("phrases.untagged")}</option>
+            {tags.map((tg) => <option key={tg} value={tg}>{tg}</option>)}
+          </select>
+        </Modal>
+      ) : null}
+
+      {/* 右键菜单 168：编辑 ｜ 复制全文 ｜ 换标签 ｜ — ｜ 删除（红字）。 */}
+      {menu && menuTarget ? (
         <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
-          { label: t("common.edit"), onClick: () => { const p = phrases.find((x) => x.id === menu.id); if (p) openEdit(p); } },
+          { label: t("common.edit"), icon: <GlyphPencil size={13} />, onClick: () => openEdit(menuTarget) },
+          { label: t("phrases.copyFull"), icon: <GlyphCopy size={13} />, onClick: () => { void copy(menuTarget); } },
+          { label: t("phrases.retag"), icon: <IconPhrase size={13} />, onClick: () => setRetag({ id: menuTarget.id, tag: tagOf(menuTarget) }) },
           { divider: true },
-          { label: t("common.delete"), danger: true, onClick: () => { void askDelete(menu.id); } },
+          { label: t("common.delete"), danger: true, icon: <IconTrash size={13} />, onClick: () => { void askDelete(menuTarget.id); } },
         ]} />
       ) : null}
     </PageShell>
-  );
-}
-
-// ── 常用语设置（T3）：标签管理 + 快捷键 + 同步 ─────────────────────────────
-function PhrasesSettings({ phrases, tags, onTags, onPhrases }: {
-  phrases: Phrase[]; tags: string[]; onTags: (next: string[]) => void; onPhrases: (next: Phrase[]) => void;
-}) {
-  const { t } = useTranslation();
-  const [newName, setNewName] = useState("");
-  const [renaming, setRenaming] = useState<{ from: string; to: string } | null>(null);
-  const [merging, setMerging] = useState<{ from: string; to: string } | null>(null);
-  // 清单里没有但短语用到的标签也列出来（老触发词自动成为标签）。
-  const all = useMemo(() => {
-    const out = [...tags];
-    for (const p of phrases) { const k = (p.keyword || "").trim(); if (k && !out.includes(k)) out.push(k); }
-    return out;
-  }, [tags, phrases]);
-  const countOf = (tag: string) => phrases.filter((p) => (p.keyword || "").trim() === tag).length;
-
-  const addTag = () => {
-    const v = newName.trim();
-    if (!v) return;
-    if (all.includes(v)) { showToast(t("phrases.tagExists"), { tone: "warn" }); return; }
-    onTags([...all, v]);
-    setNewName("");
-  };
-  const doRename = () => {
-    if (!renaming) return;
-    const to = renaming.to.trim();
-    if (!to || to === renaming.from) { setRenaming(null); return; }
-    if (all.includes(to)) { showToast(t("phrases.tagExists"), { tone: "warn" }); return; }
-    onPhrases(phrases.map((p) => ((p.keyword || "").trim() === renaming.from ? { ...p, keyword: to } : p)));
-    onTags(all.map((x) => (x === renaming.from ? to : x)));
-    setRenaming(null);
-  };
-  const doMerge = () => {
-    if (!merging || !merging.to || merging.to === merging.from) { setMerging(null); return; }
-    onPhrases(phrases.map((p) => ((p.keyword || "").trim() === merging.from ? { ...p, keyword: merging.to } : p)));
-    onTags(all.filter((x) => x !== merging.from));
-    setMerging(null);
-  };
-  const doDelete = async (tag: string) => {
-    const n = countOf(tag);
-    const ok = await askConfirm({ message: t("phrases.deleteTagAsk", { name: tag, n }), confirmText: t("common.delete"), danger: true });
-    if (!ok) return;
-    // 删标签不删短语：短语转「无标签」。
-    onPhrases(phrases.map((p) => ((p.keyword || "").trim() === tag ? { ...p, keyword: undefined } : p)));
-    onTags(all.filter((x) => x !== tag));
-  };
-  const move = (tag: string, d: -1 | 1) => {
-    const i = all.indexOf(tag);
-    const j = i + d;
-    if (i < 0 || j < 0 || j >= all.length) return;
-    const next = all.slice();
-    [next[i], next[j]] = [next[j], next[i]];
-    onTags(next);
-  };
-
-  // 快捷键（从原来的常用语页搬过来，逻辑不变）。
-  const [shortcut, setShortcut] = useState(DEFAULT_PHRASES_SHORTCUT);
-  const { recording, start } = useHotkeyRecorder((acc) => { setShortcut(acc); void clipApi().setPhrasesShortcut(acc); });
-  const conflict = useHotkeyConflict("phrases", shortcut);
-  useEffect(() => {
-    if (!hasClip) return;
-    void clipApi().getSettings().then((s) => { if (s.phrasesShortcut) setShortcut(s.phrasesShortcut); });
-  }, []);
-
-  return (
-    <SettingsPage>
-      <SettingsSection title={t("phrases.secTags")} desc={t("phrases.secTagsDesc")}>
-        <RowsCard>
-          {all.map((tag, i) => (
-            <SettingRow key={tag} label={tag}>
-              <RowHint>{t("phrases.tagCount", { n: countOf(tag) })}</RowHint>
-              <button className={detailIconBtn} title={t("phrases.moveUp")} disabled={i === 0} onClick={() => move(tag, -1)}><IconUp size={13} /></button>
-              <button className={detailIconBtn} title={t("phrases.moveDown")} disabled={i === all.length - 1} onClick={() => move(tag, 1)}><IconDown size={13} /></button>
-              <button className={btn("ghost", "sm")} onClick={() => setRenaming({ from: tag, to: tag })}>{t("phrases.rename")}</button>
-              <button className={btn("ghost", "sm")} disabled={all.length < 2} onClick={() => setMerging({ from: tag, to: "" })}>{t("phrases.mergeInto")}</button>
-              <button className={btn("danger", "sm")} onClick={() => void doDelete(tag)}>{t("common.delete")}</button>
-            </SettingRow>
-          ))}
-          <SettingRow label={t("phrases.addTag")}>
-            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t("phrases.tagNamePh")}
-              onKeyDown={(e) => { if (e.key === "Enter") addTag(); }} className={`flex-1 ${field("card")}`} />
-            <button className={btn("ghost", "sm")} disabled={!newName.trim()} onClick={addTag}>{t("common.add")}</button>
-          </SettingRow>
-        </RowsCard>
-      </SettingsSection>
-
-      {hasClip ? (
-        <SettingsSection title={t("phrases.secHotkey")} desc={t("settings.phrasesShortcutHint")}>
-          {conflict ? <ErrorCard variant="strip" kind="warning" title={t("tools.hotkeyConflict", { owner: t(OWNER_LABEL[conflict]) })} /> : null}
-          <RowsCard>
-            <SettingRow label={t("settings.phrasesShortcut")}>
-              <div className="flex-1 min-w-0 flex items-center gap-[8px]">
-                <HotkeyButton recording={recording} value={shortcut} onClick={start} />
-                <button className={btn("ghost")} onClick={() => { setShortcut(DEFAULT_PHRASES_SHORTCUT); void clipApi().setPhrasesShortcut(DEFAULT_PHRASES_SHORTCUT); }}>
-                  {t("common.reset")}
-                </button>
-              </div>
-            </SettingRow>
-          </RowsCard>
-        </SettingsSection>
-      ) : null}
-
-      <SettingsSection title={t("phrases.secSync")} desc={t("phrases.secSyncDesc")}>
-        <RowsCard>
-          <SettingRow label={t("phrases.secSync")}>
-            <RowHint />
-            <SyncStatus />
-          </SettingRow>
-        </RowsCard>
-      </SettingsSection>
-
-      {renaming ? (
-        <Modal width={480} title={t("phrases.renameTitle")} onClose={() => setRenaming(null)} footer={<>
-          <span className="flex-1" />
-          <button className={btn("ghost")} onClick={() => setRenaming(null)}>{t("common.cancel")}</button>
-          <button className={btn("primary")} disabled={!renaming.to.trim()} onClick={doRename}>{t("common.save")}</button>
-        </>}>
-          <input autoFocus value={renaming.to} onChange={(e) => setRenaming({ ...renaming, to: e.target.value })}
-            onKeyDown={(e) => { if (e.key === "Enter") doRename(); }} className={`w-full ${field("card")}`} />
-        </Modal>
-      ) : null}
-      {merging ? (
-        <Modal width={480} title={t("phrases.mergeTitle", { name: merging.from })} onClose={() => setMerging(null)} footer={<>
-          <span className="flex-1" />
-          <button className={btn("ghost")} onClick={() => setMerging(null)}>{t("common.cancel")}</button>
-          <button className={btn("primary")} disabled={!merging.to} onClick={doMerge}>{t("phrases.mergeDo")}</button>
-        </>}>
-          <select value={merging.to} onChange={(e) => setMerging({ ...merging, to: e.target.value })} className={`w-full ${selectCls()}`}>
-            <option value="">{t("phrases.mergePick")}</option>
-            {all.filter((x) => x !== merging.from).map((x) => <option key={x} value={x}>{x}（{t("phrases.tagCount", { n: countOf(x) })}）</option>)}
-          </select>
-          <div className="text-[11.5px] text-faint leading-[1.65]">{t("phrases.mergeHint", { n: countOf(merging.from) })}</div>
-        </Modal>
-      ) : null}
-    </SettingsPage>
   );
 }

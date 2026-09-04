@@ -156,8 +156,8 @@ const SVG = {
   notify: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg>`,
   money: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path><path d="M4 10h16M9 15h2M15 15h.01"></path></svg>`,
   tools: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5a4 4 0 0 0 5 5L9 19a3 3 0 1 1-4-4z"></path></svg>`,
-  // 常用语（批次 012 答复定形：左侧一条竖条 + 右侧三条不等长横线，同 Lucide text-quote）。
-  phrases: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14M10 6h10M10 12h7M10 18h9"></path></svg>`,
+  // 常用语 phrase（umbra-icons 1.2.0 正式版，批次 013）：竖条贴左 5、三条横线 9 / 6 / 8 不等长。
+  phrases: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14"></path><path d="M10 7h9M10 12h6M10 17h8"></path></svg>`,
   // 以下三项的 path 照抄稿里 MODULES 对应条目的 d。
   flow: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6v5H4zM14 14h6v5h-6zM10 7.5h4a2 2 0 0 1 2 2v4"></path></svg>`,
   vault: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16v9H4zM8 11V7.5a4 4 0 0 1 8 0V11M12 15v2"></path></svg>`,
@@ -665,10 +665,19 @@ export function initLegacy(): void {
   document.addEventListener("click", onClick); // 委托：处理各页面/弹窗内的 data-act（含侧边栏 nav / 标题栏 theme）
   window.addEventListener("keydown", onKeydown);
   // 快捷入口「发给秘书」：跳到聊天页并把这条消息发给秘书。
-  const umbra = (window as unknown as { umbra?: { onLauncherSendChat?: (cb: (t: string) => void) => () => void } }).umbra;
-  umbra?.onLauncherSendChat?.((text) => {
+  // 批次 013 起主进程发的是 { text, atts? }（atts = 面板已传好的图片 file_id）：带图走
+  // sendTextWithAtts（一条 kind=text + atts 的消息，秘书先看图再入库），没图照旧 sendText。
+  // 老的裸字符串形状也兼容 —— 归一成对象再分流。
+  type LauncherChatMsg = string | { text: string; atts?: string[] };
+  const umbra = (window as unknown as { umbra?: { onLauncherSendChat?: (cb: (m: LauncherChatMsg) => void) => () => void } }).umbra;
+  umbra?.onLauncherSendChat?.((msg) => {
+    const m = typeof msg === "string" ? { text: msg } : (msg || { text: "" });
+    const text = String(m.text ?? "");
+    const atts = Array.isArray(m.atts) ? m.atts.filter((a): a is string => typeof a === "string" && !!a) : [];
+    if (!text.trim() && !atts.length) return;
     setNav("chat");
-    setTimeout(() => chat.sendText(text), 0); // 等聊天页挂载后再发，确保渲染
+    // 等聊天页挂载后再发，确保渲染。
+    setTimeout(() => { if (atts.length) chat.sendTextWithAtts(text, atts); else chat.sendText(text); }, 0);
   });
   // 窗口重新获得焦点时刷新权限状态（用户可能刚去系统设置授予了权限）。
   window.addEventListener("focus", () => {

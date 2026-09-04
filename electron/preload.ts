@@ -73,8 +73,10 @@ contextBridge.exposeInMainWorld("umbra", {
     return () => ipcRenderer.removeListener("umbra:locale-changed", l);
   },
   // 快捷入口「发给秘书」：跳聊天页并发送这条消息。
-  onLauncherSendChat: (cb: (text: string) => void) => {
-    const l = (_e: unknown, text: string) => cb(text);
+  // 批次 013 起主进程发的是 { text, atts? }（atts = 图片 file_id）；老的裸字符串形状也照收，
+  // 由渲染层自己归一（shell.ts）。
+  onLauncherSendChat: (cb: (msg: string | { text: string; atts?: string[] }) => void) => {
+    const l = (_e: unknown, msg: string | { text: string; atts?: string[] }) => cb(msg);
     ipcRenderer.on("umbra:launcher-send-chat", l);
     return () => ipcRenderer.removeListener("umbra:launcher-send-chat", l);
   },
@@ -116,10 +118,14 @@ contextBridge.exposeInMainWorld("umbraClip", {
 contextBridge.exposeInMainWorld("umbraLauncher", {
   query: (q: string) => ipcRenderer.invoke("launcher:query", q),
   run: (id: string, mod?: string) => ipcRenderer.invoke("launcher:run", id, mod || ""),
-  sendAssistant: (text: string) => ipcRenderer.invoke("launcher:sendAssistant", text),
+  // atts（批次 013）：面板已传好的图片 file_id（一期 1 张）。不传 = 老的纯文字。
+  sendAssistant: (text: string, atts?: string[]) => ipcRenderer.invoke("launcher:sendAssistant", text, atts || []),
   // 「/」功能菜单：内容统一发给秘书（先探服务端可达，离线在面板里报三段式卡）。
-  slashSend: (kind: string, text: string) => ipcRenderer.invoke("launcher:slashSend", kind, text),
+  slashSend: (kind: string, text: string, atts?: string[]) => ipcRenderer.invoke("launcher:slashSend", kind, text, atts || []),
   assistantOnline: () => ipcRenderer.invoke("launcher:assistantOnline"),
+  // 服务端地址 + 令牌（批次 013）：面板自己 POST /files/upload 传图用。
+  // 面板窗口没有 desktop.ts 那套配置灌入，渲染层的 getServerUrl() 在这里取不到真值。
+  getServerInfo: () => ipcRenderer.invoke("launcher:getServerInfo"),
   hide: () => ipcRenderer.invoke("launcher:hide"),
   getSettings: () => ipcRenderer.invoke("launcher:getSettings"),
   setEnabled: (enabled: boolean) => ipcRenderer.invoke("launcher:setEnabled", enabled),

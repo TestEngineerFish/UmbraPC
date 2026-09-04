@@ -25,6 +25,7 @@ import { askConfirm, showToast } from "../../components/overlay";
 import { EmptyState, RowsCard, RowHint, Segmented, SettingRow, btn } from "../../components/ui";
 import { Dashboard, PageShell, SettingsPage, SettingsSection, Skeleton } from "../../components/layout";
 import { AddEntry } from "./AddEntry";
+import * as legacy from "../../app/shell";
 import { MoneyStatsView } from "./MoneyStats";
 import { MoneyListFilters, MoneyListView, type MoneyDir } from "./MoneyList";
 import { MoneyCats } from "./MoneyCats";
@@ -32,6 +33,30 @@ import { RecurModal } from "./RecurModal";
 import { catIcon, ymOf, yuan } from "./moneyKit";
 
 type Phase = "loading" | "error" | "ready";
+
+/** 从别处（聊天里识图确认卡的「改成手动填」/ 识不出的「手动填一笔」）带着草稿来开「记一笔」弹窗。
+ *  atts 是已上传好的 file_id（原图）：弹窗保存成功后再挂到这笔账上（一笔存在之前挂不了附件）。 */
+export interface MoneyDraft {
+  cents?: number;
+  direction?: "expense" | "income";
+  cat?: string;
+  sub?: string;
+  merchant?: string;
+  at_ms?: number;
+  atts?: { file_id: string; label: string }[];
+}
+// 与 Tools.gotoTool / Settings.gotoSettings 同一套「先记目标再切一级导航」：Money 是路由式挂载的，
+// 切页时组件重建，值取一次就清 —— 否则下次手点进记账还会莫名弹出上次那张草稿。
+let pendingDraft: MoneyDraft | null = null;
+export function gotoMoneyAdd(draft: MoneyDraft): void {
+  pendingDraft = draft;
+  legacy.goNav("money");
+}
+function takePendingDraft(): MoneyDraft | null {
+  const d = pendingDraft;
+  pendingDraft = null;
+  return d;
+}
 
 export function Money() {
   const { t } = useTranslation();
@@ -48,6 +73,9 @@ export function Money() {
   const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [editEntry, setEditEntry] = useState<MoneyEntry | null>(null);
+  /** 从聊天带来的草稿（见 gotoMoneyAdd）：挂载时取一次，取到就直接开弹窗。 */
+  const [draft, setDraft] = useState<MoneyDraft | null>(() => takePendingDraft());
+  useEffect(() => { if (draft) setAddOpen(true); }, [draft]);
   /** 周期规则（二期）。null = 弹窗没开；"" = 开在列表态；非空 = 直接落某条的编辑态。 */
   const [rules, setRules] = useState<MoneyRecur[]>([]);
   const [recurOpen, setRecurOpen] = useState<string | null>(null);
@@ -116,7 +144,10 @@ export function Money() {
       header={{
         title: t("nav.money"),
         subtitle,
-        primary: { label: t("money.addOne"), onClick: () => setAddOpen(true) },
+        // 裁定 8（tokens.pageTemplate.shared.emptyHeaderPrimary）：真空态时页头不渲染「记一笔」，橙留给空态里那颗。
+        // 「真空」= isEmpty：phase 已 ready（不是 loading / error）&& 本月一笔流水都没有 && 统计收支都是 0。
+        // 筛选件只在流水态才有，isEmpty 时根本不显示，所以不用另查；流水态筛空是无结果态，主按钮照常在。
+        primary: isEmpty ? undefined : { label: t("money.addOne"), onClick: () => setAddOpen(true) },
         // 周期记账（二期）：带在跑条数。status 槽空着 —— 现有代码没有独立的刷新态（静默重拉不换骨架）。
         secondary: [{
           label: live ? `${t("money.recTitle")} · ${live}` : t("money.recTitle"),
@@ -173,8 +204,8 @@ export function Money() {
       )}
 
       {addOpen || editEntry ? (
-        <AddEntry cats={cats} entries={entries} initial={editEntry}
-          onClose={() => { setAddOpen(false); setEditEntry(null); }}
+        <AddEntry cats={cats} entries={entries} initial={editEntry} draft={editEntry ? null : draft}
+          onClose={() => { setAddOpen(false); setEditEntry(null); setDraft(null); }}
           onSaved={() => { showToast(t("money.saved"), { tone: "ok" }); void reload(true); }} />
       ) : null}
 
