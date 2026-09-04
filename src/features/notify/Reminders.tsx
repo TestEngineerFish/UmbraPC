@@ -1,4 +1,7 @@
-// 提醒页：列表 + 新建/编辑弹窗。
+// 提醒页：列表 + 新建/编辑弹窗。批次 012 起套页面骨架的 **T2 列表 + 弹窗**：
+//   页头：「提醒 · N 条」+ 同步戳（SyncStamp）+ 主按钮「新建提醒」；
+//   内容：ListModal 滚动容器，按分组（已过期 / 今天 / 明天 …）各一张 Group 卡，卡内逐行 GroupRow；
+//   空态走通用 EmptyState；编辑 / 新建仍是 560 宽的 Modal，删除仍是 ConfirmDialog。
 //
 // 数据全在主进程（core/notify），这里只做展示与派发 —— 到点触发、同步、角标都不归渲染层管，
 // 因为托盘常驻时主窗口可能根本没开着，逻辑放这里会整个失效。
@@ -8,11 +11,15 @@
 //
 // 纯逻辑（分组 / 文案 / 日期换算 / 默认值 / 校验）都在 reminderKit.ts，这里只管画。
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
-  ConfirmDialog, ErrorCard, Modal, Pill, Segmented, btnGhost, btnPrimary, field, select as selectCls,
+  ConfirmDialog, ContextMenu, EmptyState, ErrorCard, Modal, Pill, Segmented, btn, btnGhost, btnPrimary, field, select as selectCls,
   textarea as textareaCls,
 } from "../../components/ui";
+// 注意：本文件自己有一个 ReminderRow（原名 ListRow），和 layout 里的 ListRow 同名不同物 ——
+// 这里只用 T2 的三件（ListModal / Group / GroupRow），不要把 layout 的 ListRow 引进来。
+import { PageShell, ListModal, Group, GroupRow } from "../../components/layout";
 import { DateTimeField } from "../../components/DateTimePicker";
 import { IconImage, IconRepeat } from "../../components/icons";
 import { ImageViewer, openInViewerWindow } from "../../components/ImageViewer";
@@ -72,6 +79,7 @@ const fieldCard = field("card");
 const textareaCard = textareaCls("card");
 
 export function Reminders() {
+  const { t } = useTranslation();
   const [items, setItems] = useState<Reminder[]>([]);
   const [state, setState] = useState<NotifySyncState | null>(null);
   const [editing, setEditing] = useState<Reminder | null>(null);
@@ -118,11 +126,11 @@ export function Reminders() {
   }, [items, now]);
 
   if (!hasNotify) {
-    // 空态要有文案，不留空白（交接说明的硬约束）。
+    // 空态要有文案，不留空白（交接说明的硬约束）。骨架起改走通用 EmptyState，页头照常给。
     return (
-      <div className="p-5 text-[12.5px] text-muted">
-        提醒需要桌面端支持，当前环境没有注入提醒能力。
-      </div>
+      <PageShell header={{ title: t("notify.title") }}>
+        <EmptyState title={t("notify.desktopOnly")} body={t("notify.desktopOnlyBody")} />
+      </PageShell>
     );
   }
 
@@ -163,43 +171,43 @@ export function Reminders() {
   };
 
   return (
-    <div className="flex flex-col min-h-0 flex-1">
-      {/* 顶栏：标题 + 操作。刷新按钮和「N 分钟前同步」长在一起（SyncStamp），
-          原来一个在最左一个在最右，看起来像两件不相干的事。 */}
-      <div className="flex items-center gap-[10px] px-5 py-[14px] border-b border-border-soft">
-        <div className="text-[14px] font-semibold text-text flex-none whitespace-nowrap">提醒</div>
-        <div className="flex-1" />
+    <PageShell header={{
+      title: t("notify.title"),
+      subtitle: t("notify.countN", { n: items.length }),
+      /* 同步戳进页头的状态槽：刷新按钮和「N 分钟前同步」长在一起（SyncStamp），
+         原来一个在最左一个在最右，看起来像两件不相干的事。 */
+      status: (
         <SyncStamp
           state={state ? { ...state, offText: "没配服务器地址或令牌，只在这台电脑上生效" } : null}
           spinning={syncing}
           onSync={doSync}
         />
-        <button className={btnPrimary} onClick={() => openEditor(blank(), true)}>新建提醒</button>
-      </div>
-
-      {/* 列表 */}
-      <div id="scroll-main" className="flex-1 min-h-0 overflow-auto px-5 py-4">
-        {groups.length === 0 ? (
-          <div className="text-[12.5px] text-muted py-8 text-center">
-            还没有提醒。点右上角新建一条，到点会用系统通知叫你，也会同步到你的手机。
-          </div>
-        ) : (
-          groups.map(({ group, rows }) => (
-            <div key={group} className="mb-4">
-              <div className="text-[11.5px] text-muted mb-[6px] px-[2px]">{group}</div>
-              <div className="border border-border rounded-[12px] bg-card overflow-hidden">
-                {rows.map((r, i) => (
-                  <ListRow key={r.id} r={r} group={group} first={i === 0} now={now}
-                    onRefresh={refresh}
-                    onEdit={() => openEditor(r, false)}
-                    onClone={() => openEditor(cloneAsNew(r), true)}
-                    onRemove={() => setRemoving(r)} />
-                ))}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
+      ),
+      primary: { label: t("notify.newReminder"), onClick: () => openEditor(blank(), true) },
+    }}>
+      {/* 列表：T2 分组卡。分组头 = 分组名 + 条数，卡内逐行。 */}
+      {groups.length === 0 ? (
+        <EmptyState
+          title={t("notify.empty")}
+          body={t("notify.emptyBody")}
+          actionLabel={t("notify.newReminder")}
+          onAction={() => openEditor(blank(), true)}
+        />
+      ) : (
+        <ListModal>
+          {groups.map(({ group, rows }) => (
+            <Group key={group} title={group} count={t("notify.countN", { n: rows.length })}>
+              {rows.map((r) => (
+                <ReminderRow key={r.id} r={r} group={group} now={now}
+                  onRefresh={refresh}
+                  onEdit={() => openEditor(r, false)}
+                  onClone={() => openEditor(cloneAsNew(r), true)}
+                  onRemove={() => setRemoving(r)} />
+              ))}
+            </Group>
+          ))}
+        </ListModal>
+      )}
 
       {editing ? (
         <Editor value={editing} creating={creating} saveErr={saveErr} onRetry={() => setSaveErr("")}
@@ -227,18 +235,20 @@ export function Reminders() {
           onCancel={() => setRemoving(null)}
         />
       ) : null}
-    </div>
+    </PageShell>
   );
 }
 
-// 列表里的一行。动作按状态给：
-//   待办 → [再等 10 分钟（只对今天及已过期的给）] [编辑] [删除]
-//   已完成 → [再来一条] [删除] —— 完成的东西没有「编辑」，改它只会让历史记录对不上；
+// 列表里的一行（原名 ListRow，改名是为了不和 layout 的 ListRow 撞名）。外壳是 T2 的 GroupRow
+// （最小 52 高 / padding 11/14 / 行间发丝线 / hover 底），行内动作按钮用 sm 档（28）才装得进这一行。
+// 动作按状态给：
+//   待办 → [再等 10 分钟（只对今天及已过期的给）] [编辑]
+//   已完成 → [再来一条] —— 完成的东西没有「编辑」，改它只会让历史记录对不上；
 //   想再提醒一次就是一条新的。
-function ListRow({ r, group, first, now, onRefresh, onEdit, onClone, onRemove }: {
+// 「删除」不在行内（T2 规矩：行内不放删除，破坏性动作进右键菜单）—— 右键这一行。
+function ReminderRow({ r, group, now, onRefresh, onEdit, onClone, onRemove }: {
   r: Reminder;
   group: string;
-  first: boolean;
   now: number;
   onRefresh: () => Promise<void>;
   onEdit: () => void;
@@ -247,11 +257,10 @@ function ListRow({ r, group, first, now, onRefresh, onEdit, onClone, onRemove }:
 }) {
   const rep = repeatLabel(r);
   const attN = (r.atts || []).length;
+  const rowBtn = btn("ghost", "sm");
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   return (
-    <div
-      className="flex items-center gap-[10px] px-[13px] py-[10px]"
-      style={{ borderTop: first ? "none" : "1px solid var(--border-soft)" }}
-    >
+    <GroupRow onContextMenu={(e) => { e.preventDefault(); setMenu({ x: e.clientX, y: e.clientY }); }}>
       <button
         className="w-[17px] h-[17px] flex-none rounded-full border cursor-pointer bg-transparent"
         style={{
@@ -305,17 +314,25 @@ function ListRow({ r, group, first, now, onRefresh, onEdit, onClone, onRemove }:
       {r.dirty ? <Pill tone="warning">待同步</Pill> : null}
       {canSnooze(r, now) ? (
         <button
-          className={btnGhost}
+          className={rowBtn}
           onClick={async () => { await notifyApi().snooze(r.id, 10); await onRefresh(); showToast("已推迟 10 分钟", { tone: "ok" }); }}
         >
           再等 10 分钟
         </button>
       ) : null}
       {r.done
-        ? <button className={btnGhost} title="照这条再建一条新的（附件不带）" onClick={onClone}>再来一条</button>
-        : <button className={btnGhost} onClick={onEdit}>编辑</button>}
-      <button className={btnGhost} onClick={onRemove}>删除</button>
-    </div>
+        ? <button className={rowBtn} title="照这条再建一条新的（附件不带）" onClick={onClone}>再来一条</button>
+        : <button className={rowBtn} onClick={onEdit}>编辑</button>}
+      {menu ? (
+        <ContextMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)} items={[
+          r.done
+            ? { label: "再来一条", onClick: onClone }
+            : { label: "编辑", onClick: onEdit },
+          { divider: true },
+          { label: "删除", danger: true, onClick: onRemove },
+        ]} />
+      ) : null}
+    </GroupRow>
   );
 }
 
@@ -435,7 +452,7 @@ function Editor({ value, creating, saveErr, onRetry, onChange, onSave, onFail, o
 
   return (
     <Modal
-      width={520}
+      width={560}
       title={creating ? "新建提醒" : "编辑提醒"}
       onClose={onClose}
       footer={

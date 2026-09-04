@@ -1,6 +1,8 @@
-// 工作区页（React + Tailwind）。结构对齐 ClaudeDesign 的工作区稿：
-// 左边 396px 列表列（--rail 底：标题+计数+新增/刷新、搜索、筛选胶囊、工作区卡），
-// 右边详情列（monogram + 名称 + 路径 + 三个操作、四格统计条，下面「相关任务 / 描述」与「目录内容」两栏）。
+// 工作区页（React + Tailwind）。批次 012 起套页面骨架的 **T1 列表 + 详情**：
+// 页头（标题「工作区」+ 计数副标题 + 「新增」主按钮 + 「刷新」次级钮，刷新中旋转弧落在状态槽；
+// 第二行搜索 + 三档筛选芯片），左列表 400（--rail 底，行密度 ListRow：monogram + 名称 + 路径 + 任务数），
+// 右详情常驻（DetailHead：monogram + 名称 + 路径 / 打开位置 · 在此新建任务 · 移除，下面统计条，
+// 再下面「相关任务 / 描述」与 330px「目录内容」两栏）。原来列表栏里的标题 / 搜索 / 筛选 / 新增 / 刷新一律上移页头。
 // 工作区是服务端注册表（tasks 靠 project 名字引用），列表/描述/移除全走 REST；
 // 「目录内容」走 PC 侧的 umbra:listDir（只读顶层，不递归）。
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -11,8 +13,9 @@ import { getState } from "../../services/deviceTransport";
 import * as desktop from "../../services/desktop";
 import type { DirEntry } from "../../services/desktop";
 import * as legacy from "../../app/shell";
-import { btnGhost, btnPrimary, btnIcon, inputFlex, Modal, RefreshButton, filterChip, filterChipCount, EmptyState } from "../../components/ui";
-import { IconSearch, IconPlus, IconCopy, IconCheck, IconFolder, IconTrash, IconX, IconAlert, IconPencil } from "../../components/icons";
+import { btn, btnRow, btnGhost, btnPrimary, icon as iconBtn, inputFlex, Modal, filterChip, filterChipCount, EmptyState } from "../../components/ui";
+import { PageShell, HeaderSearch, ListDetail, ListRow, DetailHead, StatBar, SectionHeader, PageBanner, SyncSpinner, Skeleton } from "../../components/layout";
+import { IconCopy, IconCheck, IconFolder, IconTrash, IconAlert, IconPencil } from "../../components/icons";
 
 // 名字首字母（或首个汉字）做 monogram 方块 —— 设计规范里分类与记录一律用字母方块，不用彩色 emoji。
 function monogramOf(name: string): string {
@@ -42,16 +45,6 @@ const JOB_KEY: Record<string, string> = {
   failed: "tasks.statusFailed", cancelled: "tasks.statusCancelled", suspended: "tasks.statusSuspended",
 };
 
-// 分区小标题：11px 600 + 字距，几处共用。right 放右侧的链接式按钮。
-function SecLabel({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
-  return (
-    <div className="flex items-center gap-[8px] mb-[9px]">
-      <span className="flex-1 min-w-0 text-[11px] font-semibold tracking-[.06em] text-faint">{children}</span>
-      {right}
-    </div>
-  );
-}
-
 export function Workspaces() {
   const { t } = useTranslation();
   const [list, setList] = useState<Workspace[]>([]);
@@ -61,6 +54,8 @@ export function Workspaces() {
   const [selId, setSelId] = useState<string>("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  // 页头「刷新」的进行中标志（旋转弧落在页头状态槽）。
+  const [refreshing, setRefreshing] = useState(false);
   // 新增弹框
   const [adding, setAdding] = useState(false);
   const [form, setForm] = useState({ name: "", dir: "", description: "" });
@@ -68,7 +63,7 @@ export function Workspaces() {
   const [removing, setRemoving] = useState<Workspace | null>(null);
   const [purge, setPurge] = useState(false);
 
-  // 刷新按钮自己管自旋（RefreshButton 里有最短自旋时长），这里只负责取数。
+  // 取数；轮询与页头刷新都走它。
   const load = useCallback(async () => {
     const rows = await fetchWorkspaces();
     setList(rows);
@@ -80,6 +75,15 @@ export function Workspaces() {
     const timer = window.setInterval(() => void load(), 4000);
     return () => window.clearInterval(timer);
   }, [load]);
+
+  // 页头「刷新」：原 RefreshButton 里的最短自旋时长（550ms）搬到这里 —— 本地服务端一次列表请求
+  // 常常只要十几毫秒，光看请求状态旋转弧还没转起来就复位了，用户会以为按钮没反应。
+  const refresh = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    await Promise.all([load(), new Promise((r) => setTimeout(r, 550))]);
+    setRefreshing(false);
+  };
 
   const kw = q.trim().toLowerCase();
   const shown = useMemo(() => list.filter((w) => {
@@ -128,111 +132,89 @@ export function Workspaces() {
     void load();
   }
 
+  const filtering = !!kw || filter !== "all";
+  const clearFilter = () => { setQ(""); setFilter("all"); };
+
   return (
-    <div className="h-full relative flex min-h-0">
-      {/* ── 列表列 ── */}
-      <section className="w-[396px] flex-none border-r border-border bg-rail flex flex-col min-h-0">
-        <div className="flex-none flex flex-col gap-[11px] p-[14px_14px_11px] border-b border-border">
-          <div className="flex items-center gap-[9px]">
-            <span className="flex-none whitespace-nowrap text-[16px] font-semibold">{t("workspaces.title")}</span>
-            <span className="flex-1 min-w-0 truncate text-[11.5px] text-faint">
-              {t("workspaces.countLine", { n: list.length, auto: autoN })}
-            </span>
-            <button className={btnPrimary} onClick={() => { setErr(""); setAdding(true); }}>
-              <span className="flex items-center gap-1"><IconPlus size={12} />{t("workspaces.add")}</span>
+    <PageShell header={{
+      title: t("workspaces.title"),
+      subtitle: t("workspaces.countLine", { n: list.length, auto: autoN }),
+      status: refreshing ? <SyncSpinner /> : undefined,
+      primary: { label: t("common.add"), onClick: () => { setErr(""); setAdding(true); } },
+      secondary: [{ label: t("common.refresh"), onClick: () => void refresh() }],
+      secondRow: (<>
+        <HeaderSearch value={q} onChange={setQ} placeholder={t("workspaces.searchPlaceholder")} />
+        {FILTERS.map((f) => {
+          const on = filter === f.k;
+          return (
+            <button key={f.k} onClick={() => setFilter(f.k)} className={filterChip(on, "sm")}>
+              <span>{f.label}</span>
+              <span className={filterChipCount(on)}>{f.n}</span>
             </button>
-            <RefreshButton onClick={load} />
-          </div>
+          );
+        })}
+      </>),
+    }}>
+      {/* 局部错误（新增失败 / 设备未连接 / 文件没删掉）走通用横幅贴内容区顶部，不再自绘红条。 */}
+      {err ? <PageBanner title={err} actions={[{ label: t("common.close"), kind: "ghost", onClick: () => setErr("") }]} /> : null}
 
-          <div className="flex items-center gap-[7px] bg-card border border-border rounded-[8px] px-[9px] py-[5px]">
-            <span className="flex-none text-faint"><IconSearch size={12} /></span>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("workspaces.searchPlaceholder")}
-              className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
-          </div>
-
-          {/* 稿 2253 要求 flex-wrap：窄窗折行，不压缩。 */}
-          <div className="flex flex-wrap gap-[4px]">
-            {FILTERS.map((f) => {
-              const on = filter === f.k;
-              return (
-                <button key={f.k} onClick={() => setFilter(f.k)} className={filterChip(on, "sm")}>
-                  <span>{f.label}</span>
-                  <span className={filterChipCount(on)}>{f.n}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {err ? (
-          <div className="flex-none m-[9px_9px_0] flex items-start gap-[8px] bg-danger-soft border border-danger rounded-[10px] px-[11px] py-[9px]">
-            <span className="flex-none mt-px text-danger"><IconAlert size={13} /></span>
-            <span className="flex-1 min-w-0 text-[11.5px] text-danger leading-[1.55]">{err}</span>
-            <button className="flex-none bg-transparent text-danger" title={t("common.close")} onClick={() => setErr("")}><IconX size={12} /></button>
-          </div>
-        ) : null}
-
-        <div className="flex-1 overflow-y-auto p-[9px] flex flex-col gap-[7px]">
-          {shown.map((w) => {
-            const on = sel?.id === w.id;
-            return (
-              <div key={w.id} onClick={() => setSelId(w.id)}
-                className={`bg-card border rounded-[11px] p-[11px_13px] cursor-pointer ${
-                  on ? "border-orange shadow-[inset_3px_0_0_var(--orange)]" : "border-border hover:border-orange"}`}>
-                <div className="flex items-center gap-[10px]">
-                  <span className={`w-7 h-7 flex-none rounded-[8px] flex items-center justify-center text-[12px] font-semibold ${
-                    on ? "bg-orange text-white" : "bg-chip text-muted"}`}>{monogramOf(w.name)}</span>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-[7px]">
-                      <span className="flex-1 min-w-0 truncate text-[13px] font-medium">{w.name}</span>
-                      {w.origin === "auto" ? (
-                        <span className="flex-none whitespace-nowrap px-[7px] py-px rounded-full bg-chip text-muted text-[10px]">{t("workspaces.originAuto")}</span>
-                      ) : null}
+      <ListDetail
+        listEmpty={!shown.length}
+        list={<>
+          {/* 首屏走骨架；之后列表为空走通用空态。三种情形给的动作不一样：
+              搜/筛没结果 → 清空筛选；一个工作区都没有 → 新增。 */}
+          {loading && !list.length ? (
+            <Skeleton rows={3} />
+          ) : shown.length ? (
+            /* 行外再包一层 flex-none：ListRow 自带 min-h 52，直接当滚动容器的 flex 子项会在
+               列表溢出时被压到 52 高、两行内容叠到一起。 */
+            <div className="flex-none flex flex-col">
+              {shown.map((w) => {
+                const on = sel?.id === w.id;
+                return (
+                  <ListRow key={w.id} selected={on} onClick={() => setSelId(w.id)}>
+                    <div className="flex items-center gap-[10px]">
+                      <span className={`w-7 h-7 flex-none rounded-[8px] flex items-center justify-center text-[12px] font-semibold ${
+                        on ? "bg-orange text-white" : "bg-chip text-muted"}`}>{monogramOf(w.name)}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-[7px]">
+                          <span className="flex-1 min-w-0 truncate text-[13px] font-medium">{w.name}</span>
+                          {w.origin === "auto" ? (
+                            <span className="flex-none whitespace-nowrap px-[7px] py-px rounded-full bg-chip text-muted text-[10px]">{t("workspaces.originAuto")}</span>
+                          ) : null}
+                          <span className="flex-none whitespace-nowrap text-[10.5px] text-faint">{legacy.fmtListTime(w.last_active_at)}</span>
+                        </div>
+                        <div className="flex items-center gap-[8px] mt-[3px]">
+                          <span className="flex-1 min-w-0 truncate text-[11px] text-faint font-mono">
+                            {shortPath(w.dir) || t("workspaces.pathPending")}
+                          </span>
+                          <span className="flex-none whitespace-nowrap text-[10.5px] text-faint">{t("workspaces.taskCount", { count: w.task_count })}</span>
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-[11px] text-faint font-mono truncate mt-[3px]">
-                      {shortPath(w.dir) || t("workspaces.pathPending")}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-[9px] mt-[9px]">
-                  <span className="flex-none whitespace-nowrap px-[8px] py-px rounded-full bg-chip text-muted text-[10.5px]">
-                    {t("workspaces.taskCount", { count: w.task_count })}
-                  </span>
-                  <span className="flex-1" />
-                  <span className="flex-none whitespace-nowrap text-[10.5px] text-faint">{legacy.fmtListTime(w.last_active_at)}</span>
-                </div>
-              </div>
-            );
-          })}
-          {/* 空态走通用空态件。三种情形给的动作不一样：
-              搜/筛没结果 → 清空筛选；一个工作区都没有 → 新增；加载中 → 不给动作。 */}
-          {!shown.length ? (
-            <div className="py-6">
-              <EmptyState
-                compact
-                title={loading ? t("common.loading") : kw ? t("workspaces.noMatch", { q: kw }) : filter !== "all" ? t("workspaces.noneInFilter") : t("workspaces.empty")}
-                actionLabel={loading ? undefined : kw || filter !== "all" ? t("workspaces.clearFilter") : t("workspaces.add")}
-                onAction={loading ? undefined : kw || filter !== "all"
-                  ? () => { setQ(""); setFilter("all"); }
-                  : () => setAdding(true)}
-              />
+                  </ListRow>
+                );
+              })}
             </div>
-          ) : null}
-          <div className="mt-[4px] px-[12px] py-[11px] border border-dashed border-border rounded-[11px]">
+          ) : (
+            <EmptyState compact
+              title={kw ? t("workspaces.noMatch", { q: kw }) : filter !== "all" ? t("workspaces.noneInFilter") : t("workspaces.empty")}
+              actionLabel={filtering ? t("workspaces.clearFilter") : t("workspaces.add")}
+              onAction={filtering ? clearFilter : () => setAdding(true)} />
+          )}
+          <div className="flex-none m-[12px] px-[12px] py-[11px] border border-dashed border-border rounded-[11px]">
             <div className="text-[11.5px] text-muted leading-[1.65]">{t("workspaces.hint")}</div>
           </div>
-        </div>
-      </section>
-
-      {/* ── 详情列 ── */}
-      <main className="flex-1 min-w-0 flex flex-col min-h-0 bg-bg">
-        {sel ? <Detail w={sel} onRemove={() => { setRemoving(sel); setPurge(false); }} onSaved={() => void load()} />
-          : <div className="flex-1 flex items-center justify-center"><EmptyState title={t("workspaces.pickOne")} /></div>}
-      </main>
+        </>}
+        detail={sel ? (
+          <Detail w={sel} onRemove={() => { setRemoving(sel); setPurge(false); }} onSaved={() => void load()} />
+        ) : null}
+        placeholder={t("workspaces.pickOne")}
+      />
 
       {/* ── 新增弹框 ── */}
       {adding ? (
-        <Modal width={470} title={t("workspaces.newTitle")} onClose={() => setAdding(false)}
+        <Modal width={560} title={t("workspaces.newTitle")} onClose={() => setAdding(false)}
           footer={<>
             <span className="flex-1 min-w-0 truncate text-[11px] text-faint">{t("workspaces.newFootnote")}</span>
             <button className={btnGhost} onClick={() => setAdding(false)}>{t("common.cancel")}</button>
@@ -255,7 +237,7 @@ export function Workspaces() {
 
       {/* ── 移除弹框：两个单选（仅移除 / 连文件一起删），选后者时再加一块红色警告 ── */}
       {removing ? (
-        <Modal width={430} title={t("workspaces.removeTitle")} onClose={() => setRemoving(null)}
+        <Modal width={480} title={t("workspaces.removeTitle")} onClose={() => setRemoving(null)}
           footer={<>
             <span className="flex-1" />
             <button className={btnGhost} onClick={() => setRemoving(null)}>{t("common.cancel")}</button>
@@ -282,7 +264,7 @@ export function Workspaces() {
           ) : null}
         </Modal>
       ) : null}
-    </div>
+    </PageShell>
   );
 }
 
@@ -323,56 +305,63 @@ function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; 
   };
 
   return (<>
-    <div className="flex-none p-[15px_20px_14px] border-b border-border bg-card">
-      <div className="flex items-start gap-[12px]">
-        <span className="w-9 h-9 flex-none rounded-[10px] bg-orange-soft text-orange-text flex items-center justify-center text-[15px] font-semibold">{monogramOf(w.name)}</span>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-[8px]">
-            <span className="flex-1 min-w-0 truncate text-[16px] font-semibold">{w.name}</span>
-            {w.origin === "auto" ? (
-              <span className="flex-none whitespace-nowrap px-[7px] py-px rounded-full bg-chip text-muted text-[10px]">{t("workspaces.originAuto")}</span>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-[7px] mt-[6px]">
-            <span className="flex-1 min-w-0 truncate text-[11.5px] text-muted font-mono">{shortPath(w.dir) || t("workspaces.pathPending")}</span>
-            {w.dir ? (
-              <button className={btnIcon} title={t("workspaces.copyPath")} onClick={() => {
-                void navigator.clipboard.writeText(w.dir!).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
-              }}>{copied ? <IconCheck size={12} /> : <IconCopy size={12} />}</button>
-            ) : null}
-          </div>
-        </div>
-        <div className="flex-none flex gap-[7px]">
-          {w.dir ? (
-            <button className={btnGhost} onClick={() => void desktop.openPath(w.dir!)}>
-              <span className="flex items-center gap-1.5"><IconFolder size={12} />{t("workspaces.openFolder")}</span>
-            </button>
+    {/* 详情头走骨架件 DetailHead：monogram 当前导，名称当标题，路径（+ 复制）当副行；
+        右侧「打开位置 / 在此新建任务 / 移除」三颗 28 高小钮，移除是描边红。四格统计条改成 StatBar。 */}
+    <DetailHead
+      lead={
+        <span className="w-[24px] h-[24px] flex-none rounded-[7px] bg-orange-soft text-orange-text flex items-center justify-center text-[12.5px] font-semibold">
+          {monogramOf(w.name)}
+        </span>
+      }
+      title={
+        <span className="flex items-center gap-[8px]">
+          <span className="min-w-0 truncate">{w.name}</span>
+          {w.origin === "auto" ? (
+            <span className="flex-none whitespace-nowrap px-[7px] py-px rounded-full bg-chip text-muted text-[10px] font-normal">{t("workspaces.originAuto")}</span>
           ) : null}
-          {/* 「在此新建任务」跳到聊天页：任务是在对话里发起的，这里只负责把人送过去。 */}
-          <button className={btnGhost} onClick={() => legacy.goNav("chat")}>{t("workspaces.newTaskHere")}</button>
-          <button className={`${btnIcon} hover:border-danger hover:text-danger`} title={t("workspaces.remove")} onClick={onRemove}><IconTrash size={13} /></button>
-        </div>
-      </div>
+        </span>
+      }
+      sub={
+        <span className="flex items-center gap-[6px]">
+          <span className="min-w-0 truncate font-mono">{shortPath(w.dir) || t("workspaces.pathPending")}</span>
+          {w.dir ? (
+            <button className={iconBtn(22)} title={t("workspaces.copyPath")} onClick={() => {
+              void navigator.clipboard.writeText(w.dir!).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
+            }}>{copied ? <IconCheck size={12} /> : <IconCopy size={12} />}</button>
+          ) : null}
+        </span>
+      }
+      actions={<>
+        {w.dir ? (
+          <button className={btnRow("ghost", "sm")} onClick={() => void desktop.openPath(w.dir!)}>
+            <IconFolder size={12} />{t("workspaces.openFolder")}
+          </button>
+        ) : null}
+        {/* 「在此新建任务」跳到聊天页：任务是在对话里发起的，这里只负责把人送过去。 */}
+        <button className={btn("ghost", "sm")} onClick={() => legacy.goNav("chat")}>{t("workspaces.newTaskHere")}</button>
+        <button className={btnRow("danger", "sm")} title={t("workspaces.remove")} onClick={onRemove}>
+          <IconTrash size={12} />{t("workspaces.remove")}
+        </button>
+      </>}
+    />
+    <StatBar>
+      {stats.map((s) => (
+        <span key={s.k} className="flex-none flex items-baseline gap-[5px] min-w-0">
+          <span className="text-faint">{s.k}</span>
+          <span className="text-text font-medium truncate" title={s.v}>{s.v}</span>
+        </span>
+      ))}
+    </StatBar>
 
-      <div className="flex mt-[13px] border border-border rounded-[10px] overflow-hidden">
-        {stats.map((s, i) => (
-          <div key={s.k} className={`flex-1 min-w-0 flex flex-col gap-[2px] px-[12px] py-[8px] ${i < stats.length - 1 ? "border-r border-border" : ""}`}>
-            <div className="text-[10.5px] text-faint whitespace-nowrap">{s.k}</div>
-            <div className="text-[12.5px] font-medium truncate" title={s.v}>{s.v}</div>
-          </div>
-        ))}
-      </div>
-    </div>
-
-    <div className="flex-1 overflow-y-auto p-[16px_20px_28px]">
+    <div className="flex-1 overflow-y-auto p-[7px_20px_28px]">
       <div className="flex gap-[18px] items-start">
-        <div className="flex-1 min-w-0 flex flex-col gap-[16px]">
+        <div className="flex-1 min-w-0 flex flex-col gap-[10px]">
           <div>
-            <SecLabel right={
-              <button className="flex-none whitespace-nowrap bg-transparent text-[11.5px] text-orange-text" onClick={() => legacy.goNav("tasks")}>
+            <SectionHeader action={
+              <button className="flex-none whitespace-nowrap bg-transparent border-none p-0 text-[11.5px] text-orange-text cursor-pointer hover:text-orange-deep" onClick={() => legacy.goNav("tasks")}>
                 {t("workspaces.viewAllInTasks")}
               </button>
-            }>{t("workspaces.relatedJobs")}</SecLabel>
+            }>{t("workspaces.relatedJobs")}</SectionHeader>
             <div className="flex flex-col gap-[7px]">
               {tasks.map((j) => (
                 <div key={j.id} className="bg-card border border-border rounded-[10px] px-[12px] py-[10px]">
@@ -394,7 +383,7 @@ function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; 
           </div>
 
           <div>
-            <SecLabel>{t("workspaces.descTitle")}</SecLabel>
+            <SectionHeader>{t("workspaces.descTitle")}</SectionHeader>
             <div className="bg-card border border-border rounded-[11px] px-[13px] py-[12px]">
               {editing ? (
                 <textarea autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} rows={3}
@@ -407,12 +396,13 @@ function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; 
               )}
               <div className="flex items-center gap-[8px] mt-[11px]">
                 <span className="flex-1 min-w-0 text-[10.5px] text-faint">{t("workspaces.descFootnote")}</span>
+                {/* 「保存」不再是橙实心：一页只准一颗主按钮，那颗在页头（新增）。 */}
                 {editing ? (<>
-                  <button className={btnGhost} onClick={() => setEditing(false)}>{t("common.cancel")}</button>
-                  <button className={btnPrimary} disabled={saving} onClick={() => void saveDesc()}>{t("common.save")}</button>
+                  <button className={btn("ghost", "sm")} onClick={() => setEditing(false)}>{t("common.cancel")}</button>
+                  <button className={btn("ghost", "sm")} disabled={saving} onClick={() => void saveDesc()}>{t("common.save")}</button>
                 </>) : (
-                  <button className={btnGhost} onClick={() => { setDraft(w.description || ""); setEditing(true); }}>
-                    <span className="flex items-center gap-1.5"><IconPencil size={12} />{t("common.edit")}</span>
+                  <button className={btnRow("ghost", "sm")} onClick={() => { setDraft(w.description || ""); setEditing(true); }}>
+                    <IconPencil size={12} />{t("common.edit")}
                   </button>
                 )}
               </div>
@@ -422,9 +412,9 @@ function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; 
 
         {/* 目录内容：只读顶层前 5 项。走 PC 侧 IPC；Web 端没有桥 → total=-1 → 显示读不到。 */}
         <div className="w-[330px] flex-none">
-          <SecLabel right={dir.total >= 0 ? <span className="flex-none whitespace-nowrap text-[10.5px] text-faint">{t("workspaces.dirCount", { n: dir.total })}</span> : undefined}>
+          <SectionHeader count={dir.total >= 0 ? t("workspaces.dirCount", { n: dir.total }) : undefined}>
             {t("workspaces.dirTitle")}
-          </SecLabel>
+          </SectionHeader>
           <div className="bg-card border border-border rounded-[11px] overflow-hidden">
             {dir.items.map((f) => (
               <div key={f.name} className="flex items-center gap-[9px] px-[12px] py-[9px] border-b border-border-soft hover:bg-hover">
@@ -445,7 +435,7 @@ function Detail({ w, onRemove, onSaved }: { w: Workspace; onRemove: () => void; 
                 {dir.total > dir.items.length ? t("workspaces.dirTopN", { n: dir.items.length }) : ""}
               </span>
               {w.dir ? (
-                <button className="flex-none whitespace-nowrap bg-transparent text-[11px] text-orange-text" onClick={() => void desktop.openPath(w.dir!)}>
+                <button className="flex-none whitespace-nowrap bg-transparent border-none p-0 text-[11px] text-orange-text cursor-pointer hover:text-orange-deep" onClick={() => void desktop.openPath(w.dir!)}>
                   {t("workspaces.openInFinder")}
                 </button>
               ) : null}

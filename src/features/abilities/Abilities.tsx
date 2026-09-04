@@ -1,12 +1,20 @@
-// 能力页（React + Tailwind）。设备真实 Provider 卡片 + 启用开关 + 自定义程序增删改（含轻量覆盖）。
-import { useState } from "react";
+// 能力页（React + Tailwind）。设备真实 Provider + 启用开关 + 自定义程序增删改（含轻量覆盖），逻辑不变。
+// 批次 012 起套页面骨架的 **T1 列表 + 详情（卡片密度）**：
+//   页头：「能力 · 本机真实能力 · 设备 xxx」+ 主按钮「新增程序」+ 齿轮 → 能力设置（T3，放 CapSection）
+//   左列表 400：一列 Provider 卡（图标 / 名称 / 状态 / 启用开关 / 技能 chips），选中态由 ListCard 管
+//   右详情常驻：选中一张看它的技能清单（名 + 说明 + 参数占位）与「编辑 / 删除」；编辑 / 新增自定义程序的
+//   表单也在这一栏里 —— 原来的 460 右侧抽屉（遮罩 + 面板）作废，并入分栏。未选中时由 ListDetail 画占位。
+//   原来滚动容器里的弱头（h1 + 灰字 + 「新增」小钮）一并上移到页头。
+import { useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import * as desktop from "../../services/desktop";
 import * as legacy from "../../app/shell";
 import type { ProviderManifest, CustomProviderCfg } from "../../services/desktop";
-import { field } from "../../components/kit";
+import { btn, chip, field, fieldLabel, Toggle, EmptyState } from "../../components/ui";
+import { PageShell, ListDetail, CardList, ListCard, DetailHead, SectionHeader, SettingsPage, SettingsSection } from "../../components/layout";
+import { CapSection } from "../settings/sections";
 import { askConfirm, showToast } from "../../components/overlay";
-import { IconBrackets, IconPrompt, IconVideo, IconMonitor, IconWindow, IconGrid, IconPlus } from "../../components/icons";
+import { IconBrackets, IconPrompt, IconVideo, IconMonitor, IconWindow, IconGrid } from "../../components/icons";
 
 // provider → 图标。五张示例卡的取值照抄设计稿（1842 / 1856 / 1868 / 1882 / 1895）。
 // 认不出来的（用户自己加的程序）落到通用的方块图标，**不留字符兜底** ——
@@ -44,17 +52,24 @@ function hasCommandSkill(cfg?: CustomProviderCfg): boolean {
   return !!cfg && Object.values(cfg.skills || {}).some((s) => (s.command?.length ?? 0) > 0);
 }
 
+// 卡片副行与详情头副行共用的状态文案：停用 > 可用（版本 / 系统内置 / 已就绪）> 不可用原因。
+type T = (k: string, o?: Record<string, unknown>) => string;
+function providerStatus(m: ProviderManifest, enabled: boolean, t: T): string {
+  return !enabled ? t("abilities.disabled") : m.available ? (m.version ? `v${m.version}` : m.kind === "system" ? t("abilities.systemBuiltin") : t("abilities.ready")) : m.unavailable_reason || t("abilities.unavailable");
+}
+
 export function Abilities() {
   const { t } = useTranslation();
   const [form, setForm] = useState<ProvForm>(CLOSED);
+  // 列表里选中的 Provider（右侧看详情）。编辑态下高亮跟着表单走（form.original），新增时没有高亮。
+  const [selected, setSelected] = useState<string | null>(null);
   const ds = desktop.getDeviceState();
 
   if (!desktop.isDesktop() || !ds) {
     return (
-      <div className="h-full overflow-y-auto p-[18px_22px]">
-        <h1 className="m-0 mb-4 text-[16px] font-semibold">{t("abilities.title")}</h1>
-        <div className="text-muted p-10 text-center">{t("abilities.notReady")}</div>
-      </div>
+      <PageShell header={{ title: t("abilities.title") }}>
+        <EmptyState title={t("abilities.notReady")} />
+      </PageShell>
     );
   }
 
@@ -89,133 +104,215 @@ export function Abilities() {
     setForm(CLOSED);
   };
 
+  // 选中项被删掉（或设备重注册后不在了）时退回占位，不留一个指向空的详情。
+  const selM = selected ? ds.providers.find((p) => p.provider === selected) : undefined;
+
   return (
-    <div className="h-full overflow-y-auto p-[18px_22px] relative">
-      <div className="flex items-center justify-between mb-4 gap-3">
-        <div className="flex items-baseline gap-2.5">
-          <h1 className="m-0 text-[16px] font-semibold">{t("abilities.title")}</h1>
-          <span className="text-[12px] text-muted">{t("abilities.deviceHint", { name: ds.deviceName })}</span>
-        </div>
-        {/* 加号从文案里拆出来了：之前是全角「＋」拼在 i18n 串里，字形和基线跟正文对不齐。 */}
-        <button onClick={openAdd} className="flex items-center gap-1.5 px-[13px] py-1.5 border border-border bg-card text-text rounded-lg text-[13px] cursor-pointer shrink-0"><IconPlus size={14} />{t("abilities.addProgram")}</button>
-      </div>
-
-      <div className="grid grid-cols-2 gap-[13px]">
-        {ds.providers.map((m) => (
-          <ProviderCard key={m.provider} m={m} onEdit={() => openEdit(m.provider)} />
-        ))}
-      </div>
-
-      <div className="mt-3.5 text-[11.5px] text-muted">{t("abilities.footer")}</div>
-
-      {form.open ? <ProvModal form={form} setForm={setForm} onSave={save} onCancel={() => setForm(CLOSED)} /> : null}
-    </div>
+    <PageShell
+      header={{
+        title: t("abilities.title"),
+        subtitle: t("abilities.deviceHint", { name: ds.deviceName }),
+        // 表单开着时主按钮**不出现**：详情列里的「保存」就是这一页唯一的橙实心（骨架规矩：一页只准一颗），
+        // 灰掉的主按钮也还是第二颗；原来的抽屉带遮罩，开着时本来就点不到「新增」。
+        primary: form.open ? undefined : { label: t("abilities.addProgram"), onClick: () => { setSelected(null); openAdd(); } },
+      }}
+      settings={{
+        title: t("abilities.settingsTitle"),
+        backLabel: t("abilities.backLabel"),
+        content: (
+          <SettingsPage>
+            <SettingsSection title={t("settings.secCap")} desc={t("settings.secCapDesc")}>
+              <CapSection />
+            </SettingsSection>
+          </SettingsPage>
+        ),
+      }}>
+      <ListDetail
+        listEmpty={!ds.providers.length}
+        list={ds.providers.length ? (<>
+          <CardList>
+            {ds.providers.map((m) => (
+              <ProviderCard key={m.provider} m={m}
+                selected={form.open ? form.original === m.provider : selected === m.provider}
+                // 点的正是在编辑的那张：什么都不做，别把写了一半的表单丢掉。
+                onOpen={() => { if (form.open && form.original === m.provider) return; setForm(CLOSED); setSelected(m.provider); }} />
+            ))}
+          </CardList>
+          <div className="px-[14px] pb-[14px] text-[11px] text-faint leading-[1.6]">{t("abilities.footer")}</div>
+        </>) : (
+          <EmptyState compact title={t("abilities.notReady")} />
+        )}
+        detail={form.open ? (
+          <ProvEditor form={form} setForm={setForm} onSave={save} onCancel={() => setForm(CLOSED)} />
+        ) : selM ? (
+          <ProviderDetail m={selM} onEdit={() => openEdit(selM.provider)} />
+        ) : null}
+      />
+    </PageShell>
   );
 }
 
-function ProviderCard({ m, onEdit }: { m: ProviderManifest; onEdit: () => void }) {
+// 列表里的一张 Provider 卡（卡片密度）。选中态照骨架件：1px --orange + --orange-soft。
+function ProviderCard({ m, selected, onOpen }: { m: ProviderManifest; selected: boolean; onOpen: () => void }) {
+  const { t } = useTranslation();
+  const enabled = !desktop.isProviderDisabled(m.provider);
+  const isCustom = hasCommandSkill(desktop.getCustomProviders().find((p) => p.provider === m.provider));
+  const Ico = providerIcon(m.provider);
+  const skills = Object.keys(m.skills || {});
+
+  return (
+    <ListCard selected={selected} onClick={onOpen}>
+      <div className={enabled && !m.available ? "opacity-70" : ""}>
+        <div className="flex items-center gap-[11px]">
+          <span className="w-[32px] h-[32px] rounded-[9px] bg-orange-soft text-orange-text flex items-center justify-center flex-none">
+            <Ico size={17} />
+          </span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[13px] font-semibold truncate">
+              {m.display_name || m.provider}
+              {isCustom ? <span className="text-[10.5px] text-muted font-normal ml-1">{t("abilities.custom")}</span> : null}
+            </div>
+            <div className="text-[11.5px] text-muted truncate">{providerStatus(m, enabled, t)}</div>
+          </div>
+          {/* 开关是卡内动作，点它不算「看详情」—— 拦掉冒泡，别顺手把卡选中。 */}
+          <span className="flex-none flex" onClick={(e) => e.stopPropagation()}>
+            <Toggle on={enabled} onClick={() => legacy.toggleProviderEnabled(m.provider)} />
+          </span>
+        </div>
+        {skills.length ? (
+          <div className="flex flex-wrap gap-[6px] mt-[9px]">
+            {skills.map((s) => <span key={s} className={`${chip()} font-mono`}>{s}</span>)}
+          </div>
+        ) : null}
+      </div>
+    </ListCard>
+  );
+}
+
+// 右侧详情（只读）：详情头 = 图标 + 名称 + 「标识 · 状态」，右上角 编辑 / 删除（只有 program 类可编辑，
+// 只有带命令技能的自定义程序可删 —— 和原来卡片上那两颗小钮的出现条件一字不差）；
+// 下面按分区列技能：技能名等宽 + 参数占位 chips（悬停看参数说明）+ 说明文字。
+function ProviderDetail({ m, onEdit }: { m: ProviderManifest; onEdit: () => void }) {
   const { t } = useTranslation();
   const enabled = !desktop.isProviderDisabled(m.provider);
   const cfgEntry = desktop.getCustomProviders().find((p) => p.provider === m.provider);
   const isCustom = hasCommandSkill(cfgEntry);
   const canEdit = m.kind === "program";
-  const status = !enabled ? t("abilities.disabled") : m.available ? (m.version ? `v${m.version}` : m.kind === "system" ? t("abilities.systemBuiltin") : t("abilities.ready")) : m.unavailable_reason || t("abilities.unavailable");
+  const Ico = providerIcon(m.provider);
+  const skills = Object.entries(m.skills || {});
+  const name = m.display_name || m.provider;
 
-  return (
-    <div className={`bg-card border border-border rounded-xl p-[15px] ${enabled && !m.available ? "opacity-70" : ""}`}>
-      <div className="flex items-center gap-[11px] mb-3">
-        <span className="w-[34px] h-[34px] rounded-[9px] bg-orange-soft text-orange-text flex items-center justify-center shrink-0">
-          {(() => { const Ico = providerIcon(m.provider); return <Ico size={18} />; })()}
-        </span>
-        <div className="flex-1 min-w-0">
-          <div className="font-semibold">
-            {m.display_name || m.provider}
-            {isCustom ? <span className="text-[10.5px] text-muted font-normal ml-1">{t("abilities.custom")}</span> : null}
-          </div>
-          <div className="text-[11.5px] text-muted">{status}</div>
-        </div>
-        <Toggle on={enabled} onClick={() => legacy.toggleProviderEnabled(m.provider)} />
-      </div>
-      <div className="flex flex-wrap gap-1.5 items-center">
-        {Object.keys(m.skills || {}).map((s) => (
-          <span key={s} className="px-[9px] py-[3px] rounded-full bg-chip text-[11.5px] text-muted font-mono">{s}</span>
-        ))}
-        {canEdit ? (
-          <>
-            <span className="flex-1" />
-            <button onClick={onEdit} className="px-2.5 py-[3px] border border-border bg-transparent text-text rounded-md text-[11.5px] cursor-pointer">{t("common.edit")}</button>
-            {isCustom ? <button onClick={() => void askConfirm({
-              message: t("abilities.deleteConfirm", { name: m.display_name || m.provider }),
-              confirmText: t("common.delete"),
-              danger: true,
-            }).then((ok) => { if (ok) { legacy.deleteCustomProvider(m.provider); showToast(t("abilities.deleted", { name: m.display_name || m.provider }), { tone: "ok" }); } })} className="px-2.5 py-[3px] border border-danger bg-transparent text-danger rounded-md text-[11.5px] cursor-pointer">{t("common.delete")}</button> : null}
-          </>
+  return (<>
+    <DetailHead
+      lead={<span className="w-[24px] h-[24px] rounded-[7px] bg-orange-soft text-orange-text flex items-center justify-center"><Ico size={14} /></span>}
+      title={<>{name}{isCustom ? <span className="ml-[6px] text-[11px] text-muted font-normal">{t("abilities.custom")}</span> : null}</>}
+      sub={<><span className="font-mono">{m.provider}</span> · {providerStatus(m, enabled, t)}</>}
+      actions={canEdit ? (<>
+        <button className={btn("ghost", "sm")} onClick={onEdit}>{t("common.edit")}</button>
+        {isCustom ? (
+          // 破坏性动作：描边红，放详情头（不进页头主按钮位）。
+          <button className={btn("danger", "sm")} onClick={() => void askConfirm({
+            message: t("abilities.deleteConfirm", { name }),
+            confirmText: t("common.delete"),
+            danger: true,
+          }).then((ok) => { if (ok) { legacy.deleteCustomProvider(m.provider); showToast(t("abilities.deleted", { name }), { tone: "ok" }); } })}>{t("common.delete")}</button>
         ) : null}
+      </>) : undefined}
+    />
+    {/* SectionHeader 自带 14 的横向内距，外层再给 6 → 和详情头的 20 对齐。 */}
+    <div className="flex-1 min-h-0 overflow-y-auto p-[6px_6px_28px]">
+      <SectionHeader count={skills.length}>{t("abilities.secSkills")}</SectionHeader>
+      <div className="px-[14px]">
+        {skills.length ? (
+          <div className="bg-card border border-border rounded-[11px] px-[14px] max-w-[600px]">
+            {skills.map(([k, s]) => {
+              const params = Object.keys(s.params || {});
+              return (
+                <div key={k} className="py-[10px] border-b border-border-soft last:border-b-0">
+                  <div className="flex flex-wrap items-center gap-[6px]">
+                    <span className="text-[12.5px] font-medium font-mono mr-[2px]">{k}</span>
+                    {params.map((p) => <span key={p} className={`${chip()} font-mono`} title={s.params[p]}>{`{${p}}`}</span>)}
+                  </div>
+                  {s.description ? <div className="text-[11.5px] text-muted mt-[3px] leading-[1.6]">{s.description}</div> : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-[12.5px] text-muted">{t("common.none")}</div>
+        )}
       </div>
     </div>
-  );
-}
-
-function Toggle({ on, onClick }: { on: boolean; onClick: () => void }) {
-  return (
-    <button onClick={onClick} className={`w-[36px] h-[21px] rounded-full p-[2px] flex shrink-0 transition-colors ${on ? "justify-end bg-orange" : "justify-start bg-border"}`}>
-      <span className="w-[17px] h-[17px] rounded-full bg-white shadow" />
-    </button>
-  );
+  </>);
 }
 
 // 走工厂：之前这行是自己拼的近似值（圆角 8、无 hover、**完全没有聚焦态**），
 // 换成 field() 之后跟着设计稿走 —— 高 32 / 圆角 7 / 聚焦描边转橙 + 3px 橙软光环。
+// 表单落在 --card 卡里，所以输入框用 --bg 底（kit 的规矩：卡里用 bg，弹窗里才用 card）。
 const inp = `w-full ${field("bg")}`;
 
-function ProvModal({ form, setForm, onSave, onCancel }: { form: ProvForm; setForm: (f: ProvForm) => void; onSave: () => void; onCancel: () => void }) {
+// 表单字段：统一的字段标签（kit.fieldLabel）+ 控件，竖排 5px 间距。
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-[5px]">
+      <span className={fieldLabel}>{label}</span>
+      {children}
+    </label>
+  );
+}
+
+// 编辑 / 新增自定义程序的表单 —— 原来是 460 宽的右侧抽屉，现在是详情列里的常驻内容：
+// 详情头放标题（编辑程序 / 新增程序）+ 取消 / 保存，下面滚动区铺表单（基本信息一张卡，技能逐张卡）。
+function ProvEditor({ form, setForm, onSave, onCancel }: { form: ProvForm; setForm: (f: ProvForm) => void; onSave: () => void; onCancel: () => void }) {
   const { t } = useTranslation();
   const set = (patch: Partial<ProvForm>) => setForm({ ...form, ...patch });
   const setSkill = (i: number, patch: Partial<SkillForm>) => set({ skills: form.skills.map((s, j) => (j === i ? { ...s, ...patch } : s)) });
-  return (
-    <>
-      <div onClick={onCancel} className="absolute inset-0 bg-black/30 z-30" />
-      <div className="absolute top-0 right-0 bottom-0 w-[460px] bg-card border-l border-border z-[31] flex flex-col">
-        <div className="flex items-center justify-between p-[15px_20px] border-b border-border">
-          <div className="font-semibold text-[15px]">{form.original ? t("abilities.editProgram") : t("abilities.addProgramTitle")}</div>
-          <button onClick={onCancel} className="border-0 bg-transparent text-muted cursor-pointer text-[20px] leading-none">×</button>
+  return (<>
+    <DetailHead
+      title={form.original ? t("abilities.editProgram") : t("abilities.addProgramTitle")}
+      sub={form.original ? <span className="font-mono">{form.original}</span> : undefined}
+      actions={<>
+        <button className={btn("ghost", "sm")} onClick={onCancel}>{t("common.cancel")}</button>
+        <button className={btn("primary", "sm")} onClick={onSave}>{t("common.save")}</button>
+      </>}
+    />
+    <div className="flex-1 min-h-0 overflow-y-auto p-[16px_20px_28px]">
+      <div className="max-w-[560px] flex flex-col gap-[14px]">
+        {form.light ? <div className="text-[12px] text-muted bg-chip rounded-[8px] p-[9px_11px] leading-[1.5]">{t("abilities.builtinHint")}</div> : null}
+        <div className="bg-card border border-border rounded-[12px] p-[16px] flex flex-col gap-[12px]">
+          <Field label={t("abilities.providerId")}>
+            <input value={form.provider} onChange={(e) => set({ provider: e.target.value })} readOnly={!!form.original} placeholder={t("abilities.providerIdPh")} className={`${inp} ${form.original ? "opacity-60" : ""}`} />
+          </Field>
+          <Field label={t("abilities.displayName")}>
+            <input value={form.display_name} onChange={(e) => set({ display_name: e.target.value })} placeholder={t("abilities.displayNamePh")} className={inp} />
+          </Field>
+          <Field label={t("abilities.detectCmd")}>
+            <input value={form.detect} onChange={(e) => set({ detect: e.target.value })} placeholder={t("abilities.detectCmdPh")} className={inp} />
+          </Field>
         </div>
-        <div className="flex-1 overflow-y-auto p-[18px_20px]">
-          {form.light ? <div className="text-[12px] text-muted bg-chip rounded-lg p-[9px_11px] mb-3.5 leading-[1.5]">{t("abilities.builtinHint")}</div> : null}
-          <label className="text-[12px] text-muted">{t("abilities.providerId")}</label>
-          <input value={form.provider} onChange={(e) => set({ provider: e.target.value })} readOnly={!!form.original} placeholder={t("abilities.providerIdPh")} className={`${inp} my-[5px_0_12px] ${form.original ? "opacity-60" : ""}`} />
-          <label className="text-[12px] text-muted">{t("abilities.displayName")}</label>
-          <input value={form.display_name} onChange={(e) => set({ display_name: e.target.value })} placeholder={t("abilities.displayNamePh")} className={`${inp} my-[5px_0_12px]`} />
-          <label className="text-[12px] text-muted">{t("abilities.detectCmd")}</label>
-          <input value={form.detect} onChange={(e) => set({ detect: e.target.value })} placeholder={t("abilities.detectCmdPh")} className={`${inp} my-[5px_0_14px]`} />
 
-          {!form.light ? (
-            <>
-              <div className="text-[12px] text-muted font-semibold mb-2">{t("abilities.skills")}</div>
-              {form.skills.map((s, i) => (
-                <div key={i} className="border border-border rounded-[10px] p-[11px] mb-[9px]">
-                  <div className="flex justify-between items-center mb-[7px]">
-                    <span className="text-[12px] text-muted font-semibold">{t("abilities.skillN", { n: i + 1 })}</span>
-                    {form.skills.length > 1 ? <button onClick={() => set({ skills: form.skills.filter((_, j) => j !== i) })} className="border-0 bg-transparent text-danger cursor-pointer text-[12px]">{t("common.delete")}</button> : null}
-                  </div>
-                  <input value={s.skill} onChange={(e) => setSkill(i, { skill: e.target.value })} placeholder={t("abilities.skillNamePh")} className={`${inp} mb-1.5`} />
-                  <input value={s.description} onChange={(e) => setSkill(i, { description: e.target.value })} placeholder={t("abilities.skillDescPh")} className={`${inp} mb-1.5`} />
-                  <input value={s.command} onChange={(e) => setSkill(i, { command: e.target.value })} placeholder={t("abilities.skillCmdPh")} className={`${inp} font-mono mb-1.5`} />
-                  <label className="flex items-center gap-1.5 text-[12px] text-muted">
-                    <input type="checkbox" checked={s.confirm} onChange={(e) => setSkill(i, { confirm: e.target.checked })} />
-                    {t("abilities.confirmBeforeRun")}
-                  </label>
+        {!form.light ? (
+          <>
+            <div className="text-[12px] text-muted font-semibold leading-[1.5]">{t("abilities.skills")}</div>
+            {form.skills.map((s, i) => (
+              <div key={i} className="bg-card border border-border rounded-[12px] p-[14px] flex flex-col gap-[8px]">
+                <div className="flex justify-between items-center">
+                  <span className={fieldLabel}>{t("abilities.skillN", { n: i + 1 })}</span>
+                  {form.skills.length > 1 ? <button onClick={() => set({ skills: form.skills.filter((_, j) => j !== i) })} className="border-0 bg-transparent text-danger cursor-pointer text-[12px]">{t("common.delete")}</button> : null}
                 </div>
-              ))}
-              <button onClick={() => set({ skills: [...form.skills, { ...EMPTY_SKILL }] })} className="w-full p-2 border border-dashed border-border bg-transparent text-muted rounded-lg text-[12.5px] cursor-pointer">{t("abilities.addSkill")}</button>
-            </>
-          ) : null}
-        </div>
-        <div className="p-[14px_20px] border-t border-border flex gap-2.5 justify-end">
-          <button onClick={onCancel} className="px-4 py-2 border border-border bg-transparent text-text rounded-lg text-[13px] cursor-pointer">{t("common.cancel")}</button>
-          <button onClick={onSave} className="px-4 py-2 bg-orange text-white border-0 rounded-lg text-[13px] font-semibold cursor-pointer">{t("common.save")}</button>
-        </div>
+                <input value={s.skill} onChange={(e) => setSkill(i, { skill: e.target.value })} placeholder={t("abilities.skillNamePh")} className={inp} />
+                <input value={s.description} onChange={(e) => setSkill(i, { description: e.target.value })} placeholder={t("abilities.skillDescPh")} className={inp} />
+                <input value={s.command} onChange={(e) => setSkill(i, { command: e.target.value })} placeholder={t("abilities.skillCmdPh")} className={`${inp} font-mono`} />
+                <label className="flex items-center gap-[6px] text-[12px] text-muted cursor-pointer select-none">
+                  <input type="checkbox" className="accent-orange" checked={s.confirm} onChange={(e) => setSkill(i, { confirm: e.target.checked })} />
+                  {t("abilities.confirmBeforeRun")}
+                </label>
+              </div>
+            ))}
+            <button onClick={() => set({ skills: [...form.skills, { ...EMPTY_SKILL }] })} className="w-full h-[32px] border border-dashed border-border bg-transparent text-muted rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text">{t("abilities.addSkill")}</button>
+          </>
+        ) : null}
       </div>
-    </>
-  );
+    </div>
+  </>);
 }

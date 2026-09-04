@@ -236,7 +236,7 @@ export function RecurModal({ cats, rules, initialEditId, onClose, onChanged }: {
   // ── 列表态
   if (!draft) {
     return (
-      <Modal width={620} title={t("money.recTitle")} sub={t("money.recSub", { total: rules.length, live })}
+      <Modal width={680} title={t("money.recTitle")} sub={t("money.recSub", { total: rules.length, live })}
         onClose={onClose}
         footer={
           <div className="flex items-center gap-[10px] w-full">
@@ -284,7 +284,7 @@ export function RecurModal({ cats, rules, initialEditId, onClose, onChanged }: {
   // ── 编辑态
   const dayOfFirst = Number(draft.firstDate.slice(8, 10));
   return (
-    <Modal width={620} title={draft.id ? t("money.recEditTitle") : t("money.recNewTitle")}
+    <Modal width={560} title={draft.id ? t("money.recEditTitle") : t("money.recNewTitle")}
       onClose={() => setDraft(null)}
       footer={
         <div className="flex items-center gap-[10px] w-full">

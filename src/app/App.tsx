@@ -12,6 +12,9 @@ import { Reminders } from "../features/notify/Reminders";
 import { Money } from "../features/money/Money";
 import { Abilities } from "../features/abilities/Abilities";
 import { Tools } from "../features/tools/Tools";
+import { Phrases } from "../features/phrases/Phrases";
+import { ChatSettingsOverlay } from "../features/chat/ChatSettings";
+import { setOpenSettings as setChatOpenSettings } from "../features/chat/chat";
 import { subscribeLocale } from "../i18n";
 import { OverlayHost } from "../components/overlay";
 
@@ -35,12 +38,17 @@ function LegacyHost({ html, onMounted, style }: { html: string; onMounted?: () =
 export function App() {
   const [, bump] = useReducer((x: number) => x + 1, 0);
   const [nav, setNav] = useState<Nav>(legacy.getNav());
+  // 聊天设置视图（批次 012）：聊天页是命令式 DOM，它的齿轮只能发信号，视图由这里挂在聊天页之上。
+  const [chatSettings, setChatSettings] = useState(false);
 
   useEffect(() => {
     legacy.setBridge(() => bump(), (n) => setNav(n));
     legacy.initLegacy();
+    setChatOpenSettings(() => setChatSettings(true));
     return subscribeLocale(() => bump());
   }, []);
+  // 切走聊天页就关掉（不记忆设置视图，和 PageShell 同一条规矩）。
+  useEffect(() => { if (nav !== "chat") setChatSettings(false); }, [nav]);
 
   const dark = legacy.isDark();
   return (
@@ -69,6 +77,8 @@ export function App() {
             <Money />
           ) : nav === "abilities" ? (
             <Abilities />
+          ) : nav === "phrases" ? (
+            <Phrases />
           ) : legacy.TOOLS_NAV.includes(nav) ? (
             /* 工作流 / 密码保险箱 / 运行时环境 / 小工具四项共用这一个视图，
                进哪个子页由 Tools 自己按当前 nav 取值决定（稿 4884-4889）。 */
@@ -85,6 +95,7 @@ export function App() {
               }}
             />
           )}
+          {nav === "chat" && chatSettings ? <ChatSettingsOverlay onClose={() => setChatSettings(false)} /> : null}
         </main>
       </div>
       {/* 吐司与确认弹窗的唯一宿主。挂在根上而不是各页自己画，页面切换时浮层才不会跟着卸载。 */}

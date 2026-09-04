@@ -16,7 +16,7 @@ import { askConfirm, showToast } from "../components/overlay";
 // 它们共用同一个 tools 视图，靠这里的取值决定进哪个子页 —— 不是四个独立页面。
 // 之前只有一个 "tools"，四个功能全塞在它的二级侧栏里，跟稿差了一整层。
 export type Nav = "chat" | "tasks" | "notify" | "money" | "workspaces" | "inspiration"
-  | "abilities" | "flow" | "realtime" | "vault" | "runtime" | "tools"
+  | "abilities" | "flow" | "realtime" | "vault" | "runtime" | "tools" | "phrases"
   | "logs" | "settings";
 
 // 走 tools 视图的四项。用于判断「要不要显示 190px 二级目录」——
@@ -156,6 +156,8 @@ const SVG = {
   notify: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.7 21a2 2 0 0 1-3.4 0"></path></svg>`,
   money: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"></path><path d="M4 10h16M9 15h2M15 15h.01"></path></svg>`,
   tools: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 3.5a4 4 0 0 0 5 5L9 19a3 3 0 1 1-4-4z"></path></svg>`,
+  // 常用语（批次 012 答复定形：左侧一条竖条 + 右侧三条不等长横线，同 Lucide text-quote）。
+  phrases: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M5 5v14M10 6h10M10 12h7M10 18h9"></path></svg>`,
   // 以下三项的 path 照抄稿里 MODULES 对应条目的 d。
   flow: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h6v5H4zM14 14h6v5h-6zM10 7.5h4a2 2 0 0 1 2 2v4"></path></svg>`,
   vault: `<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 11h16v9H4zM8 11V7.5a4 4 0 0 1 8 0V11M12 15v2"></path></svg>`,
@@ -243,6 +245,7 @@ function sidebar(): string {
     ${navItem("vault", t("nav.vault"), SVG.vault)}
     ${navItem("runtime", t("nav.runtime"), SVG.runtime)}
     ${navItem("tools", t("nav.tools"), SVG.tools)}
+    ${navItem("phrases", t("nav.phrases"), SVG.phrases)}
     <div style="flex:1;min-height:10px;"></div>
     <div style="border-top:1px solid rgba(255,255,255,.07);padding-top:9px;display:flex;flex-direction:column;gap:2px;">
       ${navItem("logs", t("nav.logs"), SVG.logs, true)}

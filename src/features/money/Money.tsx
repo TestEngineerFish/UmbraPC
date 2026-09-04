@@ -1,24 +1,33 @@
-// 记账页（一级导航「记账」）。一期 = 统计 + 流水 + 记一笔 + 设置里的分类管理，
-// 分期依据见 doc/记账-实现方案.md §4：这一期是后面三期（周期/预算/截图导入）的地基。
+// 记账页（一级导航「记账」）。批次 012 起套页面骨架：
+//   页头：「记账 · M 月 · N 笔」+ 主按钮「记一笔」+ 次级「周期记账 · 在跑数」+ 齿轮（记账设置）；
+//   第二行：最左「统计 / 流水」分段，流水态再接筛选件（月份 / 收支 / 分类 / 搜索 / 清空）；
+//   统计态 = T4 仪表盘（Dashboard + CardGrid + DashCard，卡在 MoneyStats.tsx）；
+//   流水态 = T2（ListModal full + 按天 Group + FooterTotal，在 MoneyList.tsx）；
+//   记账设置（PageShell 的 settings）= T3：「分类与色槽」（原总设置那页整块搬来）+ 「周期记账」入口。
+// 原来自绘的顶栏 / 骨架 / absolute 根容器全部退场，页面根就是 PageShell。
+//
+// 一期 = 统计 + 流水 + 记一笔 + 分类管理，分期依据见 doc/记账-实现方案.md §4：
+// 这一期是后面三期（周期/预算/截图导入）的地基。
 //
 // 页面状态一共四种（对齐稿的预览态清单，去掉演示用的切换器）：
-//   loading（骨架）→ error（连不上服务端 + 重试）/ empty（这个月还没记账）/ 有数据。
+//   loading（Skeleton）→ error（连不上服务端 + 重试）/ empty（这个月还没记账）/ 有数据。
 // 三个请求（分类 / 流水 / 统计）一把发出去，**任何一个挂了都算 error** ——
 // 分类挂了流水页全是 slug 裸奔，统计挂了首页是空的，缺一块的页面比整页重试更糊弄人。
 //
 // 月份固定当月（拍板 D3：接口从第一天就吃 month，界面一期只做本月）。
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   deleteMoneyEntries, fetchMoneyCats, fetchMoneyEntries, fetchMoneyRecur, fetchMoneyStats,
   type MoneyCat, type MoneyEntry, type MoneyRecur, type MoneyStats,
 } from "../../services/server";
 import { askConfirm, showToast } from "../../components/overlay";
-import { EmptyState, btn } from "../../components/ui";
-import { IconPlus } from "../../components/icons";
+import { EmptyState, RowsCard, RowHint, Segmented, SettingRow, btn } from "../../components/ui";
+import { Dashboard, PageShell, SettingsPage, SettingsSection, Skeleton } from "../../components/layout";
 import { AddEntry } from "./AddEntry";
 import { MoneyStatsView } from "./MoneyStats";
-import { MoneyListView } from "./MoneyList";
+import { MoneyListFilters, MoneyListView, type MoneyDir } from "./MoneyList";
+import { MoneyCats } from "./MoneyCats";
 import { RecurModal } from "./RecurModal";
 import { catIcon, ymOf, yuan } from "./moneyKit";
 
@@ -32,12 +41,20 @@ export function Money() {
   const [cats, setCats] = useState<MoneyCat[]>([]);
   const [entries, setEntries] = useState<MoneyEntry[]>([]);
   const [stats, setStats] = useState<MoneyStats | null>(null);
+  /** 流水筛选三件套。第二行由页头渲染（不在列表组件树里），所以状态放这一层；
+   *  统计页点某个分类要带着 filterCat 跳到流水。 */
   const [filterCat, setFilterCat] = useState<string | null>(null);
+  const [dir, setDir] = useState<MoneyDir>("all");
+  const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [editEntry, setEditEntry] = useState<MoneyEntry | null>(null);
   /** 周期规则（二期）。null = 弹窗没开；"" = 开在列表态；非空 = 直接落某条的编辑态。 */
   const [rules, setRules] = useState<MoneyRecur[]>([]);
   const [recurOpen, setRecurOpen] = useState<string | null>(null);
+  // 页面还在不在：离开设置视图要静默重拉，但整页卸载时（切去别的功能）就不用再发请求了。
+  // 挂载时也置一次 true —— StrictMode 会把 effect 拆挂再重挂，只在清理里置 false 会卡在 false。
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
   const reload = useCallback(async (silent = false) => {
     // 每次重拉时重算当月：页面在月底跨零点开着不关，第二天记的账要进新的月。
@@ -70,6 +87,14 @@ export function Money() {
 
   const monthText = t("money.monthLabel", { y: ym.slice(0, 4), m: Number(ym.slice(5)) });
   const isEmpty = phase === "ready" && !entries.length && !!stats && stats.expense === 0 && stats.income === 0;
+  // 在跑的周期规则数：进次级按钮的文案（「周期记账 · 3」），tooltip 给全量（共 N 条 · M 条在跑）。
+  const live = rules.filter((r) => !r.paused && r.next_at_ms > 0).length;
+  const clearFilter = () => { setFilterCat(null); setQuery(""); setDir("all"); };
+  // 筛选件只在真正显示流水时才出现在第二行；加载 / 出错 / 空月只留「统计 / 流水」分段。
+  const showList = phase === "ready" && !isEmpty && view === "list";
+  // 副标题「M 月 · N 笔」；没就绪前只报月份，别先亮一个「0 笔」。
+  const month = Number(ym.slice(5));
+  const subtitle = phase === "ready" ? t("money.headSub", { m: month, n: entries.length }) : t("money.monthOnly", { m: month });
 
   const doDelete = async (e: MoneyEntry) => {
     const name = e.merchant || catName(e.cat);
@@ -86,54 +111,42 @@ export function Money() {
     if (n) void reload(true);
   };
 
-  const tabBtn = (on: boolean, last?: boolean) =>
-    `flex items-center gap-[6px] flex-none whitespace-nowrap px-[13px] py-[5px] text-[12.5px] cursor-pointer ${
-      last ? "" : "border-r border-border"} ${on ? "bg-orange text-white font-semibold" : "bg-transparent text-text"}`;
-
   return (
-    <div className="absolute inset-0 flex flex-col min-h-0 text-[13px] bg-bg">
-      {/* 顶栏：视图切换 + 周期记账（二期，带在跑条数）+ 记一笔。 */}
-      <div className="flex-none flex items-center gap-[12px] px-[18px] py-[11px] border-b border-border bg-card">
-        <div className="flex-none flex border border-border rounded-[8px] overflow-hidden">
-          <button className={tabBtn(view === "stats")} onClick={() => setView("stats")}>{t("money.tabStats")}</button>
-          <button className={tabBtn(view === "list", true)} onClick={() => setView("list")}>{t("money.tabList")}</button>
-        </div>
-        <span className="flex-1" />
-        <button
-          className="flex items-center gap-[6px] flex-none whitespace-nowrap px-[12px] py-[6px] border border-border bg-card text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
-          onClick={() => setRecurOpen("")}>
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M20 11a8 8 0 0 0-13.7-5.7L3 8" /><path d="M3 4v4h4" /><path d="M4 13a8 8 0 0 0 13.7 5.7L21 16" /><path d="M21 20v-4h-4" /></svg>
-          {t("money.recTitle")}
-          {rules.filter((r) => !r.paused && r.next_at_ms > 0).length ? (
-            <span className="flex-none px-[6px] py-[0.5px] rounded-full bg-orange-soft text-orange-text text-[10.5px] font-semibold">
-              {rules.filter((r) => !r.paused && r.next_at_ms > 0).length}
-            </span>
+    <PageShell
+      header={{
+        title: t("nav.money"),
+        subtitle,
+        primary: { label: t("money.addOne"), onClick: () => setAddOpen(true) },
+        // 周期记账（二期）：带在跑条数。status 槽空着 —— 现有代码没有独立的刷新态（静默重拉不换骨架）。
+        secondary: [{
+          label: live ? `${t("money.recTitle")} · ${live}` : t("money.recTitle"),
+          title: t("money.recSub", { total: rules.length, live }),
+          onClick: () => setRecurOpen(""),
+        }],
+        secondRow: (<>
+          <Segmented<"stats" | "list"> value={view} onChange={setView} options={[
+            { v: "stats", label: t("money.tabStats") },
+            { v: "list", label: t("money.tabList") },
+          ]} />
+          {showList ? (
+            <MoneyListFilters dir={dir} setDir={setDir} query={query} setQuery={setQuery}
+              filterCat={filterCat} setFilterCat={setFilterCat}
+              cats={cats.filter((c) => c.enabled).map((c) => [c.slug, c.name])}
+              catName={catName} monthText={monthText} onClear={clearFilter} />
           ) : null}
-        </button>
-        <button className={btn("primary")} onClick={() => setAddOpen(true)}>
-          <span className="flex items-center gap-[6px]"><IconPlus size={13} />{t("money.addOne")}</span>
-        </button>
-      </div>
-
+        </>),
+      }}
+      settings={{
+        title: t("money.settingsTitle"),
+        backLabel: t("money.backLabel"),
+        content: (
+          <MoneySettings cats={cats} rules={rules}
+            onChanged={() => void reload(true)}
+            onLeave={() => { if (alive.current) void reload(true); }} />
+        ),
+      }}>
       {phase === "loading" ? (
-        // 骨架（稿 692–716 的简化版）：形状对上就行，别做成第二套布局。
-        <div className="flex-1 min-h-0 overflow-y-auto px-[18px] py-[16px]">
-          <div className="flex flex-col gap-[14px] max-w-[1000px]">
-            <div className="flex gap-[14px] flex-wrap">
-              <div className="flex-[1_1_340px] min-w-[300px] h-[118px] bg-card border border-border rounded-[12px]" />
-              <div className="flex-[1_1_220px] min-w-[200px] h-[118px] bg-card border border-border rounded-[12px]" />
-            </div>
-            <div className="h-[274px] bg-card border border-border rounded-[12px] px-[17px] flex gap-[20px] items-center">
-              <span className="w-[200px] h-[200px] flex-none rounded-full bg-track" />
-              <div className="flex-1 flex flex-col gap-[12px]">
-                <span className="h-[12px] rounded-[6px] bg-track" />
-                <span className="h-[12px] w-[82%] rounded-[6px] bg-track" />
-                <span className="h-[12px] w-[64%] rounded-[6px] bg-track" />
-                <span className="h-[12px] w-[48%] rounded-[6px] bg-track" />
-              </div>
-            </div>
-          </div>
-        </div>
+        <Skeleton rows={4} />
       ) : phase === "error" ? (
         <EmptyState kind="offline" title={t("money.errTitle")} body={t("money.errBody")}
           actionLabel={t("common.retry")} onAction={() => void reload()} />
@@ -144,18 +157,13 @@ export function Money() {
           title={t("money.emptyTitle")} body={t("money.emptyBody")}
           actionLabel={t("money.addOne")} onAction={() => setAddOpen(true)} />
       ) : view === "stats" && stats ? (
-        <div className="flex-1 min-h-0 overflow-y-auto px-[18px] pt-[16px] pb-[26px]">
-          {/* 一期只看本月（D3）：标签不是选择器 */}
-          <div className="flex items-center gap-[10px] mb-[14px]">
-            <span className="flex-none px-[12px] py-[4px] border border-border bg-card rounded-[8px] text-[13px] font-semibold whitespace-nowrap">{monthText}</span>
-          </div>
+        <Dashboard>
           <MoneyStatsView stats={stats} entries={entries} catName={catName} catSlot={catSlot} catArt={catArt}
             onGoList={(cat) => { setFilterCat(cat); setView("list"); }} />
-        </div>
+        </Dashboard>
       ) : (
         <MoneyListView entries={entries} catName={catName} catSlot={catSlot} catArt={catArt}
-          cats={cats.filter((c) => c.enabled).map((c) => [c.slug, c.name])}
-          filterCat={filterCat} setFilterCat={setFilterCat} monthText={monthText}
+          dir={dir} query={query} filterCat={filterCat} onClearFilter={clearFilter}
           onAdd={() => setAddOpen(true)} onEdit={(e) => setEditEntry(e)} onDelete={(e) => void doDelete(e)}
           onOpenRule={(ruleId) => {
             // 规则可能已删（删规则不删流水）—— 那就说人话，别装作能跳。
@@ -175,6 +183,49 @@ export function Money() {
           onClose={() => setRecurOpen(null)}
           onChanged={() => void reload(true)} />
       ) : null}
-    </div>
+    </PageShell>
+  );
+}
+
+// ── 记账设置（T3，PageShell 的 settings 视图）：分类与色槽 + 周期记账 ─────────
+// 两组不到三组，不传 nav。「分类与色槽」就是原总设置那一页（MoneyCats）整块搬来；
+// 「周期记账」的规则列表还长在 RecurModal 里（那个文件不在这批可改范围），这里先放
+// 一颗「管理周期记账」打开原弹窗 —— 弹窗必须挂在这棵子树里：主视图在设置态是
+// visibility:hidden，挂在那边的弹窗会跟着看不见。
+function MoneySettings({ cats, rules, onChanged, onLeave }: {
+  cats: MoneyCat[];
+  rules: MoneyRecur[];
+  /** 规则增删改停之后：规则和流水都可能变，父组件重拉。 */
+  onChanged: () => void;
+  /** 离开设置视图：分类改名 / 换色槽 / 换图标在 MoneyCats 里直接落服务端，而主视图
+   *  常驻不卸载（PageShell 只是把它藏起来），不重拉的话流水与图表还是旧名旧色。 */
+  onLeave: () => void;
+}) {
+  const { t } = useTranslation();
+  const [recurOpen, setRecurOpen] = useState(false);
+  // 设置视图关掉 = 这个组件卸载，卸载即「离开」（只在卸载时跑一次，故意不挂依赖）。
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => () => onLeave(), []);
+  const live = rules.filter((r) => !r.paused && r.next_at_ms > 0).length;
+
+  return (
+    <SettingsPage>
+      <SettingsSection title={t("settings.secMoneycat")} desc={t("settings.secMoneycatDesc")}>
+        <MoneyCats />
+      </SettingsSection>
+
+      <SettingsSection title={t("money.recTitle")} desc={t("money.recFoot")}>
+        <RowsCard>
+          <SettingRow label={t("money.recTitle")}>
+            <RowHint>{t("money.recSub", { total: rules.length, live })}</RowHint>
+            <button className={btn("ghost", "sm")} onClick={() => setRecurOpen(true)}>{t("money.recManage")}</button>
+          </SettingRow>
+        </RowsCard>
+      </SettingsSection>
+
+      {recurOpen ? (
+        <RecurModal cats={cats} rules={rules} onClose={() => setRecurOpen(false)} onChanged={onChanged} />
+      ) : null}
+    </SettingsPage>
   );
 }

@@ -13,7 +13,8 @@
     "flow": "Workflows",
     "vault": "Vault",
     "runtime": "Runtimes",
-    "money": "Money"
+    "money": "Money",
+    "phrases": "Phrases"
   },
   "tools": {
     "clipboardDesc": "Everything you copy stays here — text, images and files, one shortcut away.",
@@ -410,7 +411,8 @@
     "emptyBody": "Once the device connects and registers, connection events, dispatched tasks and capability runs all show up here.",
     "showAll": "Show all",
     "capNote": "Only the latest {{cap}} lines are kept in memory — no paging. Older entries live in the logs folder, one file per day.",
-    "capCount": "{{n}} / {{cap}} lines"
+    "capCount": "{{n}} / {{cap}} lines",
+    "countLive": "{{n}} lines · live"
   },
   "tasks": {
     "countLine": "{{n}} total · {{running}} running",
@@ -551,7 +553,11 @@
     "updateFailed": "Couldn't update; status unchanged",
     "doneToast": "Marked done",
     "archivedToast": "Archived",
-    "reopenToast": "Moved back to open"
+    "reopenToast": "Moved back to open",
+    "countLine": "{{n}} total · {{open}} open",
+    "allTags": "All tags",
+    "noResult": "No ideas match these filters",
+    "clearFilter": "Clear filters"
   },
   "abilities": {
     "title": "Abilities",
@@ -581,7 +587,10 @@
     "confirmBeforeRun": "Confirm before execution",
     "addSkill": "+ Add skill",
     "deleteConfirm": "Delete the custom program “{{name}}”? The AI will no longer be able to call its skills, and the entry is removed from providers.json.",
-    "deleted": "Deleted “{{name}}”"
+    "deleted": "Deleted “{{name}}”",
+    "settingsTitle": "Abilities settings",
+    "backLabel": "Back to abilities",
+    "secSkills": "Skills"
   },
   "realtime": {
     "title": "Realtime",
@@ -604,7 +613,12 @@
     "skillScroll": "Scroll",
     "skillOpenApp": "Open app",
     "skillScreenshot": "Screenshot",
-    "skillOperate": "Autonomous"
+    "skillOperate": "Autonomous",
+    "settingsTitle": "Computer-use settings",
+    "backLabel": "Back to computer use",
+    "enableHint": "The master switch is under Permissions in the settings view",
+    "permHint": "Grant access under Permissions in the settings view",
+    "statusOff": "Not enabled"
   },
   "chat": {
     "placeholder": "Type a message. Press / for quick actions, Enter to send",
@@ -771,7 +785,9 @@
     "imgRemove": "Remove",
     "addImage": "Send images",
     "dropToSend": "Drop to send {{n}} image(s)",
-    "imageMsgPreview": "[Image]"
+    "imageMsgPreview": "[Image]",
+    "settingsTitle": "Chat settings",
+    "backLabel": "Back to chat"
   },
   "clipboard": {
     "searchPh": "Search clipboard…",
@@ -883,7 +899,15 @@
     "operateUnsupported": "operate is not connected to the decision engine yet. Supported: open_app / click / type / key / scroll / screenshot.",
     "favLimit": "Favorite limit reached"
   },
-  "notify": {},
+  "notify": {
+    "title": "Reminders",
+    "countN": "{{n}} reminders",
+    "newReminder": "New reminder",
+    "empty": "No reminders yet",
+    "emptyBody": "Create one from the top right — you'll get a system notification when it's due, and it syncs to your phone.",
+    "desktopOnly": "Reminders need the desktop app",
+    "desktopOnlyBody": "The reminder bridge is not available in this environment."
+  },
   "trash": {
     "navBadge": "{{count}}",
     "countLine": "{{count}} items · cleared automatically when they expire",
@@ -1136,6 +1160,51 @@
     "actIcon": "Change icon",
     "iconPopTitle": "Change icon",
     "iconChangeHint": "Only the look changes — the name and existing entries stay.",
-    "iconChanged": "Changed to \"{{name}}\""
+    "iconChanged": "Changed to \"{{name}}\"",
+    "headSub": "Month {{m}} · {{n}} entries",
+    "settingsTitle": "Money settings",
+    "backLabel": "Back to money",
+    "recManage": "Manage recurring",
+    "monthOnly": "Month {{m}}"
+  },
+  "layout": {
+    "settings": "Settings",
+    "more": "More",
+    "pickOne": "Pick an item on the left",
+    "selectedN": "{{n}} selected",
+    "copied": "Copied",
+    "copyFailed": "Copy failed, clipboard unavailable",
+    "readOnlyHint": "Read-only · edit from the right",
+    "copy": "Copy",
+    "cardEmpty": "No data for this period",
+    "back": "Back"
+  },
+  "phrases": {
+    "countN": "{{n}} phrases",
+    "untagged": "Untagged",
+    "tagCount": "{{n}}",
+    "tagLabel": "Tag",
+    "noTag": "No tag",
+    "noTagsYet": "No tags yet. Create some under the gear → Phrase settings, then pick one here.",
+    "settingsTitle": "Phrase settings",
+    "backLabel": "Back to phrases",
+    "secTags": "Tags",
+    "secTagsDesc": "One tag per phrase, picked from this list. Typing a tag in the launcher lists every phrase under it. Deleting a tag keeps its phrases — they become untagged.",
+    "addTag": "New tag",
+    "tagNamePh": "Tag name, e.g. “daily”",
+    "rename": "Rename",
+    "mergeInto": "Merge into…",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "tagExists": "That tag already exists",
+    "renameTitle": "Rename tag",
+    "mergeTitle": "Merge “{{name}}” into",
+    "mergePick": "Pick a tag",
+    "mergeDo": "Merge",
+    "mergeHint": "These {{n}} phrases switch to the target tag; “{{name}}” is then removed.",
+    "deleteTagAsk": "Delete the tag “{{name}}”? Its {{n}} phrases become untagged; the phrases themselves stay.",
+    "secHotkey": "Shortcut",
+    "secSync": "Cloud sync",
+    "secSyncDesc": "Phrases are shared across devices; local edits push a few seconds later, or sync manually."
   }
 }

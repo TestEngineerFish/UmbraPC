@@ -162,6 +162,9 @@ contextBridge.exposeInMainWorld("umbraLauncher", {
   fileIcon: (p: string) => ipcRenderer.invoke("launcher:fileIcon", p),
   getPhrases: () => ipcRenderer.invoke("launcher:getPhrases"),
   setPhrases: (phrases: unknown) => ipcRenderer.invoke("launcher:setPhrases", phrases),
+  // 常用语标签清单（批次 012：触发词 → 受管标签）。
+  getPhraseTags: () => ipcRenderer.invoke("launcher:getPhraseTags"),
+  setPhraseTags: (names: unknown) => ipcRenderer.invoke("launcher:setPhraseTags", names),
   // 常用语云端同步：手动触发 / 读状态 / 订阅同步后的变更（多设备共用一份短语库）。
   phrasesSyncNow: () => ipcRenderer.invoke("launcher:phrasesSyncNow"),
   phrasesSyncState: () => ipcRenderer.invoke("launcher:phrasesSyncState"),

@@ -60,6 +60,16 @@ interface ManagerOpts {
 }
 
 
+// 标签名去重、去空白、去空串，保序。
+function uniqTags(names: string[]): string[] {
+  const out: string[] = [];
+  for (const n of names) {
+    const v = String(n || "").trim();
+    if (v && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
 export class LauncherManager {
   private panel: Electron.BrowserWindow | null = null;
   private shownAt = 0;  // 唤起时刻：刚弹出瞬间的失焦（主窗口被激活抢焦）要忽略，避免立刻收起/来回切换
@@ -119,6 +129,13 @@ export class LauncherManager {
     // 常用语云端同步：启动拉一次，之后按周期拉；本地改动由 setPhrases 触发推送。
     this.phraseSync.start();
     // 全局快捷键由 main.ts 统一注册（见 registerShortcut）。
+  }
+
+  // 标签清单：配置里的顺序在前，phrases 里用到但清单里没有的 keyword 按出现顺序追加。
+  phraseTags(): string[] {
+    const c = this.cfg.get();
+    const used = (c.phrases || []).map((p) => (p.keyword || "").trim()).filter(Boolean);
+    return uniqTags([...(c.phraseTags || []), ...used]);
   }
 
   // 常用语被云端同步改写后广播给所有窗口，设置页/面板不用轮询也能刷新。
@@ -863,6 +880,15 @@ export class LauncherManager {
         phrasesDeleted: collectTombs(next, prev, this.cfg.get().phrasesDeleted || []),
       });
       this.phraseSync.schedulePush();
+    });
+    // 常用语标签清单（批次 012）。读：配置里的清单 + phrases 里出现过但不在清单里的 keyword 兜底追加
+    // （老数据的触发词自动成为标签，不用迁数据）。写：整份覆盖 + 盖时间戳 + 排一次推送。
+    ipcMain.handle("launcher:getPhraseTags", () => this.phraseTags());
+    ipcMain.handle("launcher:setPhraseTags", async (_e, names: string[]) => {
+      const clean = uniqTags(Array.isArray(names) ? names : []);
+      await this.cfg.save({ phraseTags: clean, phraseTagsUpdatedAt: Date.now() });
+      this.phraseSync.schedulePush();
+      await this.broadcastPhrases();
     });
     // 常用语同步：设置页的「立即同步」按钮 + 状态展示。
     ipcMain.handle("launcher:phrasesSyncNow", () => this.phraseSync.sync());

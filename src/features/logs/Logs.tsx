@@ -1,7 +1,9 @@
 // 日志页（React + Tailwind）。桌面态展示设备引擎真实日志。
+// 批次 012 起套页面骨架：页头「日志 · N 条 · 实时」+ 次级钮「打开日志文件夹」，
+// 四颗来源筛选芯片上移到页头第二行；日志流照旧；底栏那句「只留 200 条」走 FooterTotal。
 //
 // 稿 1978-1997。相对原来的整行灰字平铺，这里做了三件事：
-//   1. 顶栏加四颗来源筛选胶囊（全部 / 任务 / 连接 / 能力执行）——
+//   1. 页头第二行四颗来源筛选芯片（全部 / 任务 / 连接 / 能力执行）——
 //      日志本来就是「出事了才来看」的地方，进来第一件事就是把无关的滤掉。
 //   2. 每行拆成三列：时间（muted）/ 标签（62px 定宽、加粗、按性质上色）/ 正文。
 //      定宽是关键，正文左边缘对齐了才扫得动；标签跟着正文流走的话每行起点都不一样。
@@ -13,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import * as desktop from "../../services/desktop";
 import type { LogMark, LogSrc, LogTag } from "../../services/deviceTransport";
 import { filterChip, filterChipCount, EmptyState } from "../../components/ui";
+import { PageShell, FooterTotal } from "../../components/layout";
 
 // 行首前缀（稿 6059-6067、9716-9719）。这是全系统唯一允许用字符代替 SVG 图标的地方——
 // 日志是引擎原样打出来的文本，行首字符属于**内容**而不是图标，复制出去要能和终端对上。
@@ -52,21 +55,18 @@ export function Logs() {
   // 每颗胶囊上带条数：不点进去就知道「连接那组有 3 条」，省一次点击。
   const countOf = (f: Filter) => (f === "all" ? all.length : all.filter((l) => l.src === f).length);
   return (
-    <div className="h-full flex flex-col min-h-0">
-      <div className="flex items-center justify-between px-[22px] py-[14px] border-b border-border shrink-0 gap-3">
-        <div className="flex items-center gap-[14px] min-w-0">
-          <h1 className="m-0 text-[16px] font-semibold flex-none">{t("logs.title")}</h1>
-          <div className="flex gap-[6px] flex-wrap">
-            {FILTERS.map((f) => (
-              <button key={f.key} className={filterChip(filter === f.key, "sm")} onClick={() => setFilter(f.key)}>
-                <span>{t(f.i18n)}</span>
-                <span className={filterChipCount(filter === f.key)}>{countOf(f.key)}</span>
-              </button>
-            ))}
-          </div>
-        </div>
-        <button onClick={() => desktop.openLogsFolder()} className="flex items-center gap-1.5 px-3 py-1.5 border border-border bg-card text-text rounded-lg text-[12.5px] cursor-pointer flex-none whitespace-nowrap hover:border-orange hover:text-orange-text transition-colors duration-[130ms]">{t("logs.openFolder")}</button>
-      </div>
+    <PageShell header={{
+      title: t("logs.title"),
+      // 「N 条 · 实时」：条数是内存缓冲里的总数（不随筛选变），「实时」说明这一页不用手动刷新。
+      subtitle: t("logs.countLive", { n: all.length }),
+      secondary: [{ label: t("logs.openFolder"), onClick: () => desktop.openLogsFolder() }],
+      secondRow: FILTERS.map((f) => (
+        <button key={f.key} className={filterChip(filter === f.key, "sm")} onClick={() => setFilter(f.key)}>
+          <span>{t(f.i18n)}</span>
+          <span className={filterChipCount(filter === f.key)}>{countOf(f.key)}</span>
+        </button>
+      )),
+    }}>
       <div className="flex-1 overflow-y-auto px-[22px] py-[14px] font-mono text-[12px] leading-[1.95] min-h-0 flex flex-col">
         {lines.length ? (
           lines.map((l, i) => (
@@ -89,15 +89,15 @@ export function Logs() {
           />
         )}
       </div>
-      {/* 底栏（稿 2435-2438）。这句「只留 200 条」很要紧：不写的话，用户翻到底发现
-          日志断在某个时间点，会以为是日志坏了或者丢了——其实是内存缓冲的容量到头了。
-          真正的完整记录在日志文件夹里，所以这句话和上面那颗「打开日志文件夹」是一对。 */}
+      {/* 底栏（稿 2435-2438），骨架件的 FooterTotal（40 高 / --rail 底）。这句「只留 200 条」很要紧：
+          不写的话，用户翻到底发现日志断在某个时间点，会以为是日志坏了或者丢了——其实是内存缓冲的
+          容量到头了。真正的完整记录在日志文件夹里，所以这句话和页头那颗「打开日志文件夹」是一对。 */}
       {all.length ? (
-        <div className="flex-none flex items-center gap-[9px] px-[22px] py-[8px] border-t border-border bg-rail">
-          <span className="flex-1 min-w-0 text-[11px] text-faint truncate">{t("logs.capNote", { cap: LOG_CAP })}</span>
-          <span className="flex-none whitespace-nowrap font-mono text-[11px] text-faint">{t("logs.capCount", { n: lines.length, cap: LOG_CAP })}</span>
-        </div>
+        <FooterTotal>
+          <span className="flex-1 min-w-0 truncate">{t("logs.capNote", { cap: LOG_CAP })}</span>
+          <span className="flex-none font-mono">{t("logs.capCount", { n: lines.length, cap: LOG_CAP })}</span>
+        </FooterTotal>
       ) : null}
-    </div>
+    </PageShell>
   );
 }

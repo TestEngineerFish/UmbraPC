@@ -171,8 +171,9 @@ export function RefreshButton({ onClick, spinning, minMs = 550, title }: {
 // 遮罩 + 居中卡片。标题栏与底栏都是可选的：不传 title 就没有标题栏（确认框那种），
 // 不传 footer 就没有底栏。点遮罩关闭，点卡片内部不关闭。
 // 用 fixed 而不是 absolute：页面根节点不一定是定位元素，absolute 会往上找到不确定的祖先。
-// 宽度三档（设计稿）：460 表单 / 560 中等 / 720 表格。默认 460。
-export function Modal({ width = 460, title, sub, children, footer, onClose }: {
+// 宽度三档（批次 012 tokens.modal，全站唯一一组取值）：480 单字段 / 二次确认 · 560 表单（1–2 列）·
+// 680 带列表或并排双栏。默认 480。原来的 460 / 720 与各页私调的 400 / 430 / 470 / 500 / 520 / 620 全部归档。
+export function Modal({ width = 480, title, sub, children, footer, onClose }: {
   width?: number;
   title?: React.ReactNode;
   sub?: string;
@@ -181,6 +182,17 @@ export function Modal({ width = 460, title, sub, children, footer, onClose }: {
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  // Esc 关弹窗，并且**拦下这次按键**（capture + preventDefault）：功能内设置视图也在听 Esc（PageShell），
+  // 不拦的话弹窗和它底下的设置视图会一起关掉，填了一半的东西就没了。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); e.stopPropagation();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onClose]);
   return (
     <div
       className="fixed inset-0 z-50 bg-[rgba(20,16,12,.42)] flex items-center justify-center p-[24px]"
@@ -223,7 +235,7 @@ export function ConfirmDialog({ title, message, confirmText, danger, busy, onCon
 }) {
   const { t } = useTranslation();
   return (
-    <Modal width={400} title={title} onClose={onCancel} footer={<>
+    <Modal width={480} title={title} onClose={onCancel} footer={<>
       <span className="flex-1" />
       <button className={btn("ghost")} onClick={onCancel}>{t("common.cancel")}</button>
       {/* 实心红只出现在这里 —— 确认弹窗里的最终动作。别处的破坏性操作一律描边红。 */}
@@ -262,7 +274,7 @@ export function ContextMenu({ x, y, items, onClose }: {
   // 后者只挡冒泡，挡不住已经在捕获阶段跑过的 window 监听。
   useEffect(() => {
     const onDown = (e: MouseEvent) => { if (!boxRef.current?.contains(e.target as Node)) onClose(); };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.preventDefault(); onClose(); } };
     const close = () => onClose();
     window.addEventListener("mousedown", onDown, true);
     window.addEventListener("keydown", onKey, true);

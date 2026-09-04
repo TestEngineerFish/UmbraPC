@@ -212,6 +212,25 @@ export function IconArrowRight(p: IconProps) {
   );
 }
 
+// 返回（页头设置视图变体的左侧返回钮，批次 012）。和 ArrowRight 镜像，不用 ChevronLeft ——
+// 那个是「上一页」级的小箭头，返回钮要一整支箭。
+export function IconArrowLeft(p: IconProps) {
+  return (
+    <svg {...base(p)}>
+      <path d="M19 12H5M11 18l-6-6 6-6" />
+    </svg>
+  );
+}
+
+// 常用语（一级导航，批次 012 答复定的形：左侧一条竖条 + 右侧三条不等长横线，同 Lucide text-quote）。
+export function IconTextQuote(p: IconProps) {
+  return (
+    <svg {...base(p)} strokeWidth={1.9}>
+      <path d="M5 5v14M10 6h10M10 12h7M10 18h9" />
+    </svg>
+  );
+}
+
 // 运行（工作流编辑器顶栏）。线性三角，和其余描边图标同一套观感，不用实心播放键。
 export function IconPlay(p: IconProps) {
   return (

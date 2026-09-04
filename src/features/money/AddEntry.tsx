@@ -205,7 +205,7 @@ export function AddEntry({ cats, entries, initial, onClose, onSaved }: {
       on ? "border-orange bg-orange-soft text-orange-text" : "border-border bg-transparent text-muted hover:border-orange"}`;
 
   return (
-    <Modal width={520} title={initial ? t("money.editTitle") : t("money.addTitle")} onClose={onClose}
+    <Modal width={560} title={initial ? t("money.editTitle") : t("money.addTitle")} onClose={onClose}
       footer={<>
         <span className="flex-1 min-w-0 text-[11px] text-faint">{t("money.addFootHint")}</span>
         <button className={BTN_GHOST} onClick={onClose}>{t("common.cancel")}</button>

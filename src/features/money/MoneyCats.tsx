@@ -1,4 +1,6 @@
-// 记账 · 分类与色槽（设置 → 记账，对齐稿 5272–5345 + 批次 004 的子类管理/新增分类）。
+// 记账 · 分类与色槽（对齐稿 5272–5345 + 批次 004 的子类管理/新增分类）。
+// 批次 012 从总设置整块搬到记账页自己的设置视图（记账页页头齿轮 → 记账设置 → 「分类与色槽」），
+// 分组标题 / 说明由外层的 SettingsSection 给，这里只有那张表 + 弹窗；逻辑一字未动。
 //
 // 三条底层规则，全部来自服务端的约定：
 //   ① slug 永不可改 —— 流水里存的是它，改名只改显示名，历史数据不动；
@@ -24,7 +26,8 @@ import {
 } from "../../services/server";
 import { askConfirm, showToast } from "../../components/overlay";
 import { Modal, EmptyState, btn } from "../../components/ui";
-import { catColor, catIcon, catTint, MONEY_ICON_SET, PICK_ICONS } from "../money/moneyKit";
+import { Skeleton } from "../../components/layout";
+import { catColor, catIcon, catTint, MONEY_ICON_SET, PICK_ICONS } from "./moneyKit";
 import { IconPickerPop } from "../../components/IconPicker";
 
 const BTN_S = "flex-none whitespace-nowrap px-[9px] py-[3px] border border-border bg-transparent rounded-[7px] text-[11px] text-muted cursor-pointer hover:border-orange hover:text-orange-text";
@@ -183,7 +186,8 @@ export function MoneyCats() {
       actionLabel={t("common.retry")} onAction={() => void reload()} />;
   }
   if (!cats) {
-    return <div className="h-[220px] bg-card border border-border rounded-[12px]" />;
+    // 首屏骨架用通用件（批次 012：页面不再自绘骨架）。
+    return <Skeleton rows={4} />;
   }
 
   const ownerOf = (slot: number): MoneyCat | null => cats.find((c) => c.slot === slot && c.enabled) || null;
@@ -194,7 +198,7 @@ export function MoneyCats() {
 
   return (
     <div className="flex flex-col gap-[14px] max-w-[820px]">
-      {/* 色槽占用一览 + 新增分类入口（批次 004：页面标题在 Settings 的 SecHead 里，
+      {/* 色槽占用一览 + 新增分类入口（批次 004：分组标题在外层的 SettingsSection 里，
           按钮就近挂在第一行的右侧） */}
       <div className="flex items-center gap-[10px] px-[14px] py-[11px] bg-card border border-border rounded-[11px] flex-wrap">
         <span className="flex-none text-[12px] font-semibold whitespace-nowrap">{t("money.catsSlotUsage")}</span>
@@ -219,7 +223,7 @@ export function MoneyCats() {
           {freeSlots ? t("money.catsSlotLeft", { n: freeSlots }) : t("money.catsSlotFull")}
         </span>
         <button
-          className="flex-none flex items-center gap-[6px] px-[12px] py-[5px] rounded-[8px] bg-orange text-white text-[12px] font-semibold whitespace-nowrap cursor-pointer hover:bg-orange-deep"
+          className={`${btn("ghost", "sm")} gap-[6px]`}
           onClick={() => { setNewOpen(true); setNewDir("expense"); setNewName(""); setNewIcon(PICK_ICONS[0].k); }}>
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14" /></svg>
           {t("money.newCatBtn")}
@@ -337,7 +341,7 @@ export function MoneyCats() {
                               className="w-[78px] bg-transparent text-text text-[11.5px] outline-none px-[4px]" />
                             <button disabled={busy || dup} onClick={() => void saveSubRename()}
                               className={`flex-none h-[19px] px-[8px] rounded-full text-[10.5px] font-semibold whitespace-nowrap ${
-                                dup ? "bg-chip text-faint cursor-not-allowed" : "bg-orange text-white cursor-pointer"}`}>
+                                dup ? "bg-chip text-faint cursor-not-allowed" : "bg-card border border-border text-text cursor-pointer hover:border-orange hover:text-orange-text"}`}>
                               {t("money.subSave")}
                             </button>
                             <button onClick={() => setSubEdit(null)}
@@ -358,7 +362,7 @@ export function MoneyCats() {
                       className="flex-none w-[180px] px-[10px] py-[5px] border border-border rounded-[7px] bg-card text-text text-[12px] outline-none focus:border-orange" />
                     <button disabled={!canAdd} onClick={() => void addSub(c.slug)}
                       className={`flex-none px-[12px] py-[5px] rounded-[7px] text-[12px] font-semibold whitespace-nowrap ${
-                        canAdd ? "bg-orange text-white cursor-pointer" : "bg-chip text-faint cursor-not-allowed"}`}>
+                        canAdd ? "bg-card border border-border text-text cursor-pointer hover:border-orange hover:text-orange-text" : "bg-chip text-faint cursor-not-allowed"}`}>
                       {t("money.subAddBtn")}
                     </button>
                     {draftDup ? (
@@ -395,7 +399,7 @@ export function MoneyCats() {
 
       {/* 改名弹窗 */}
       {renaming ? (
-        <Modal width={400} title={t("money.renameTitle", { name: renaming.name })} onClose={() => setRenaming(null)}
+        <Modal width={480} title={t("money.renameTitle", { name: renaming.name })} onClose={() => setRenaming(null)}
           footer={<>
             <span className="flex-1 min-w-0 text-[11px] text-faint truncate">{t("money.renameHint")}</span>
             <button className={btn("ghost")} onClick={() => setRenaming(null)}>{t("common.cancel")}</button>
@@ -484,7 +488,7 @@ export function MoneyCats() {
 
       {/* 挑色槽弹窗：灰 + 七个槽，占用的槽标出现在的主人，点它进入抢槽确认 */}
       {slotFor ? (
-        <Modal width={430} title={t("money.slotTitle", { name: slotFor.name })} onClose={() => { setSlotFor(null); setGrab(null); }}>
+        <Modal width={480} title={t("money.slotTitle", { name: slotFor.name })} onClose={() => { setSlotFor(null); setGrab(null); }}>
           {grab ? (
             <div className="flex flex-col gap-[10px]">
               <div className="text-[13.5px] font-semibold leading-[1.5]">

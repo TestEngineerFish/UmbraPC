@@ -2,12 +2,16 @@
 // 流程：初始化（创建主密码 → 保存 Secret Key）/ 解锁 / 身份库切换 / 分组可改名删除（右键菜单）/
 // 列表搜索与多选 / 模块化控件详情（查看·编辑）/ 附件 / 密码生成器 / 深浅色切换。
 // 两种承载方式：独立窗口（vault-entry）与嵌在主窗口「工具 → 密码保险箱」右侧（embedded）。
+// 页头（批次 012）：两种承载都用同一份 components/layout 的 PageHeader（T5 全铺工作台，不套 PageShell，
+// 三栏内容区自己管）；独立窗口的 i18n 由 vault-entry 的 mountApp 初始化，PageHeader 里的 useTranslation 同样可用。
 // 样式统一走 Tailwind + CSS 变量（vault-entry 已引入 index.css，独立窗口里同样生效）；
 // inline style 只留给真正动态的值：右键菜单坐标、monogram 尺寸、强度条百分比、动画延迟。
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { formatAgo, useNow } from "../../services/relativeTime";
 import type { ComponentType, CSSProperties, ReactNode, SVGProps } from "react";
-import { Pill, btnGhost, btnPrimary, selectBox, fieldFlex, EmptyState } from "../../components/ui";
+import { Pill, btnGhost, btnPrimary, selectBox, fieldFlex, EmptyState, type MenuAction } from "../../components/ui";
+import { PageHeader } from "../../components/layout";
 // 附件删除走全局的确认弹窗与吐司：保险箱自己那套 setConfirm / flash 挂在 Main 上，
 // 而附件在组件树很深的 Gallery 里，够不着。overlay 是模块级单例，独立窗口也已经挂了 OverlayHost。
 import { askConfirm, showToast } from "../../components/overlay";
@@ -18,7 +22,7 @@ import { useHotkeyRecorder } from "../../components/HotkeyRecorder";
 import { displayAccel } from "../../components/hotkey";
 import { useHotkeyConflict, OWNER_LABEL } from "../tools/hotkeys";
 import {
-  IconAlert, IconCheck, IconChevronDown, IconChevronRight, IconCloud, IconCopy, IconDice, IconDots,
+  IconAlert, IconCheck, IconChevronDown, IconChevronRight, IconCloud, IconCopy, IconDice,
   IconDownload, IconExternal, IconEye, IconEyeOff, IconFile, IconFolder, IconGrid, IconImage, IconKey,
   IconLock, IconPencil, IconPlus, IconRefresh, IconSearch, IconStar, IconTag,
   IconText, IconTouchId, IconTrash, IconUp, IconDown, IconUser, IconX, IconKeyboard, IconWindow,
@@ -170,8 +174,9 @@ const vDash = "w-full inline-flex items-center justify-center gap-[6px] whitespa
 const vTextBtn = "flex-none whitespace-nowrap inline-flex items-center gap-[5px] bg-transparent border-none p-0 text-[11.5px] text-muted cursor-pointer hover:text-orange-text disabled:text-faint disabled:cursor-not-allowed disabled:hover:text-faint";
 // 卡片内的图标小按钮（复制、显示密码、调序、删除控件）。
 const vIconBtn = "w-[24px] h-[24px] flex-none inline-flex items-center justify-center bg-transparent border-none rounded-[7px] text-muted cursor-pointer hover:bg-hover hover:text-orange-text disabled:text-faint disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-faint";
-// 菜单/下拉的浮层外壳。
-const vPanel = "absolute z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[shadow:var(--shadow-floating)]";
+// 身份库下拉的浮层外壳。fixed 而不是 absolute：触发钮挂在页头副标题槽里，那一格是 truncate
+// （overflow:hidden）的截断容器，absolute 的浮层会被它裁掉；坐标由触发钮的 getBoundingClientRect 给。
+const vPanel = "fixed z-40 bg-card border border-border rounded-[12px] p-[6px] shadow-[shadow:var(--shadow-floating)]";
 // 分组小标题。
 const vGroupHead = "text-[10.5px] font-semibold tracking-[.06em] text-faint px-[10px] pt-[4px] pb-[5px]";
 
@@ -236,7 +241,7 @@ function Modal({ width, onClose, children }: { width: number; onClose: () => voi
 // 这里的「确认」是全局唯一允许用红色实心按钮的地方，其余危险操作都用红描边 + 悬停填红。
 function ConfirmModal({ title, desc, okLabel, onOk, onClose }: { title: string; desc: string; okLabel: string; onOk: () => void; onClose: () => void }) {
   return (
-    <Modal width={380} onClose={onClose}>
+    <Modal width={480} onClose={onClose}>
       <div className="flex items-start gap-[12px]">
         <span className="w-[36px] h-[36px] rounded-[9px] flex-none inline-flex items-center justify-center bg-danger-soft text-danger"><IconAlert size={18} /></span>
         <div className="min-w-0">
@@ -577,7 +582,7 @@ function Unlock({ onDone, st, promptToken }: { onDone: () => Promise<void>; st: 
   );
 }
 
-// 解锁后的主界面：顶栏 + 三栏（分组 196 / 列表 302 / 详情自适应）。
+// 解锁后的主界面：页头（统一 PageHeader）+ 三栏（分组 196 / 列表 302 / 详情自适应）。
 // 同步状态一句话。没配服务器就直说，别让用户对着一个不动的字猜。
 // now 由调用方用 useNow() 给（30s 一跳），不然这行字只在状态变化时算一次，会永远停在「刚刚」。
 function syncLabel(st: VStatus, now: number): string {
@@ -590,12 +595,15 @@ function syncLabel(st: VStatus, now: number): string {
 
 function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>; st: VStatus; onStatus: () => Promise<void>; embedded: boolean }) {
   const now = useNow();
+  // 只给快捷键冲突提示用（OWNER_LABEL 存的是 i18n key）；别处文案沿用本模块的中文字面量。
+  // 起名 tr 而不是 t：下面有好几处 `types.map((t) => …)`，同名会互相遮。
+  const { t: tr } = useTranslation();
   // ── 唤起快捷键 / 独立窗口 ────────────────────────────────────────────────
   // 这两个控件原先在外面一层的 VaultTool 里，占了一条独立的 50px 顶栏 —— 于是主窗口里
   // 两条 50px 栏上下叠着，而稿（3660-3672）画的保险箱只有一条。
   //
   // 它们管的是「保险箱以什么方式承载」（全局唤起、拉到独立窗口），不是保险箱里的数据操作，
-  // 设置一次基本就不再动 —— 正是溢出菜单该放的东西。收进 ⋯ 里，顶栏就回到稿的样子了。
+  // 设置一次基本就不再动 —— 正是溢出菜单该放的东西。收进页头的 ⋯ 里，页头就回到稿的样子了。
   const shortcut = st.shortcut || "";
   const shortcutConflict = useHotkeyConflict("vault", shortcut);
   const { recording, start: startRecord } = useHotkeyRecorder((acc) => {
@@ -610,9 +618,10 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
   const [selId, setSelId] = useState("");
   const [autoEditId, setAutoEditId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
-  const [idOpen, setIdOpen] = useState(false);
+  // 身份库下拉：存浮层坐标（贴触发钮下沿），null = 收起。⋯ 菜单不再自己管 —— 交给 PageHeader 的 ContextMenu。
+  const [idMenu, setIdMenu] = useState<{ x: number; y: number } | null>(null);
+  const idBtnRef = useRef<HTMLButtonElement>(null);
   const [manageOpen, setManageOpen] = useState(false);
-  const [gearOpen, setGearOpen] = useState(false);
   const [imp, setImp] = useState({ open: false, mp: "", sk: "", err: "" });
   const [ctx, setCtx] = useState<{ open: boolean; x: number; y: number; itemId?: string }>({ open: false, x: 0, y: 0 });
   const [tctx, setTctx] = useState<{ open: boolean; x: number; y: number; typeId?: string }>({ open: false, x: 0, y: 0 });
@@ -650,15 +659,22 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
     return () => { off(); window.clearInterval(timer); };
   }, [onStatus, refresh]);
   // 关菜单时把「移动到…」也收回去，下次右键重新从收起态开始。
-  const closeMenus = () => { setIdOpen(false); setGearOpen(false); setMoveOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
+  const closeMenus = () => { setIdMenu(null); setMoveOpen(false); setCtx({ open: false, x: 0, y: 0 }); setTctx({ open: false, x: 0, y: 0 }); };
+  // 身份库下拉：再点一次收起；展开时量触发钮的位置，浮层贴它下沿、不越出窗口右边（浮层宽 240）。
+  const toggleIdMenu = () => {
+    if (idMenu) { setIdMenu(null); return; }
+    const r = idBtnRef.current?.getBoundingClientRect();
+    if (!r) return;
+    setIdMenu({ x: Math.max(8, Math.min(r.left, window.innerWidth - 248)), y: r.bottom + 6 });
+  };
 
+  // 下面几个动作原先各自先收一下 ⋯ 浮层（setGearOpen(false)）；现在菜单是 PageHeader 的 ContextMenu，
+  // 点了项就自己收，这里不用再管。
   const doExport = async (plain: boolean) => {
-    setGearOpen(false);
     const r = plain ? await api.exportPlain() : await api.exportBackup();
     if (r.ok) flash(plain ? "已导出明文 JSON" : "已导出加密备份");
   };
   const doSync = async () => {
-    setGearOpen(false);
     if (!st.syncConfigured) { flash("请先在 Umbra 设置里配置服务器地址与令牌"); return; }
     flash("同步中…");
     try {
@@ -669,7 +685,6 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
   };
   const afterImport = async (a: { added: number }) => { setCat("all"); await refresh(); flash(`已导入 ${a.added} 条记录到当前身份库`); };
   const doImport = async () => {
-    setGearOpen(false);
     try {
       const r = await api.importPick();
       if (!r.ok) return;
@@ -744,7 +759,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
       run: async () => { await api.deleteType(vid, tid); if (cat === tid) setCat("all"); await refresh(); flash("分组已删除"); },
     });
   };
-  const anyMenu = idOpen || gearOpen || ctx.open || tctx.open;
+  const anyMenu = !!idMenu || ctx.open || tctx.open;
   const ctxItem = items.find((i) => i.id === ctx.itemId);
   const tctxType = types.find((t) => t.id === tctx.typeId);
   // 右键菜单跟随鼠标坐标，是这个文件里少数必须用 inline style 的地方。
@@ -758,107 +773,96 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
       : { position: "fixed", left, top: y };
   };
 
+  // 页头 ⋯ 菜单（PageHeader 自带的 ContextMenu，168 宽，点了项就收）。分组：同步 | 备份进出 |
+  // 承载方式（快捷键 / 独立窗口）| 明文导出。明文导出单独放末尾 divider 之后并标 warn ——
+  // 它把密码写成明文落盘，是这张菜单里唯一要多想一下的项（不可逆的删除类动作这页没有）。
+  const more: MenuAction[] = [
+    { label: "立即同步", icon: <IconCloud size={13} />, hint: st.syncConfigured ? undefined : "未配置", onClick: () => void doSync() },
+    { divider: true },
+    { label: "导出加密备份", icon: <IconDownload size={13} />, onClick: () => void doExport(false) },
+    { label: "导入备份 · 数据", icon: <IconUp size={13} />, onClick: () => void doImport() },
+    { label: "下载导入模板 (CSV)", icon: <IconFile size={13} />, onClick: async () => { await api.downloadTemplate("csv"); flash("已下载 CSV 导入模板"); } },
+    { divider: true },
+    // 原来这一项录制期间**不关菜单**，靠菜单里的「按下组合键…」告诉用户正在录；ContextMenu 点了就收，
+    // 提示改放页头状态槽（见下面 status），菜单里只留当前键位 / 冲突标记。
+    { label: "唤起快捷键", icon: <IconKeyboard size={13} />, hint: shortcutConflict ? "键位重复" : displayAccel(shortcut) || "未设置", tone: shortcutConflict ? "warn" : undefined, onClick: startRecord },
+    ...(embedded ? [{ label: "在独立窗口打开", icon: <IconWindow size={13} />, onClick: () => void api.openWindow() }] : []),
+    { divider: true },
+    { label: "导出明文 JSON", icon: <IconDownload size={13} />, tone: "warn", onClick: () => void doExport(true) },
+  ];
+
   return (
     <div className="h-full flex flex-col relative overflow-hidden">
-      {/* 顶栏 50px：身份、身份库切换、自动锁定提示、添加 / 锁定 / 更多 */}
-      <header className="h-[50px] flex-none flex items-center gap-[10px] px-[16px] border-b border-border bg-card">
-        <span className="w-[26px] h-[26px] rounded-[7px] flex-none inline-flex items-center justify-center bg-orange text-white"><IconLock size={14} /></span>
-        <span className="flex-none whitespace-nowrap text-[14px] font-semibold">保险箱</span>
-        <span className="w-px h-[18px] flex-none bg-border" />
-        <div className="relative flex-none">
-          <button
-            onClick={() => { setGearOpen(false); setIdOpen(!idOpen); }}
-            className="flex-none whitespace-nowrap inline-flex items-center gap-[7px] px-[10px] py-[5px] border border-border bg-bg text-text rounded-[8px] text-[12.5px] cursor-pointer hover:border-orange hover:text-orange-text"
-          >
-            <Mono text={cur?.name || "U"} size={18} radius={5} font={10} />
-            {cur?.name || "身份库"}
-            <IconChevronDown size={13} />
+      {/* 页头（批次 012）：统一的 PageHeader，不套 PageShell —— 保险箱是 T5 全铺工作台，三栏内容区自己管。
+          标题 · 身份库下拉（副标题槽放节点）· 状态槽「自动锁定 · 同步状态（· 录制中 / 快捷键冲突）」·
+          主按钮「添加记录」· 次级「锁定」· ⋯ 低频动作。原来自绘的 50px 顶栏与 ⋯ 浮层一并作废。 */}
+      <PageHeader
+        title="保险箱"
+        subtitle={
+          <button ref={idBtnRef} title="切换身份库" onClick={toggleIdMenu}
+            className="flex-none inline-flex items-center gap-[5px] h-[22px] px-[6px] -ml-[2px] rounded-[6px] bg-transparent border-none text-[12px] text-muted cursor-pointer hover:bg-hover hover:text-text">
+            <Mono text={cur?.name || "U"} size={16} radius={4} font={9} />
+            <span className="max-w-[180px] truncate">{cur?.name || "身份库"}</span>
+            <IconChevronDown size={12} />
           </button>
-          {idOpen ? (
-            <div className={`${vPanel} left-0 top-[100%] mt-[6px] w-[240px]`} style={{ animation: "vPop .14s ease" }}>
-              <div className={vGroupHead}>身份库</div>
-              {vaults.map((v) => (
-                <MenuItem
-                  key={v.id}
-                  icon={<Mono text={v.name} size={18} radius={5} font={10} plain />}
-                  label={v.name}
-                  hint={v.id === vid ? "当前" : undefined}
-                  onClick={() => { setVid(v.id); setSelId(""); setCat("all"); setIdOpen(false); }}
-                />
-              ))}
+        }
+        status={<>
+          <span>{st.autoLockMin} 分钟无操作自动锁定</span>
+          <span className="mx-[5px]">·</span>
+          {/* 自动同步状态：改完自己会同步，这里只是让用户看得见它在动、失败了也知道 */}
+          <span className={st.syncError ? "text-danger" : ""} title={st.syncError || undefined}>{syncLabel(st, now)}</span>
+          {recording ? (<>
+            <span className="mx-[5px]">·</span>
+            <span className="text-warning font-semibold">按下组合键…（Esc 取消）</span>
+          </>) : shortcutConflict ? (<>
+            <span className="mx-[5px]">·</span>
+            <span className="text-warning">快捷键与「{tr(OWNER_LABEL[shortcutConflict])}」重复</span>
+          </>) : null}
+        </>}
+        primary={{ label: "添加记录", onClick: () => void addRecord() }}
+        secondary={[{ label: "锁定", onClick: () => void onLock() }]}
+        more={more}
+      />
+
+      {/* 身份库下拉：浮层贴触发钮下沿（fixed 坐标，见 vPanel 的说明）。任一菜单打开时下面那层遮罩接管外部点击。 */}
+      {idMenu ? (
+        <div className={`${vPanel} w-[240px]`} style={{ left: idMenu.x, top: idMenu.y, animation: "vPop .14s ease" }}>
+          <div className={vGroupHead}>身份库</div>
+          {vaults.map((v) => (
+            <MenuItem
+              key={v.id}
+              icon={<Mono text={v.name} size={18} radius={5} font={10} plain />}
+              label={v.name}
+              hint={v.id === vid ? "当前" : undefined}
+              onClick={() => { setVid(v.id); setSelId(""); setCat("all"); setIdMenu(null); }}
+            />
+          ))}
+          <div className="h-px bg-border-soft my-[5px]" />
+          <MenuItem
+            icon={<IconPlus size={14} />}
+            label="新建身份库"
+            onClick={async () => {
+              const id = await api.addVault("新身份库", "custom", "");
+              setVaults(await api.listVaults()); setVid(id); setSelId(""); setCat("all"); setIdMenu(null);
+            }}
+          />
+          <MenuItem icon={<IconPencil size={14} />} label="管理身份库…" onClick={() => { setIdMenu(null); setManageOpen(true); }} />
+          {st.biometric ? (
+            <>
               <div className="h-px bg-border-soft my-[5px]" />
               <MenuItem
-                icon={<IconPlus size={14} />}
-                label="新建身份库"
+                icon={<IconTouchId size={14} />}
+                label={st.quickUnlock ? "关闭 Touch ID 快速解锁" : "启用 Touch ID 快速解锁"}
                 onClick={async () => {
-                  const id = await api.addVault("新身份库", "custom", "");
-                  setVaults(await api.listVaults()); setVid(id); setSelId(""); setCat("all"); setIdOpen(false);
+                  if (st.quickUnlock) await api.disableQuickUnlock(); else await api.enableQuickUnlock();
+                  await onStatus(); setIdMenu(null);
+                  flash(st.quickUnlock ? "已关闭 Touch ID" : "已启用 Touch ID 快速解锁");
                 }}
               />
-              <MenuItem icon={<IconPencil size={14} />} label="管理身份库…" onClick={() => { setIdOpen(false); setManageOpen(true); }} />
-              {st.biometric ? (
-                <>
-                  <div className="h-px bg-border-soft my-[5px]" />
-                  <MenuItem
-                    icon={<IconTouchId size={14} />}
-                    label={st.quickUnlock ? "关闭 Touch ID 快速解锁" : "启用 Touch ID 快速解锁"}
-                    onClick={async () => {
-                      if (st.quickUnlock) await api.disableQuickUnlock(); else await api.enableQuickUnlock();
-                      await onStatus(); setIdOpen(false);
-                      flash(st.quickUnlock ? "已关闭 Touch ID" : "已启用 Touch ID 快速解锁");
-                    }}
-                  />
-                </>
-              ) : null}
-            </div>
+            </>
           ) : null}
         </div>
-        <span className="flex-1" />
-        <span className="flex-none whitespace-nowrap text-[11.5px] text-faint">{st.autoLockMin} 分钟无操作自动锁定</span>
-        {/* 自动同步状态：改完自己会同步，这里只是让用户看得见它在动、失败了也知道 */}
-        <span className={`flex-none whitespace-nowrap text-[11.5px] ${st.syncError ? "text-danger" : "text-faint"}`}
-          title={st.syncError || undefined}>{syncLabel(st, now)}</span>
-        <button className={btnPrimary} onClick={() => void addRecord()}><IconPlus size={13} className="inline-block align-[-2px] mr-[4px]" />添加记录</button>
-        <button className={btnGhost} onClick={() => void onLock()}>锁定</button>
-        <div className="relative flex-none">
-          <button
-            onClick={() => { setIdOpen(false); setGearOpen(!gearOpen); }}
-            title="更多"
-            className="w-[28px] h-[28px] flex-none inline-flex items-center justify-center border border-border bg-bg text-text rounded-[8px] cursor-pointer hover:border-orange hover:text-orange-text"
-          ><IconDots size={14} /></button>
-          {gearOpen ? (
-            <div className={`${vPanel} right-0 top-[100%] mt-[6px] w-[232px]`} style={{ animation: "vPop .14s ease" }}>
-              <MenuItem icon={<IconCloud size={14} />} label="立即同步" hint={st.syncConfigured ? undefined : "未配置"} onClick={() => void doSync()} />
-              <div className="h-px bg-border-soft my-[5px]" />
-              <MenuItem icon={<IconDownload size={14} />} label="导出加密备份" onClick={() => void doExport(false)} />
-              <MenuItem icon={<IconDownload size={14} />} label="导出明文 JSON" onClick={() => void doExport(true)} />
-              <MenuItem icon={<IconUp size={14} />} label="导入备份 · 数据" onClick={() => void doImport()} />
-              <MenuItem
-                icon={<IconFile size={14} />}
-                label="下载导入模板 (CSV)"
-                onClick={async () => { setGearOpen(false); await api.downloadTemplate("csv"); flash("已下载 CSV 导入模板"); }}
-              />
-              <div className="h-px bg-border-soft my-[5px]" />
-              {/* 录制期间**不关菜单** —— 关掉的话用户就看不到「按下组合键…」这个提示，
-                  会以为点了没反应。录到之后 useHotkeyRecorder 自己会停。 */}
-              <MenuItem
-                icon={<IconKeyboard size={14} />}
-                label="唤起快捷键"
-                hint={recording ? "按下组合键…" : shortcutConflict ? `与「${OWNER_LABEL[shortcutConflict]}」重复` : displayAccel(shortcut) || "未设置"}
-                hintWarn={recording || !!shortcutConflict}
-                onClick={startRecord}
-              />
-              {embedded ? (
-                <MenuItem
-                  icon={<IconWindow size={14} />}
-                  label="在独立窗口打开"
-                  onClick={() => { setGearOpen(false); void api.openWindow(); }}
-                />
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      </header>
+      ) : null}
 
       <div className="flex-1 min-h-0 flex">
         {/* 左栏 196：快速访问 + 分组。分组支持右键改名 / 删除 */}
@@ -1076,7 +1080,7 @@ function Main({ onLock, st, onStatus, embedded }: { onLock: () => Promise<void>;
       ) : null}
 
       {imp.open ? (
-        <Modal width={360} onClose={() => setImp({ open: false, mp: "", sk: "", err: "" })}>
+        <Modal width={480} onClose={() => setImp({ open: false, mp: "", sk: "", err: "" })}>
           <div className="text-[14px] font-semibold">导入加密备份</div>
           <div className="text-[12px] text-muted leading-[1.7] mt-[6px]">输入备份对应的主密码解密（若换过 Secret Key 也一并填）。记录会追加到当前身份库，不覆盖现有数据。</div>
           <div className="flex flex-col gap-[9px] mt-[14px]">
@@ -1132,9 +1136,10 @@ function NavRow({ label, Icon, iconValue, mono, count, active, onClick, onContex
   );
 }
 
-// 菜单/下拉里的一行。danger 用红字 + 红底悬停，不做红色实心（实心只留给确认弹窗的最终按钮）。
+// 身份库下拉 / 右键菜单里的一行（页头的 ⋯ 菜单已换成 PageHeader 自带的 ContextMenu，不走这里）。
+// danger 用红字 + 红底悬停，不做红色实心（实心只留给确认弹窗的最终按钮）。
 // hint 是右侧的一小段说明文字，trail 是右侧的节点（折叠箭头这种），两者可同时出现。
-function MenuItem({ icon, label, hint, hintWarn, trail, danger, onClick }: { icon?: ReactNode; label: string; hint?: string; hintWarn?: boolean; trail?: ReactNode; danger?: boolean; onClick: () => void }) {
+function MenuItem({ icon, label, hint, trail, danger, onClick }: { icon?: ReactNode; label: string; hint?: string; trail?: ReactNode; danger?: boolean; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -1142,7 +1147,7 @@ function MenuItem({ icon, label, hint, hintWarn, trail, danger, onClick }: { ico
     >
       {icon ? <span className="flex-none inline-flex items-center">{icon}</span> : null}
       <span className="flex-1 min-w-0 truncate">{label}</span>
-      {hint ? <span className={`flex-none whitespace-nowrap text-[11px] ${hintWarn ? "text-warning font-semibold" : "text-faint"}`}>{hint}</span> : null}
+      {hint ? <span className="flex-none whitespace-nowrap text-[11px] text-faint">{hint}</span> : null}
       {trail ? <span className="flex-none inline-flex items-center text-faint">{trail}</span> : null}
     </button>
   );
@@ -1163,7 +1168,7 @@ function VaultsManager({ vaults, vid, onClose, reload, onDeleted, flash }: {
   };
   return (
     <>
-      <Modal width={440} onClose={onClose}>
+      <Modal width={480} onClose={onClose}>
         <div className="text-[14px] font-semibold">管理身份库</div>
         <div className="text-[12px] text-muted mt-[5px]">改名直接编辑；删除会连同该库下的全部记录一起移除。</div>
         <div className="flex flex-col mt-[14px]">
@@ -1340,7 +1345,7 @@ function Detail({ item, vid, types, typeName, autoEdit, flash, onChange, onFav, 
       ) : null}
 
       {addOpen ? (
-        <Modal width={320} onClose={() => setAddOpen(false)}>
+        <Modal width={480} onClose={() => setAddOpen(false)}>
           <div className="text-[14px] font-semibold">添加控件</div>
           <div className="text-[12px] text-muted mt-[5px]">一条记录可以叠加任意多个控件。</div>
           <div className="grid grid-cols-2 gap-[8px] mt-[14px]">
@@ -1542,7 +1547,7 @@ function PwGen({ onClose, onPick }: { onClose: () => void; onPick: (p: string) =
   );
 
   return (
-    <Modal width={330} onClose={onClose}>
+    <Modal width={480} onClose={onClose}>
       <div className="text-[14px] font-semibold">生成密码</div>
       <div className="flex items-center gap-[8px] mt-[12px]">
         <span className="flex-1 min-w-0 font-mono text-[13.5px] break-all bg-bg border border-border rounded-[8px] px-[11px] py-[9px]">{pw}</span>

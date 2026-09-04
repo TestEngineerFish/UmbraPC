@@ -33,6 +33,9 @@ export interface LauncherAPI {
   openWorkflowDir(wfId: string): Promise<{ ok: boolean; dir: string; error: string }>;
   getPhrases(): Promise<Phrase[]>;
   setPhrases(phrases: Phrase[]): Promise<void>;
+  // 常用语标签清单（批次 012）：顺序即分组顺序；改名 / 合并 / 删除由渲染层改好 phrases 后一并写回。
+  getPhraseTags(): Promise<string[]>;
+  setPhraseTags(names: string[]): Promise<void>;
   phrasesSyncNow(): Promise<boolean>;
   phrasesSyncState(): Promise<PhraseSyncState>;
   onPhrasesChanged(cb: (list: Phrase[]) => void): () => void;

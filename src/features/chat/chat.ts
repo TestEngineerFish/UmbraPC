@@ -279,6 +279,12 @@ let goNavCb: ((nav: string) => void) | null = null;
 export function setGoNav(cb: (nav: string) => void): void {
   goNavCb = cb;
 }
+// 页头齿轮 / ⋯ 里的「聊天设置」（批次 012：聊天与助手从总设置搬进聊天）。设置视图是 React 覆盖层，
+// 由 App 挂在聊天页之上 —— 这里只发信号，同款注入，防循环依赖。
+let openSettingsCb: (() => void) | null = null;
+export function setOpenSettings(cb: () => void): void {
+  openSettingsCb = cb;
+}
 
 const esc = (s: string) =>
   String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -1322,32 +1328,33 @@ function renderHeader(): void {
             ? t("chat.lastSeenAt", { time: fmtMsgTime(d.last_seen) })
             : t("chat.offline")
         : t("chat.offline");
-  // 稿 1370-1379：标题栏是**一行**（头像 26 + 名字 14/600 + 副标题 11.5 faint），
-  // 右侧只有两颗 26px 的图标按钮：⋯ 溢出菜单、ⓘ 设备详情。
-  // 原先这里是「头像 32 + 两行堆叠」，外加两颗常驻的文字按钮（复制聊天 / 清空聊天）——
-  // 那两颗一直占着标题栏，而它们都是低频动作，尤其「清空聊天」是破坏性的，
-  // 常驻反而增加误点面积。收进溢出菜单后标题栏干净了，危险动作也多隔了一层。
+  // 页头照《PC 页面骨架》第 01 节手写一份（聊天是命令式 DOM，拿不到 React 的 PageHeader；
+  // 取值到像素）：高 52 定高、--card 底 + 下边 1px、左 18 右 14；标题 16/600 一档；
+  // 副标题「· 」+ 12px --faint（带 7px 状态点）；右侧图标钮 28×28 圆角 7 --muted、hover --hover 底。
+  // 顺序从右往左：⋯ 更多 · 设置齿轮 · ⓘ 设备详情（本页特有，放在家具左边）。
+  // 原来的 26 头像 + 14px 名字 + 两颗 26 描边钮随规范作废。
   const iconBtn = (id: string, title: string, path: string, on: boolean) =>
-    `<button id="${id}" title="${esc(title)}" style="flex:none;display:flex;align-items:center;justify-content:center;width:26px;height:26px;border:1px solid ${on ? "var(--orange)" : "var(--border)"};background:${on ? "var(--orange-soft)" : "transparent"};color:${on ? "var(--orange-text)" : "var(--muted)"};border-radius:7px;cursor:pointer;transition:border-color .13s ease,color .13s ease;">`
-    + `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${path}</svg></button>`;
+    `<button id="${id}" title="${esc(title)}" class="hover:bg-hover hover:text-text" style="flex:none;display:flex;align-items:center;justify-content:center;width:28px;height:28px;border:none;background:${on ? "var(--orange-soft)" : "transparent"};color:${on ? "var(--orange-text)" : "var(--muted)"};border-radius:7px;cursor:pointer;transition:background-color .13s ease,color .13s ease;">`
+    + `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">${path}</svg></button>`;
   const info =
     activeConv === MAIN
       ? ""
       : iconBtn("udetailbtn", t("chat.deviceDetail"), `<circle cx="12" cy="12" r="9"></circle><path d="M12 16v-4M12 8h.01"></path>`, detailOpen);
   el.innerHTML = `
-    ${avatarHtml(activeConv, 26)}
-    <span style="flex:none;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:40%;">${esc(convLabel(activeConv))}</span>
-    <span style="flex:none;font-size:11.5px;color:var(--faint);white-space:nowrap;display:flex;align-items:center;gap:5px;min-width:0;overflow:hidden;">${presenceDot(activeConv)}${esc(sub)}</span>
-    <span style="flex:1;min-width:8px;"></span>
-    ${iconBtn("uheadmore", t("chat.more"), `<path d="M6 12h.01M12 12h.01M18 12h.01"></path>`, headMenuOpen)}
+    <span style="flex:none;max-width:46%;font-size:16px;font-weight:600;letter-spacing:-.005em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(convLabel(activeConv))}</span>
+    <span style="flex:1;min-width:0;font-size:12px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px;"><span style="flex:none;">·</span>${presenceDot(activeConv)}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis;">${esc(sub)}</span></span>
     ${info}
+    ${iconBtn("uheadgear", t("chat.settingsTitle"), `<circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path>`, false)}
+    ${iconBtn("uheadmore", t("chat.more"), `<path d="M6 12h.01M12 12h.01M18 12h.01"></path>`, headMenuOpen)}
     ${headMenuOpen ? headMenuHtml() : ""}`;
   el.querySelector("#uheadmore")?.addEventListener("click", (e) => {
     e.stopPropagation();
     headMenuOpen = !headMenuOpen;
     renderHeader();
   });
+  el.querySelector("#uheadgear")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); openSettingsCb?.(); });
   el.querySelector("#uheadmenu")?.addEventListener("click", (e) => e.stopPropagation());
+  el.querySelector("#uhm-settings")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); openSettingsCb?.(); });
   el.querySelector("#uhm-copy")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); void copyActiveHistory(); });
   el.querySelector("#uhm-clear")?.addEventListener("click", () => { headMenuOpen = false; renderHeader(); void clearActiveHistory(); });
   el.querySelector("#udetailbtn")?.addEventListener("click", () => {
@@ -1370,7 +1377,9 @@ function headMenuHtml(): string {
     `<div id="${id}" style="display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:6px;font-size:12.5px;color:${danger ? "var(--danger)" : "var(--text)"};white-space:nowrap;cursor:pointer;">`
     + `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" style="flex:none;">${path}</svg>`
     + `<span style="flex:1;min-width:0;">${esc(label)}</span></div>`;
-  return `<div id="uheadmenu" style="position:absolute;right:14px;top:40px;z-index:40;width:142px;background:var(--card);border:1px solid var(--border);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.13);padding:4px;">`
+  // 位置贴 ⋯ 钮下沿（页头 52 高，钮底在 40，留 4px）；宽 168 与通用 ContextMenu 同档。
+  return `<div id="uheadmenu" style="position:absolute;right:14px;top:44px;z-index:40;width:168px;background:var(--card);border:1px solid var(--border);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.13);padding:4px;">`
+    + row("uhm-settings", t("chat.settingsTitle"), `<circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.2 2.2M16.9 16.9l2.2 2.2M4.9 19.1l2.2-2.2M16.9 7.1l2.2-2.2"></path>`)
     + row("uhm-copy", t("chat.copyHistory"), `<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>`)
     + `<div style="height:1px;background:var(--border-soft);margin:4px 6px;"></div>`
     + row("uhm-clear", t("chat.clearHistory"), `<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"></path>`, true)
@@ -2338,7 +2347,7 @@ export function mount(el: HTMLElement): void {
         <div id="ucontacts" style="flex:1;overflow-y:auto;padding:0 8px 10px;display:flex;flex-direction:column;gap:2px;min-height:0;"></div>
       </aside>
       <section style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;position:relative;">
-        <div id="uchathead" style="position:relative;display:flex;align-items:center;gap:9px;padding:10px 16px;border-bottom:1px solid var(--border);flex:none;background:var(--card);"></div>
+        <div id="uchathead" style="position:relative;display:flex;align-items:center;gap:10px;height:52px;padding:0 14px 0 18px;border-bottom:1px solid var(--border);flex:none;background:var(--card);"></div>
         <div id="uofflinebar"></div>
         <div id="umsgs" style="flex:1;overflow-y:auto;padding:18px 20px 22px;display:flex;flex-direction:column;gap:14px;min-height:0;"></div>
         <div id="ucomposer" style="flex:none;border-top:1px solid var(--border);background:var(--card);"></div>

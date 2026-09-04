@@ -118,10 +118,15 @@ export class PhraseSync {
         order: i,                       // 顺序就是数组下标，服务端跟着胜者走
         updatedAt: p.updatedAt || 0,
       }));
+      // 标签清单（批次 012）整份带上，服务端按 updatedAt 整份 last-write-wins（清单小，不逐条合并）。
+      // 本地从没设过清单（老配置）时不带：带一份 updatedAt=0 的空清单只会被服务端的赢回来，白发。
+      const tags = c.phraseTags
+        ? { names: c.phraseTags, updatedAt: c.phraseTagsUpdatedAt || 0 }
+        : undefined;
       const resp = await httpFetch(`${httpBase(c)}/phrases/sync`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Umbra-Token": c.token },
-        body: JSON.stringify({ items, deleted: c.phrasesDeleted || [] }),
+        body: JSON.stringify({ items, deleted: c.phrasesDeleted || [], ...(tags ? { tags } : {}) }),
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
       if (!resp.ok) {
@@ -133,6 +138,7 @@ export class PhraseSync {
       const data = await resp.json() as {
         items?: { id: string; name?: string; content?: string; keyword?: string; updatedAt?: number }[];
         deleted?: PhraseTomb[];
+        tags?: { names?: string[]; updatedAt?: number };
       };
       // 服务端回的是合并后的全量，本地整份落地（顺序已按 order 排好）。
       const merged: Phrase[] = (data.items || []).map((x) => ({
@@ -151,7 +157,11 @@ export class PhraseSync {
         return true;
       }
       // 墓碑也以服务端为准：本地那份已经推上去合并过了，留着只会重复上报。
-      await this.cfg.save({ phrases: merged, phrasesDeleted: data.deleted || [] });
+      // 标签清单同理：服务端回的是合并后的胜者（老服务端不回 tags → 本地那份原样保留）。
+      const tagPatch = data.tags && Array.isArray(data.tags.names)
+        ? { phraseTags: data.tags.names.map(String), phraseTagsUpdatedAt: Number(data.tags.updatedAt) || 0 }
+        : {};
+      await this.cfg.save({ phrases: merged, phrasesDeleted: data.deleted || [], ...tagPatch });
       this.state.lastAt = Date.now();
       this.state.lastError = "";
       this.onChanged();

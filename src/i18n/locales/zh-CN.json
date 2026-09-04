@@ -13,7 +13,8 @@
     "flow": "工作流",
     "vault": "密码保险箱",
     "runtime": "运行时环境",
-    "money": "记账"
+    "money": "记账",
+    "phrases": "常用语"
   },
   "tools": {
     "clipboardDesc": "复制过的文本、图片、文件都会留在这里，按快捷键随时翻出来。",
@@ -410,7 +411,8 @@
     "emptyBody": "连上服务端并注册成功后，连接、任务下发与能力执行都会记在这里。",
     "showAll": "看全部",
     "capNote": "内存里只留最近 {{cap}} 条，不翻页。更早的在日志文件夹里，按天分文件。",
-    "capCount": "{{n}} / {{cap}} 条"
+    "capCount": "{{n}} / {{cap}} 条",
+    "countLive": "{{n}} 条 · 实时"
   },
   "tasks": {
     "countLine": "共 {{n}} 个 · {{running}} 个执行中",
@@ -551,7 +553,11 @@
     "updateFailed": "改不动，状态没变",
     "doneToast": "已标记完成",
     "archivedToast": "已归档",
-    "reopenToast": "已标回待办"
+    "reopenToast": "已标回待办",
+    "countLine": "共 {{n}} 条 · {{open}} 条待办",
+    "allTags": "全部标签",
+    "noResult": "这些筛选条件下没有灵感",
+    "clearFilter": "清掉筛选"
   },
   "abilities": {
     "title": "能力",
@@ -581,7 +587,10 @@
     "confirmBeforeRun": "执行前需确认",
     "addSkill": "+ 添加技能",
     "deleteConfirm": "删除自定义程序「{{name}}」？删除后 AI 将不能再调用它的技能，配置也会从 providers.json 里移除。",
-    "deleted": "已删除「{{name}}」"
+    "deleted": "已删除「{{name}}」",
+    "settingsTitle": "能力设置",
+    "backLabel": "返回能力",
+    "secSkills": "技能"
   },
   "realtime": {
     "title": "实时操作",
@@ -604,7 +613,12 @@
     "skillScroll": "滚动",
     "skillOpenApp": "打开应用",
     "skillScreenshot": "截图",
-    "skillOperate": "自主操作"
+    "skillOperate": "自主操作",
+    "settingsTitle": "电脑操作设置",
+    "backLabel": "返回电脑操作",
+    "enableHint": "总开关在设置视图的「权限」分区里",
+    "permHint": "在设置视图的「权限」分区里授权",
+    "statusOff": "未开启"
   },
   "chat": {
     "placeholder": "输入消息，敲 / 用快捷动作，Enter 发送",
@@ -771,7 +785,9 @@
     "imgRemove": "去掉这张",
     "addImage": "发图片",
     "dropToSend": "松手发送 {{n}} 张图片",
-    "imageMsgPreview": "[图片]"
+    "imageMsgPreview": "[图片]",
+    "settingsTitle": "聊天设置",
+    "backLabel": "返回聊天"
   },
   "clipboard": {
     "searchPh": "搜索剪贴板…",
@@ -883,7 +899,15 @@
     "operateUnsupported": "operate（自主操作）尚未接入决策引擎，当前仅支持原子动作：open_app / click / type / key / scroll / screenshot。",
     "favLimit": "收藏条目已达上限"
   },
-  "notify": {},
+  "notify": {
+    "title": "提醒",
+    "countN": "{{n}} 条",
+    "newReminder": "新建提醒",
+    "empty": "还没有提醒",
+    "emptyBody": "点右上角新建一条，到点会用系统通知叫你，也会同步到你的手机。",
+    "desktopOnly": "提醒需要桌面端支持",
+    "desktopOnlyBody": "当前环境没有注入提醒能力。"
+  },
   "trash": {
     "navBadge": "{{count}} 项",
     "countLine": "共 {{count}} 项 · 到期自动清除",
@@ -1136,6 +1160,51 @@
     "actIcon": "改图标",
     "iconPopTitle": "换图标",
     "iconChangeHint": "只换样子，名字和已记的账不动。",
-    "iconChanged": "已换成「{{name}}」"
+    "iconChanged": "已换成「{{name}}」",
+    "headSub": "{{m}} 月 · {{n}} 笔",
+    "settingsTitle": "记账设置",
+    "backLabel": "返回记账",
+    "recManage": "管理周期记账",
+    "monthOnly": "{{m}} 月"
+  },
+  "layout": {
+    "settings": "设置",
+    "more": "更多",
+    "pickOne": "左边选一项看详情",
+    "selectedN": "已选 {{n}} 项",
+    "copied": "已复制",
+    "copyFailed": "复制失败，剪贴板不可用",
+    "readOnlyHint": "只读全文 · 要改内容点右边",
+    "copy": "复制",
+    "cardEmpty": "这段时间没有数据",
+    "back": "返回"
+  },
+  "phrases": {
+    "countN": "{{n}} 条",
+    "untagged": "无标签",
+    "tagCount": "{{n}} 条",
+    "tagLabel": "标签",
+    "noTag": "不加标签",
+    "noTagsYet": "还没有标签。到页头齿轮 → 常用语设置里建几个，编辑时从里面选。",
+    "settingsTitle": "常用语设置",
+    "backLabel": "返回常用语",
+    "secTags": "标签",
+    "secTagsDesc": "一条常用语一个标签，编辑时从这份清单里选。快捷入口输入标签名会列出它下面的全部常用语。删标签不删短语，短语会变成「无标签」。",
+    "addTag": "新增标签",
+    "tagNamePh": "标签名，如「日报」",
+    "rename": "改名",
+    "mergeInto": "合并到…",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "tagExists": "已经有这个标签了",
+    "renameTitle": "改标签名",
+    "mergeTitle": "把「{{name}}」合并到",
+    "mergePick": "选一个标签",
+    "mergeDo": "合并",
+    "mergeHint": "这 {{n}} 条常用语会换成目标标签，「{{name}}」这个标签随后删掉。",
+    "deleteTagAsk": "删除标签「{{name}}」？它下面的 {{n}} 条常用语会变成「无标签」，短语本身不删。",
+    "secHotkey": "快捷键",
+    "secSync": "云端同步",
+    "secSyncDesc": "多设备共用一份常用语；本地改动几秒后自动推送，也可以手动同步。"
   }
 }

@@ -1,7 +1,8 @@
-// 任务页（React + Tailwind）。结构对齐 ClaudeDesign 的任务稿：
-// 左边 452px 列表列（--rail 底：标题+计数+管理/刷新、搜索、筛选胶囊、任务卡），
-// 右边详情列（状态徽章+标题+统计条+总进度，下面「步骤」与「事件时间线」两栏）。
-// 原来的浮层抽屉撤了 —— 详情常驻右侧，切任务不再一层层盖。
+// 任务页（React + Tailwind）。批次 012 起套页面骨架的 **T1 列表 + 详情**：
+// 页头（标题 + 计数副标题 + 「管理」次级钮 + 刷新戳，第二行搜索 + 五档筛选芯片），
+// 左列表 400（--rail 底，卡片密度），右详情常驻（状态徽章+标题+统计条+总进度，
+// 下面「步骤」与「事件时间线」）。原来列表栏里的标题 / 搜索 / 筛选 / 管理钮一律上移页头，
+// 列表栏头只留分组 —— 稿定「列表栏头只放分组 / 排序」。多选态走贴底的多选工具条。
 // 轮询由 legacy setNav 驱动（触发 React 重渲染），选中项仍走 legacy 的 detailId/detail。
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -9,7 +10,8 @@ import * as legacy from "../../app/shell";
 import { deleteTasks, getServerUrl, retryTask, stopTask } from "../../services/server";
 import type { TaskItem, TaskDetail, StepError, TaskStep } from "../../services/server";
 import { ImageViewer } from "../../components/ImageViewer";
-import { btnGhost, btnDanger, RefreshButton, filterChip, filterChipCount, ErrorCard, EmptyState } from "../../components/ui";
+import { btn, filterChip, filterChipCount, ErrorCard, EmptyState } from "../../components/ui";
+import { PageShell, HeaderSearch, ListDetail, ListCard, CardList, MultiSelectBar, SyncSpinner, StatBar } from "../../components/layout";
 import { showToast } from "../../components/overlay";
 import { IconSearch, IconRefresh, IconCheck, IconX, IconClock, IconAlert, IconFolder } from "../../components/icons";
 import { mdToHtml } from "../chat/markdown";
@@ -190,101 +192,82 @@ export function Tasks() {
     }
   };
 
+  const filtering = !!kw || filter !== "all";
+  const clearFilter = () => { setQ(""); setFilter("all"); };
+  // 空态文案：搜索无结果 / 筛选为空 / 一条都没有 / 加载中，四种情形给的动作不同 ——
+  // 前两种能一键清筛选，后两种清了没意义（加载中不是空，是还没到）。
+  const emptyTitle = tasks.loading ? t("tasks.loading") : kw ? t("tasks.noMatch", { q: kw }) : filter !== "all" ? t("tasks.noneInFilter") : t("tasks.empty");
+
   return (
-    <div className="h-full flex min-h-0">
-      {/* ── 列表列 ── */}
-      <section className="w-[452px] flex-none border-r border-border bg-rail flex flex-col min-h-0">
-        <div className="flex-none flex flex-col gap-[11px] p-[14px_14px_11px] border-b border-border">
-          <div className="flex items-center gap-[9px]">
-            <span className="flex-none whitespace-nowrap text-[16px] font-semibold">{t("tasks.title")}</span>
-            <span className="flex-1 min-w-0 truncate text-[11.5px] text-faint">
-              {t("tasks.countLine", { n: tasks.list.length, running: counts.running || 0 })}
-            </span>
-            {selectMode ? (<>
-              <button className={btnGhost} onClick={() => setSelected(allSelected ? new Set() : new Set(ids))}>
+    <PageShell header={{
+      title: t("tasks.title"),
+      subtitle: t("tasks.countLine", { n: tasks.list.length, running: counts.running || 0 }),
+      status: tasks.refreshing ? <SyncSpinner /> : undefined,
+      secondary: selectMode
+        ? [{ label: t("common.cancel"), onClick: exitSelect }]
+        : [
+          { label: t("tasks.manage"), onClick: () => setSelectMode(true), disabled: !tasks.list.length },
+          { label: t("common.refresh"), onClick: () => legacy.manualRefresh() },
+        ],
+      secondRow: (<>
+        <HeaderSearch value={q} onChange={setQ} placeholder={t("tasks.searchPlaceholder")} />
+        {FILTERS.map((f) => {
+          const on = filter === f.k;
+          return (
+            <button key={f.k} onClick={() => setFilter(f.k)} className={filterChip(on, "sm")}>
+              <span>{f.label}</span>
+              <span className={filterChipCount(on)}>{counts[f.k] || 0}</span>
+            </button>
+          );
+        })}
+      </>),
+    }}>
+      <ListDetail
+        listEmpty={!list.length}
+        list={list.length ? (
+          <CardList>
+            {list.map((j) => (
+              <TaskCard key={j.id} task={j} active={j.id === tasks.detailId && !selectMode}
+                selectMode={selectMode} checked={selected.has(j.id)}
+                onOpen={() => (selectMode ? toggle(j.id) : legacy.openTask(j.id))} />
+            ))}
+          </CardList>
+        ) : (
+          <EmptyState compact title={emptyTitle}
+            actionLabel={!tasks.loading && filtering ? t("tasks.clearFilter") : undefined}
+            onAction={!tasks.loading && filtering ? clearFilter : undefined} />
+        )}
+        listFoot={selectMode ? (
+          <MultiSelectBar count={selected.size}>
+            {confirming ? (<>
+              <span className="flex-none text-[12px] text-danger">{t("tasks.confirmDelete", { count: selected.size })}</span>
+              <button className={btn("danger", "sm")} disabled={busy} onClick={doDelete}>{t("tasks.confirmDeleteBtn")}</button>
+              <button className={btn("ghost", "sm")} onClick={() => setConfirming(false)}>{t("common.cancel")}</button>
+            </>) : (<>
+              <button className={btn("ghost", "sm")} onClick={() => setSelected(allSelected ? new Set() : new Set(ids))}>
                 {allSelected ? t("tasks.deselectAll") : t("tasks.selectAll")}
               </button>
-              <button className={btnDanger} disabled={!selected.size || busy} onClick={() => setConfirming(true)}>
+              <button className={btn("danger", "sm")} disabled={!selected.size || busy} onClick={() => setConfirming(true)}>
                 {t("tasks.deleteN", { count: selected.size })}
               </button>
-              <button className={btnGhost} onClick={exitSelect}>{t("common.cancel")}</button>
-            </>) : (<>
-              <button className={btnGhost} disabled={!tasks.list.length} onClick={() => setSelectMode(true)}>{t("tasks.manage")}</button>
-              <RefreshButton onClick={() => legacy.manualRefresh()} spinning={tasks.refreshing} />
             </>)}
-          </div>
-
-          <div className="flex items-center gap-[7px] bg-card border border-border rounded-[8px] px-[9px] py-[5px]">
-            <span className="flex-none text-faint"><IconSearch size={12} /></span>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("tasks.searchPlaceholder")}
-              className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
-          </div>
-
-          {/* 五档筛选（待确认那档随旧代理状态一起删了 —— B 批后任务只有服务端那六个状态）。
-              flex-wrap 让它窄窗折行，不要挤成一条压扁的胶囊带。 */}
-          <div className="flex flex-wrap gap-[4px]">
-            {FILTERS.map((f) => {
-              const on = filter === f.k;
-              return (
-                <button key={f.k} onClick={() => setFilter(f.k)} className={filterChip(on, "sm")}>
-                  <span>{f.label}</span>
-                  <span className={filterChipCount(on)}>{counts[f.k] || 0}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {confirming ? (
-          <div className="flex-none m-[9px_9px_0] flex items-center gap-[10px] bg-danger-soft border border-danger rounded-[10px] px-[12px] py-[10px]">
-            <span className="flex-1 min-w-0 text-[12.5px]">{t("tasks.confirmDelete", { count: selected.size })}</span>
-            <button className={btnDanger} disabled={busy} onClick={doDelete}>{t("tasks.confirmDeleteBtn")}</button>
-            <button className={btnGhost} onClick={() => setConfirming(false)}>{t("common.cancel")}</button>
-          </div>
-        ) : null}
-
-        <div className="flex-1 overflow-y-auto p-[9px] flex flex-col gap-[7px]">
-          {list.map((j) => (
-            <TaskCard key={j.id} task={j} active={j.id === tasks.detailId && !selectMode}
-              selectMode={selectMode} checked={selected.has(j.id)}
-              onOpen={() => (selectMode ? toggle(j.id) : legacy.openTask(j.id))} />
-          ))}
-          {/* 空态走通用空态件。compact 是因为它落在 452px 的列表列里，不是主区。
-              「搜索无结果」和「一条都没有」给的是两套动作：前者该能一键清掉筛选，
-              后者清筛选没有意义。加载中不给动作 —— 那不是空，是还没到。 */}
-          {!list.length ? (
-            <div className="py-6">
-              <EmptyState
-                compact
-                title={tasks.loading ? t("tasks.loading") : kw ? t("tasks.noMatch", { q: kw }) : filter !== "all" ? t("tasks.noneInFilter") : t("tasks.empty")}
-                actionLabel={!tasks.loading && (kw || filter !== "all") ? t("tasks.clearFilter") : undefined}
-                onAction={!tasks.loading && (kw || filter !== "all") ? () => { setQ(""); setFilter("all"); } : undefined}
-              />
-            </div>
-          ) : null}
-        </div>
-      </section>
-
-      {/* ── 详情列 ── */}
-      <main className="flex-1 min-w-0 flex flex-col min-h-0 bg-bg">
-        {/* onChanged：重试/停止改了服务端状态之后重拉列表与详情——不然按钮按完界面纹丝不动。
-            注释放在三元外面：放进表达式容器里会被当成对象字面量，编译不过（灵感页踩过一次）。 */}
-        {tasks.detailId && tasks.detail && tasks.detail.task.id === tasks.detailId ? (
+          </MultiSelectBar>
+        ) : undefined}
+        detail={tasks.detailId && tasks.detail && tasks.detail.task.id === tasks.detailId ? (
+          /* onChanged：重试/停止改了服务端状态之后重拉列表与详情——不然按钮按完界面纹丝不动。 */
           <Detail key={tasks.detail.task.id} d={tasks.detail}
             onChanged={() => { void legacy.manualRefresh(); void legacy.openTask(tasks.detail!.task.id); }} />
-        ) : (
-          <div className="flex-1 flex items-center justify-center text-[12.5px] text-muted">
-            {tasks.detailId ? t("tasks.loadingDetail") : t("tasks.pickOne")}
-          </div>
-        )}
-      </main>
-
+        ) : tasks.detailId ? (
+          <div className="flex-1 flex items-center justify-center text-[12.5px] text-muted">{t("tasks.loadingDetail")}</div>
+        ) : null}
+        placeholder={t("tasks.pickOne")}
+      />
       <ImageViewer src={preview?.src ?? null} alt={preview?.alt} onClose={() => setPreview(null)} />
-    </div>
+    </PageShell>
   );
 }
 
-// 列表里的一张任务卡。选中态用「橙描边 + 左侧 3px 橙条」，比只换描边更容易在一屏卡片里找到。
+// 列表里的一张任务卡（卡片密度）。选中态照骨架件：1px --orange + --orange-soft，不再加左侧色条。
 function TaskCard({ task, active, selectMode, checked, onOpen }: {
   task: TaskItem; active: boolean; selectMode: boolean; checked: boolean; onOpen: () => void;
 }) {
@@ -301,9 +284,7 @@ function TaskCard({ task, active, selectMode, checked, onOpen }: {
   const sub = task.name ? task.goal : task.channel ? t("tasks.fromChannel", { channel: task.channel }) : task.result_summary || "";
 
   return (
-    <div onClick={onOpen}
-      className={`bg-card border rounded-[11px] p-[11px_13px] cursor-pointer ${
-        active || checked ? "border-orange shadow-[inset_3px_0_0_var(--orange)]" : "border-border hover:border-orange"}`}>
+    <ListCard onClick={onOpen} selected={active} checked={checked}>
       <div className="flex items-start gap-[10px]">
         {selectMode ? (
           <span className={`w-4 h-4 flex-none mt-[2px] rounded-[5px] flex items-center justify-center border-[1.5px] ${
@@ -346,7 +327,7 @@ function TaskCard({ task, active, selectMode, checked, onOpen }: {
           ) : null}
         </div>
       </div>
-    </div>
+    </ListCard>
   );
 }
 
@@ -422,14 +403,15 @@ function Detail({ d, onChanged }: { d: TaskDetail; onChanged: () => void }) {
   };
 
   return (<>
-    <div className="flex-none p-[15px_20px_13px] border-b border-border bg-card">
+    {/* 详情头照骨架件 shared.detailHead：padding 14/20、标题 15.5/620、下边 1px；统计从卡片改成统计条。 */}
+    <div className="flex-none px-[20px] pt-[14px] pb-[13px] border-b border-border bg-card">
       <div className="flex items-start gap-[12px]">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-[8px] mb-[5px]">
             <span className={`flex-none whitespace-nowrap px-[9px] py-[2px] rounded-full text-[11px] font-semibold ${TONE_SOFT[m.tone]}`}>{t(m.key)}</span>
             {kind ? <span className="flex-none whitespace-nowrap text-[11px] text-faint">{kind}</span> : null}
           </div>
-          <div className="text-[15.5px] font-semibold leading-[1.45]">{d.task.name || d.task.goal}</div>
+          <div className="text-[15.5px] font-[620] leading-[1.45]">{d.task.name || d.task.goal}</div>
           {/* 目标描述：只有标题另有其名时才单独铺一段（否则 goal 已经当标题用了）。
               收起态两行截断，展开态给一个 132px 的滚动窗；描述够长才出切换按钮。 */}
           {desc ? (
@@ -449,26 +431,17 @@ function Detail({ d, onChanged }: { d: TaskDetail; onChanged: () => void }) {
         </div>
         <div className="flex-none flex gap-[7px]">
           {canRetry ? (
-            <button className={btnGhost} disabled={!!busy} title={t("tasks.retryHint")}
+            <button className={btn("ghost", "sm")} disabled={!!busy} title={t("tasks.retryHint")}
               onClick={() => void act("retry")}>{busy === "retry" ? t("tasks.retrying") : t("tasks.retry")}</button>
           ) : null}
           {canStop ? (
-            <button className={btnDanger} disabled={!!busy}
+            <button className={btn("danger", "sm")} disabled={!!busy}
               onClick={() => void act("stop")}>{busy === "stop" ? t("tasks.stopping") : t("tasks.stop")}</button>
           ) : null}
-          <button className={btnGhost} onClick={() => {
+          <button className={btn("ghost", "sm")} onClick={() => {
             navigator.clipboard.writeText(detailToText(d)).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); });
           }}>{copied ? t("tasks.copied") : t("tasks.copyDetail")}</button>
         </div>
-      </div>
-
-      <div className="flex mt-[13px] border border-border rounded-[10px] overflow-hidden">
-        {stats.map((s, i) => (
-          <div key={s.k} className={`flex-1 min-w-0 flex flex-col gap-[2px] px-[12px] py-[8px] ${i < stats.length - 1 ? "border-r border-border" : ""}`}>
-            <div className="text-[10.5px] text-faint whitespace-nowrap">{s.k}</div>
-            <div className="text-[12.5px] font-medium truncate">{s.v}</div>
-          </div>
-        ))}
       </div>
 
       <div className="flex items-center gap-[10px] mt-[12px]">
@@ -481,6 +454,14 @@ function Detail({ d, onChanged }: { d: TaskDetail; onChanged: () => void }) {
       {/* 重试/停止失败的原因原样显示（409「当前状态不能重试」这类信息必须让用户看到） */}
       {actErr ? <div className="mt-[8px] text-[11.5px] text-danger leading-[1.6]">{actErr}</div> : null}
     </div>
+    <StatBar>
+      {stats.map((s) => (
+        <span key={s.k} className="flex-none flex items-baseline gap-[5px] min-w-0">
+          <span className="text-faint">{s.k}</span>
+          <span className="text-text font-medium truncate">{s.v}</span>
+        </span>
+      ))}
+    </StatBar>
 
     <div className="flex-1 overflow-y-auto p-[16px_20px_28px]">
       {/* 步骤 / 时间线两栏：窄窗口下允许换行叠成一列，两栏各自留 300px 的最小宽度。 */}

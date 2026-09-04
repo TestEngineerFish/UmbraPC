@@ -1,15 +1,18 @@
-// 灵感页（React + Tailwind），按 ClaudeDesign「Umbra 灵感」设计稿三栏布局：
-//   186px 筛选轨（状态 + 标签云） | 双列卡片网格（搜索 / 排序 / 记灵感） | 392px 详情栏
+// 灵感页（React + Tailwind）。批次 012 起套页面骨架的 **T1 列表 + 详情**：
+//   页头（标题「灵感」+ 计数副标题 + 「记灵感」主按钮 + 「刷新」次级钮，刷新中旋转弧在状态槽；
+//   第二行 = 搜索 + 排序下拉 + 状态筛选芯片，行末一个「标签」下拉） | 左列表 400（列内单列卡片） | 右详情 flex
+// 原来的 186px 筛选轨（状态 + 标签云）整个撤掉：状态项变成第二行的筛选芯片，标签云收成行末的下拉。
 // 数据由 legacy shell 轮询（getInspState），变更后调 manualRefreshInsp 立即回读。
 // 状态筛选走服务端（setInspFilter），搜索 / 标签 / 排序都在本地做——灵感量级很小，没必要来回请求。
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import * as legacy from "../../app/shell";
-import { btnGhost, btnIcon, btnPrimary, selectBox, ConfirmDialog, Modal, RefreshButton, EmptyState } from "../../components/ui";
+import { btn, btnRow, btnGhost, btnPrimary, select as selectCls, ConfirmDialog, Modal, EmptyState, filterChip, filterChipCount } from "../../components/ui";
+import { PageShell, HeaderSearch, ListDetail, CardList, ListCard, DetailHead, SectionHeader, detailIconBtn, SyncSpinner, Skeleton } from "../../components/layout";
 import { showToast } from "../../components/overlay";
 import {
   IconArrowRight, IconBulb, IconChat, IconCheck, IconCopy, IconKeyboard,
-  IconPencil, IconPhone, IconPlus, IconSearch, IconTrash,
+  IconPencil, IconPhone, IconPlus, IconTrash,
 } from "../../components/icons";
 import {
   createInspiration, deleteInspirations, fetchTaskDetail, organizeStateOf,
@@ -21,11 +24,11 @@ import { mdToHtml } from "../chat/markdown";
 type Filter = "" | "open" | "done" | "archived";
 type Sort = "recent" | "updated" | "tag";
 
-// 三种状态各自的徽章配色与圆点色（圆点用在左侧筛选轨上）。
-const STATE_META: Record<string, { key: string; badge: string; dot: string }> = {
-  open: { key: "inspiration.statusOpen", badge: "bg-orange-soft text-orange-text", dot: "bg-orange" },
-  done: { key: "inspiration.statusDone", badge: "bg-success-soft text-success", dot: "bg-success" },
-  archived: { key: "inspiration.statusArchived", badge: "bg-chip text-muted", dot: "bg-faint" },
+// 三种状态各自的徽章配色。（原筛选轨上的状态圆点随轨一起撤了：第二行的筛选芯片和任务页同款，只有文字 + 计数。）
+const STATE_META: Record<string, { key: string; badge: string }> = {
+  open: { key: "inspiration.statusOpen", badge: "bg-orange-soft text-orange-text" },
+  done: { key: "inspiration.statusDone", badge: "bg-success-soft text-success" },
+  archived: { key: "inspiration.statusArchived", badge: "bg-chip text-muted" },
 };
 const metaOf = (s: string) => STATE_META[s] || STATE_META.open;
 
@@ -40,7 +43,7 @@ const SOURCE_META: Record<string, { key: string; Icon: typeof IconChat }> = {
   ios: { key: "inspiration.sourcePhone", Icon: IconPhone },
 };
 
-// 标签胶囊：选中态跟着左侧标签云联动高亮。
+// 标签胶囊：选中态跟着第二行的标签下拉联动高亮。
 const tagChip = (on: boolean) =>
   `flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] ${
     on ? "bg-orange-soft text-orange-text" : "bg-chip text-muted"}`;
@@ -84,12 +87,15 @@ export function Inspirations() {
 
   const filter = st.filter as Filter;
 
-  // 标签云只统计当前状态筛选下的条目——切到「归档」就只看得到归档里出现过的标签。
+  // 标签下拉只统计当前状态筛选下的条目——切到「归档」就只看得到归档里出现过的标签。
   const tags = useMemo(() => {
     const n: Record<string, number> = {};
     for (const i of st.list) for (const g of i.tags) n[g] = (n[g] || 0) + 1;
     return Object.keys(n).sort((a, b) => n[b] - n[a] || a.localeCompare(b)).map((label) => ({ label, n: n[label] }));
   }, [st.list]);
+  // 选中的标签在当前状态下一条都没有时（切了状态筛选），下拉里仍要有它这一项 ——
+  // 否则受控 select 会回落到「全部标签」，看着像没筛，列表却还是按它筛空的。
+  const tagOptions = tag && !tags.some((g) => g.label === tag) ? [{ label: tag, n: 0 }, ...tags] : tags;
 
   const list = useMemo(() => {
     const kw = q.trim().toLowerCase();
@@ -109,18 +115,18 @@ export function Inspirations() {
     return out;
   }, [st.list, q, tag, sort]);
 
-  // 不默认选中：进页面时右侧是空态，点一下选中、再点一下取消。
-  // 选中项被筛掉时自然回到空态（find 找不到就是 null），不擅自跳到别的条目。
+  // 不默认选中：进页面时右侧是占位，点一下选中、再点一下取消。
+  // 选中项被筛掉时自然回到占位（find 找不到就是 null），不擅自跳到别的条目。
   const current = list.find((i) => i.id === sel) || null;
   const pick = (id: number) => setSel((prev) => (prev === id ? null : id));
 
   const setFilter = (f: Filter) => { legacy.setInspFilter(f); setSel(null); };
 
-  const stateFilters: { k: Filter; label: string; n: number; dot: string }[] = [
-    { k: "", label: t("inspiration.filterAll"), n: st.counts.all, dot: "bg-faint" },
-    { k: "open", label: t("inspiration.statusOpen"), n: st.counts.open, dot: STATE_META.open.dot },
-    { k: "done", label: t("inspiration.statusDone"), n: st.counts.done, dot: STATE_META.done.dot },
-    { k: "archived", label: t("inspiration.statusArchived"), n: st.counts.archived, dot: STATE_META.archived.dot },
+  const stateFilters: { k: Filter; label: string; n: number }[] = [
+    { k: "", label: t("inspiration.filterAll"), n: st.counts.all },
+    { k: "open", label: t("inspiration.statusOpen"), n: st.counts.open },
+    { k: "done", label: t("inspiration.statusDone"), n: st.counts.done },
+    { k: "archived", label: t("inspiration.statusArchived"), n: st.counts.archived },
   ];
 
   const doDelete = async () => {
@@ -138,110 +144,64 @@ export function Inspirations() {
   };
 
   return (
-    <div className="h-full flex min-h-0">
-      {/* ── 筛选轨 ── */}
-      <aside className="w-[186px] flex-none bg-rail border-r border-border flex flex-col min-h-0">
-        <div className="flex-none p-[14px_12px_10px]">
-          <div className="text-[15px] font-semibold">{t("inspiration.title")}</div>
-          <div className="text-[11px] text-faint mt-[3px] leading-[1.5]">{t("inspiration.railSubtitle")}</div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-[0_8px_12px]">
-          <div className="mb-[14px]">
-            <RailLabel>{t("inspiration.railState")}</RailLabel>
-            <div className="flex flex-col gap-px">
-              {stateFilters.map((f) => {
-                const on = filter === f.k;
-                return (
-                  <button key={f.k} onClick={() => setFilter(f.k)}
-                    className={`flex items-center gap-[8px] w-full px-[8px] py-[6px] rounded-[8px] border-none text-[12.5px] cursor-pointer ${
-                      on ? "bg-orange-soft text-orange-text font-semibold" : "bg-transparent text-text hover:bg-hover"}`}>
-                    <span className={`w-[7px] h-[7px] flex-none rounded-full ${f.dot}`} />
-                    <span className="flex-1 text-left whitespace-nowrap">{f.label}</span>
-                    <span className={`flex-none text-[10.5px] font-semibold ${on ? "text-orange-text" : "text-faint"}`}>{f.n}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <div>
-            <div className="flex items-center gap-[6px] p-[0_8px_6px]">
-              <span className="flex-1 text-[10.5px] font-semibold tracking-[.06em] text-faint">{t("inspiration.railTags")}</span>
-              {tag ? (
-                <button onClick={() => setTag(null)}
-                  className="flex-none whitespace-nowrap p-0 border-none bg-transparent text-orange-text hover:text-orange-deep text-[10.5px] cursor-pointer">
-                  {t("inspiration.clearTag")}
-                </button>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap gap-[5px] px-[8px]">
-              {tags.length ? tags.map((g) => {
-                const on = tag === g.label;
-                return (
-                  <button key={g.label} onClick={() => setTag(on ? null : g.label)}
-                    className={`flex-none whitespace-nowrap flex items-center gap-[4px] px-[8px] py-[2px] rounded-full border text-[11px] cursor-pointer hover:border-orange ${
-                      on ? "border-orange bg-orange-soft text-orange-text font-semibold" : "border-border bg-transparent text-muted"}`}>
-                    {g.label}<span className={`text-[9.5px] ${on ? "text-orange-text" : "text-faint"}`}>{g.n}</span>
-                  </button>
-                );
-              }) : <span className="text-[11px] text-faint px-[1px]">{t("inspiration.noTags")}</span>}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex-none p-[11px_12px] border-t border-border">
-          <div className="text-[10.5px] text-faint leading-[1.65]">{t("inspiration.railFootnote")}</div>
-        </div>
-      </aside>
-
-      {/* ── 网格列 ── */}
-      <section className="flex-1 min-w-0 flex flex-col min-h-0">
-        <div className="flex-none flex items-center gap-[9px] p-[13px_16px] border-b border-border bg-card">
-          <div className="flex-1 min-w-0 flex items-center gap-[7px] bg-bg border border-border rounded-[8px] px-[9px] py-[5px]">
-            <span className="flex-none text-faint"><IconSearch size={12} /></span>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("inspiration.searchPlaceholder")}
-              className="flex-1 min-w-0 bg-transparent border-none outline-none text-[12px]" />
-          </div>
-          <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} className={selectBox}>
-            <option value="recent">{t("inspiration.sortRecent")}</option>
-            <option value="updated">{t("inspiration.sortUpdated")}</option>
-            <option value="tag">{t("inspiration.sortTag")}</option>
-          </select>
-          <button className={btnPrimary} onClick={() => setEditing(null)}>
-            <span className="inline-flex items-center gap-[5px]"><IconPlus size={12} />{t("inspiration.add")}</span>
-          </button>
-          <RefreshButton onClick={() => legacy.manualRefreshInsp()} spinning={st.refreshing} />
-        </div>
-
-        {/* 详情栏关掉后中间会宽出 392px，固定两列会把卡片撑得很空，
-            所以按 300px 最小宽度自动分列：详情栏开着仍是设计稿的两列，关掉自动变三列。 */}
-        <div className="flex-1 overflow-y-auto p-[12px]">
-          {list.length ? (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-[10px] content-start">
-              {list.map((i) => <Card key={i.id} item={i} on={current?.id === i.id} tag={tag} onPick={() => pick(i.id)} />)}
-            </div>
+    <PageShell header={{
+      title: t("inspiration.title"),
+      subtitle: t("inspiration.countLine", { n: st.counts.all, open: st.counts.open }),
+      status: st.refreshing ? <SyncSpinner /> : undefined,
+      primary: { label: t("inspiration.add"), onClick: () => setEditing(null) },
+      secondary: [{ label: t("common.refresh"), onClick: () => legacy.manualRefreshInsp() }],
+      // 第二行从左到右：搜索 · 排序 · 四档状态芯片 · （撑开）· 标签下拉。
+      // 搜索框收到 200（默认 240）、标签下拉封顶 150：这一行东西多，最小窗口（900 − 176 导航）下也得放得下。
+      secondRow: (<>
+        <HeaderSearch value={q} onChange={setQ} placeholder={t("inspiration.searchPlaceholder")} width={200} />
+        <select value={sort} onChange={(e) => setSort(e.target.value as Sort)} className={selectCls("sm")}>
+          <option value="recent">{t("inspiration.sortRecent")}</option>
+          <option value="updated">{t("inspiration.sortUpdated")}</option>
+          <option value="tag">{t("inspiration.sortTag")}</option>
+        </select>
+        {stateFilters.map((f) => {
+          const on = filter === f.k;
+          return (
+            <button key={f.k} onClick={() => setFilter(f.k)} className={filterChip(on, "sm")}>
+              <span>{f.label}</span>
+              <span className={filterChipCount(on)}>{f.n}</span>
+            </button>
+          );
+        })}
+        <span className="flex-1" />
+        {/* 标签云收成一个下拉：全部 / 各标签（带计数）。没有标签时禁用并如实写出来。 */}
+        <select value={tag ?? ""} onChange={(e) => setTag(e.target.value || null)} disabled={!tagOptions.length}
+          className={`${selectCls("sm")} max-w-[150px]`} title={t("inspiration.railTags")}>
+          <option value="">{tagOptions.length ? t("inspiration.allTags") : t("inspiration.noTags")}</option>
+          {tagOptions.map((g) => <option key={g.label} value={g.label}>{g.label} ({g.n})</option>)}
+        </select>
+      </>),
+    }}>
+      <ListDetail
+        listEmpty={!list.length}
+        list={st.loading && !st.list.length ? (
+          <Skeleton rows={3} />
+        ) : list.length ? (
+          <CardList>
+            {list.map((i) => <Card key={i.id} item={i} on={current?.id === i.id} tag={tag} onPick={() => pick(i.id)} />)}
+          </CardList>
+        ) : (
+          /* 空态走通用空态件（compact，放列表栏内；右侧只留底色）。
+             硬规则说橙色只出现在主操作、当前选中、进度三处，空态图标不属于任何一处。 */
+          (q.trim() || tag) ? (
+            <EmptyState compact
+              title={t("inspiration.noResult")}
+              actionLabel={t("inspiration.clearFilter")}
+              onAction={() => { setQ(""); setTag(null); }} />
           ) : (
-            /* 空态走通用空态件（稿 4632 就是「PC 空态」组件）。
-               之前这里是手抄的一份：46px 图标框 / 圆角 13 / **橙软底橙字** / 标题 13.5px，
-               而组件（照稿）是 52px / 圆角 14 / --chip 底 --muted 字 / 标题 14px。
-               橙色那一处尤其要改 —— 硬规则说橙色只出现在主操作、当前选中、进度三处，
-               空态图标不属于任何一处。 */
-            <div className="h-[420px] flex items-center justify-center">
-              <EmptyState
-                title={st.loading ? t("inspiration.loading") : t("inspiration.emptyTitle")}
-                body={t("inspiration.emptyHint")}
-                actionLabel={st.loading ? undefined : t("inspiration.emptyAction")}
-                onAction={st.loading ? undefined : () => setEditing(null)}
-              />
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* ── 详情栏 ── 没选中就整列不出现，中间的网格自己撑满剩余宽度 */}
-      {current ? (
-        <aside className="w-[392px] flex-none bg-card border-l border-border flex flex-col min-h-0">
+            <EmptyState compact
+              title={t("inspiration.emptyTitle")}
+              body={t("inspiration.emptyHint")}
+              actionLabel={t("inspiration.emptyAction")}
+              onAction={() => setEditing(null)} />
+          )
+        )}
+        detail={current ? (
           <Detail
             key={current.id}
             item={current}
@@ -251,8 +211,8 @@ export function Inspirations() {
             onChanged={() => legacy.manualRefreshInsp()}
             setBusy={setBusy}
           />
-        </aside>
-      ) : null}
+        ) : null}
+      />
 
       {editing !== undefined ? (
         <Editor item={editing} onClose={() => setEditing(undefined)}
@@ -264,18 +224,8 @@ export function Inspirations() {
           confirmText={t("inspiration.confirmDeleteBtn")}
           onConfirm={doDelete} onCancel={() => setConfirming(false)} />
       ) : null}
-    </div>
+    </PageShell>
   );
-}
-
-// 筛选轨里的分组小标题：10.5px 600 + 字距，两处共用。
-function RailLabel({ children }: { children: React.ReactNode }) {
-  return <div className="text-[10.5px] font-semibold tracking-[.06em] text-faint p-[0_8px_6px]">{children}</div>;
-}
-
-// 详情栏里的分区小标题。
-function SecLabel({ children }: { children: React.ReactNode }) {
-  return <div className="text-[10.5px] font-semibold tracking-[.06em] text-faint mb-[7px]">{children}</div>;
 }
 
 // 来源一行：图标 + 名字。认不出来的 channel 原样显示。
@@ -287,45 +237,46 @@ function Source({ channel, size = 11 }: { channel?: string; size?: number }) {
   return <><Icon size={size} />{t(m.key)}</>;
 }
 
+// 列表里的一张灵感卡（卡片密度）。选中态照骨架件：1px --orange + --orange-soft，不再加左侧色条。
 function Card({ item, on, tag, onPick }: { item: Inspiration; on: boolean; tag: string | null; onPick: () => void }) {
   const { t } = useTranslation();
   const m = metaOf(item.status);
   const title = item.title || item.raw.slice(0, 24) + (item.raw.length > 24 ? "…" : "");
   return (
-    <div onClick={onPick}
-      className={`bg-card border rounded-[12px] p-[12px_14px] cursor-pointer ${
-        on ? "border-orange shadow-[inset_3px_0_0_var(--orange)]" : "border-border hover:border-orange"} ${
-        item.status === "archived" ? "opacity-[.72]" : ""}`}>
-      <div className="flex items-center gap-[7px]">
-        <span className={`flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] font-semibold ${m.badge}`}>{t(m.key)}</span>
-        <span className="flex-1" />
-        <span className="flex-none whitespace-nowrap text-[10.5px] text-faint">{legacy.fmtListTime(item.created_at)}</span>
-      </div>
-      <div className="text-[13.5px] font-semibold mt-[8px] leading-[1.4] line-clamp-2">{title}</div>
-      <div className="text-[12px] text-muted mt-[6px] leading-[1.65] whitespace-pre-wrap line-clamp-3">{item.raw}</div>
-      {item.tags.length || organizeStateOf(item) === "pending" || researchInFlight(item) ? (
-        <div className="flex flex-wrap gap-[4px] mt-[9px]">
-          {/* 进行时提示用 faint 字，别和用户自己打的标签抢注意力 */}
-          {organizeStateOf(item) === "pending" ? (
-            <span className="flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] bg-chip text-faint">{t("inspiration.organizing")}</span>
-          ) : null}
-          {researchInFlight(item) ? (
-            <span className="flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] bg-chip text-faint">{t("inspiration.researching")}</span>
-          ) : null}
-          {item.tags.slice(0, 4).map((g, k) => <span key={k} className={tagChip(tag === g)}>{g}</span>)}
+    <ListCard onClick={onPick} selected={on}>
+      {/* 归档的卡整体压淡；ListCard 不收 className，透明度套在内容层上。 */}
+      <div className={item.status === "archived" ? "opacity-[.72]" : ""}>
+        <div className="flex items-center gap-[7px]">
+          <span className={`flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] font-semibold ${m.badge}`}>{t(m.key)}</span>
+          <span className="flex-1" />
+          <span className="flex-none whitespace-nowrap text-[10.5px] text-faint">{legacy.fmtListTime(item.created_at)}</span>
         </div>
-      ) : null}
-      <div className="flex items-center gap-[7px] mt-[10px] pt-[9px] border-t border-border-soft">
-        <span className="flex-1 inline-flex items-center gap-[4px] text-[10.5px] text-faint whitespace-nowrap">
-          <Source channel={item.source_channel} />
-        </span>
-        {item.task_id ? (
-          <span className="flex-none inline-flex items-center gap-[4px] text-[10.5px] text-success whitespace-nowrap">
-            <IconCheck size={10} />{t("inspiration.linkedJob")}
-          </span>
+        <div className="text-[13.5px] font-semibold mt-[8px] leading-[1.4] line-clamp-2">{title}</div>
+        <div className="text-[12px] text-muted mt-[6px] leading-[1.65] whitespace-pre-wrap line-clamp-3">{item.raw}</div>
+        {item.tags.length || organizeStateOf(item) === "pending" || researchInFlight(item) ? (
+          <div className="flex flex-wrap gap-[4px] mt-[9px]">
+            {/* 进行时提示用 faint 字，别和用户自己打的标签抢注意力 */}
+            {organizeStateOf(item) === "pending" ? (
+              <span className="flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] bg-chip text-faint">{t("inspiration.organizing")}</span>
+            ) : null}
+            {researchInFlight(item) ? (
+              <span className="flex-none whitespace-nowrap px-[8px] py-[1px] rounded-full text-[10.5px] bg-chip text-faint">{t("inspiration.researching")}</span>
+            ) : null}
+            {item.tags.slice(0, 4).map((g, k) => <span key={k} className={tagChip(tag === g)}>{g}</span>)}
+          </div>
         ) : null}
+        <div className="flex items-center gap-[7px] mt-[10px] pt-[9px] border-t border-border-soft">
+          <span className="flex-1 inline-flex items-center gap-[4px] text-[10.5px] text-faint whitespace-nowrap">
+            <Source channel={item.source_channel} />
+          </span>
+          {item.task_id ? (
+            <span className="flex-none inline-flex items-center gap-[4px] text-[10.5px] text-success whitespace-nowrap">
+              <IconCheck size={10} />{t("inspiration.linkedJob")}
+            </span>
+          ) : null}
+        </div>
       </div>
-    </div>
+    </ListCard>
   );
 }
 
@@ -371,104 +322,104 @@ function Detail({ item, busy, onEdit, onDelete, onChanged, setBusy }: {
   };
 
   return (<>
-    <div className="flex-none p-[14px_16px_13px] border-b border-border">
-      <div className="flex items-center gap-[8px]">
-        <span className={`flex-none whitespace-nowrap px-[9px] py-[2px] rounded-full text-[11px] font-semibold ${m.badge}`}>{t(m.key)}</span>
-        <span className="flex-1" />
-        <button className={`${btnIcon} hover:border-orange hover:text-orange-text`} title={t("common.edit")} onClick={onEdit}><IconPencil size={12} /></button>
-        <button className={`${btnIcon} hover:border-orange hover:text-orange-text`} title={copied ? t("common.copied") : t("common.copy")} onClick={copy}>
-          {copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+    {/* 详情头走骨架件 DetailHead：状态徽章当前导，标题，「来源 · 时间」当副行；右上角编辑 / 复制 / 删除三颗 24 图标钮。 */}
+    <DetailHead
+      lead={<span className={`flex-none whitespace-nowrap px-[9px] py-[2px] rounded-full text-[11px] font-semibold ${m.badge}`}>{t(m.key)}</span>}
+      title={<span style={{ textWrap: "pretty" } as React.CSSProperties}>{item.title || item.raw.slice(0, 30)}</span>}
+      sub={
+        <span className="flex items-center gap-[8px]">
+          <span className="inline-flex items-center gap-[4px] whitespace-nowrap"><Source channel={item.source_channel} /></span>
+          <span>·</span>
+          <span className="whitespace-nowrap">{legacy.fmtListTime(item.created_at)}</span>
+        </span>
+      }
+      actions={<>
+        <button className={detailIconBtn} title={t("common.edit")} onClick={onEdit}><IconPencil size={13} /></button>
+        <button className={detailIconBtn} title={copied ? t("common.copied") : t("common.copy")} onClick={copy}>
+          {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
         </button>
-        <button className={`${btnIcon} hover:border-danger hover:text-danger`} title={t("common.delete")} onClick={onDelete}><IconTrash size={12} /></button>
-      </div>
-      <div className="text-[15.5px] font-semibold leading-[1.45] mt-[9px]" style={{ textWrap: "pretty" } as React.CSSProperties}>
-        {item.title || item.raw.slice(0, 30)}
-      </div>
-      <div className="flex items-center gap-[8px] mt-[8px] text-[11px] text-faint">
-        <span className="inline-flex items-center gap-[4px] whitespace-nowrap"><Source channel={item.source_channel} /></span>
-        <span>·</span>
-        <span className="whitespace-nowrap">{legacy.fmtListTime(item.created_at)}</span>
-      </div>
-    </div>
+        <button className={detailIconBtn} title={t("common.delete")} onClick={onDelete}><IconTrash size={13} /></button>
+      </>}
+    />
 
-    <div className="flex-1 overflow-y-auto p-[14px_16px_20px] flex flex-col gap-[15px]">
-      <div>
-        <SecLabel>{t("inspiration.rawLabel")}</SecLabel>
-        <div className="text-[12.5px] leading-[1.75] whitespace-pre-wrap bg-bg border border-border rounded-[10px] p-[11px_12px]"
-          style={{ textWrap: "pretty" } as React.CSSProperties}>{item.raw}</div>
-      </div>
-
-      {item.summary ? (
+    {/* 详情列现在是 flex 宽（不再是 392 定宽），正文限宽 760 免得一行字拉得太长。分区小标题一律 SectionHeader。 */}
+    <div className="flex-1 overflow-y-auto p-[7px_20px_24px]">
+      <div className="max-w-[760px] flex flex-col gap-[10px]">
         <div>
-          <div className="flex items-center gap-[6px] mb-[7px]">
-            <span className="flex-none text-orange-text"><IconBulb size={12} /></span>
-            <span className="flex-1 text-[10.5px] font-semibold tracking-[.06em] text-faint">{t("inspiration.summaryLabel")}</span>
-          </div>
-          <div className="bg-orange-soft rounded-[10px] p-[11px_12px]">
-            <div className="text-[12.5px] leading-[1.7] text-orange-text" style={{ textWrap: "pretty" } as React.CSSProperties}>{item.summary}</div>
-          </div>
+          <SectionHeader>{t("inspiration.rawLabel")}</SectionHeader>
+          <div className="text-[12.5px] leading-[1.75] whitespace-pre-wrap bg-card border border-border rounded-[10px] p-[11px_12px]"
+            style={{ textWrap: "pretty" } as React.CSSProperties}>{item.raw}</div>
         </div>
-      ) : organizeStateOf(item) === "pending" ? (
-        // 手动记完立刻点进来，这一节空着会让人以为没在整理，转头就自己去填标题了。
-        <div>
-          <SecLabel>{t("inspiration.summaryLabel")}</SecLabel>
-          <div className="text-[12px] text-faint leading-[1.7]">{t("inspiration.organizingHint")}</div>
-        </div>
-      ) : null}
 
-      <Research item={item} onChanged={onChanged} />
-
-      <div>
-        <SecLabel>{t("inspiration.railTags")}</SecLabel>
-        <div className="flex flex-wrap gap-[5px]">
-          {item.tags.map((g, k) => <span key={k} className={tagChip(false)}>{g}</span>)}
-          <button onClick={onEdit}
-            className="flex-none whitespace-nowrap flex items-center gap-[3px] px-[9px] py-[2px] rounded-full border border-dashed border-border bg-transparent text-faint text-[11px] cursor-pointer hover:border-orange hover:text-orange-text">
-            <IconPlus size={10} />{t("inspiration.addTag")}
-          </button>
-        </div>
-      </div>
-
-      {item.task_id ? (
-        <div>
-          <SecLabel>{t("inspiration.jobLabel")}</SecLabel>
-          <div className="flex items-center gap-[9px] border border-border rounded-[10px] p-[10px_12px] hover:border-orange">
-            <span className="w-[22px] h-[22px] flex-none rounded-[6px] bg-success-soft text-success flex items-center justify-center"><IconCheck size={12} /></span>
-            <div className="flex-1 min-w-0">
-              <div className="text-[12px] truncate">{task ? (task.name || task.goal) : item.task_id}</div>
-              <div className="text-[10.5px] text-faint mt-[2px] whitespace-nowrap">
-                {task ? `${t(`tasks.status${task.status.charAt(0).toUpperCase()}${task.status.slice(1)}`, { defaultValue: task.status })} · ${legacy.fmtListTime(task.updated_at)}` : t("common.loading")}
-              </div>
+        {item.summary ? (
+          <div>
+            <SectionHeader>
+              <span className="inline-flex items-center gap-[6px]"><span className="text-orange-text flex"><IconBulb size={12} /></span>{t("inspiration.summaryLabel")}</span>
+            </SectionHeader>
+            <div className="bg-orange-soft rounded-[10px] p-[11px_12px]">
+              <div className="text-[12.5px] leading-[1.7] text-orange-text" style={{ textWrap: "pretty" } as React.CSSProperties}>{item.summary}</div>
             </div>
-            <button onClick={() => legacy.openTaskFrom(item.task_id!)}
-              className="flex-none whitespace-nowrap p-0 border-none bg-transparent text-orange-text hover:text-orange-deep text-[11px] cursor-pointer">
-              {t("inspiration.jobOpen")}
+          </div>
+        ) : organizeStateOf(item) === "pending" ? (
+          // 手动记完立刻点进来，这一节空着会让人以为没在整理，转头就自己去填标题了。
+          <div>
+            <SectionHeader>{t("inspiration.summaryLabel")}</SectionHeader>
+            <div className="text-[12px] text-faint leading-[1.7]">{t("inspiration.organizingHint")}</div>
+          </div>
+        ) : null}
+
+        <Research item={item} onChanged={onChanged} />
+
+        <div>
+          <SectionHeader>{t("inspiration.railTags")}</SectionHeader>
+          <div className="flex flex-wrap gap-[5px]">
+            {item.tags.map((g, k) => <span key={k} className={tagChip(false)}>{g}</span>)}
+            <button onClick={onEdit}
+              className="flex-none whitespace-nowrap flex items-center gap-[3px] px-[9px] py-[2px] rounded-full border border-dashed border-border bg-transparent text-faint text-[11px] cursor-pointer hover:border-orange hover:text-orange-text">
+              <IconPlus size={10} />{t("inspiration.addTag")}
             </button>
           </div>
         </div>
-      ) : null}
+
+        {item.task_id ? (
+          <div>
+            <SectionHeader>{t("inspiration.jobLabel")}</SectionHeader>
+            <div className="flex items-center gap-[9px] bg-card border border-border rounded-[10px] p-[10px_12px] hover:border-orange">
+              <span className="w-[22px] h-[22px] flex-none rounded-[6px] bg-success-soft text-success flex items-center justify-center"><IconCheck size={12} /></span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[12px] truncate">{task ? (task.name || task.goal) : item.task_id}</div>
+                <div className="text-[10.5px] text-faint mt-[2px] whitespace-nowrap">
+                  {task ? `${t(`tasks.status${task.status.charAt(0).toUpperCase()}${task.status.slice(1)}`, { defaultValue: task.status })} · ${legacy.fmtListTime(task.updated_at)}` : t("common.loading")}
+                </div>
+              </div>
+              <button onClick={() => legacy.openTaskFrom(item.task_id!)}
+                className="flex-none whitespace-nowrap p-0 border-none bg-transparent text-orange-text hover:text-orange-deep text-[11px] cursor-pointer">
+                {t("inspiration.jobOpen")}
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
 
-    <div className="flex-none p-[12px_16px] border-t border-border bg-bg flex flex-col gap-[9px]">
-      <button onClick={() => legacy.prefillTaskToChat(doItPrompt(item), item.title || item.raw.slice(0, 18))}
-        className="w-full flex items-center justify-center gap-[6px] px-0 py-[8px] bg-orange text-white border-none rounded-[8px] text-[12.5px] font-semibold cursor-pointer hover:bg-orange-deep">
+    {/* 详情列底部动作区。一页只准一颗橙实心，那颗是页头的「记灵感」——
+        所以「让 Umbra 去做这件事」从橙实心改成描边钮，放在最右；两个状态切换钮在左。 */}
+    <div className="flex-none flex items-center gap-[8px] px-[20px] py-[12px] border-t border-border bg-card">
+      <button className={btn("ghost")} disabled={busy} onClick={() => setStatus(item.status === "done" ? "open" : "done")}>
+        {item.status === "done" ? t("inspiration.markOpen") : t("inspiration.markDone")}
+      </button>
+      <button className={btn("ghost")} disabled={busy} onClick={() => setStatus(item.status === "archived" ? "open" : "archived")}>
+        {item.status === "archived" ? t("inspiration.unarchive") : t("inspiration.archive")}
+      </button>
+      <span className="flex-1" />
+      <button className={btnRow("ghost")} onClick={() => legacy.prefillTaskToChat(doItPrompt(item), item.title || item.raw.slice(0, 18))}>
         <IconArrowRight size={13} />{t("inspiration.sendToChat")}
       </button>
-      <div className="flex gap-[7px]">
-        <button disabled={busy} onClick={() => setStatus(item.status === "done" ? "open" : "done")}
-          className="flex-1 py-[7px] border border-border bg-transparent text-text rounded-[8px] text-[12px] cursor-pointer whitespace-nowrap hover:border-success hover:text-success disabled:bg-chip disabled:text-faint disabled:border-transparent disabled:cursor-not-allowed disabled:hover:bg-chip disabled:hover:text-faint disabled:hover:border-transparent">
-          {item.status === "done" ? t("inspiration.markOpen") : t("inspiration.markDone")}
-        </button>
-        <button disabled={busy} onClick={() => setStatus(item.status === "archived" ? "open" : "archived")}
-          className="flex-1 py-[7px] border border-border bg-transparent text-text rounded-[8px] text-[12px] cursor-pointer whitespace-nowrap hover:border-orange hover:text-orange-text disabled:bg-chip disabled:text-faint disabled:border-transparent disabled:cursor-not-allowed disabled:hover:bg-chip disabled:hover:text-faint disabled:hover:border-transparent">
-          {item.status === "archived" ? t("inspiration.unarchive") : t("inspiration.archive")}
-        </button>
-      </div>
     </div>
   </>);
 }
 
-// 详情栏的「秘书调研」一节。
+// 详情栏的「秘书调研」一节。四态的边框卡先保留手写（不属于这批迁移），只把分区小标题换成骨架件。
 //
 // 四个状态各画各的，**不合并成「有内容就显示」**：「还没查过」和「查了但失败了」
 // 对用户是完全不同的两件事 —— 前者该给按钮，后者该说清为什么再给重试。
@@ -500,7 +451,7 @@ function Research({ item, onChanged }: { item: Inspiration; onChanged: () => voi
 
   return (
     <div>
-      <SecLabel>{t("inspiration.researchLabel")}</SecLabel>
+      <SectionHeader>{t("inspiration.researchLabel")}</SectionHeader>
 
       {state === "queued" || state === "running" ? (
         <div className="text-[12px] text-muted leading-[1.7] border border-border rounded-[10px] p-[10px_12px]">
@@ -563,7 +514,7 @@ function Editor({ item, onClose, onSaved }: { item: Inspiration | null; onClose:
 
   const field = "w-full border border-border bg-bg text-text rounded-[8px] px-[11px] py-[7px] text-[12.5px] outline-none focus:border-orange";
   return (
-    <Modal width={500} onClose={onClose}
+    <Modal width={560} onClose={onClose}
       title={<span className="flex items-center gap-[10px]">
         <span className="w-[24px] h-[24px] flex-none rounded-[7px] bg-orange-soft text-orange-text flex items-center justify-center"><IconBulb size={13} /></span>
         {item ? t("inspiration.editTitle") : t("inspiration.newTitle")}

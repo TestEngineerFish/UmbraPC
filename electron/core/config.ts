@@ -49,6 +49,11 @@ export interface UmbraConfig {
   launcherScripts: LauncherScript[]; // 自定义脚本（旧；加载时迁移为工作流）
   phrases: Phrase[];                 // 常用语（快捷入口可搜、回车插入；设置里管理排序）
   phrasesDeleted: PhraseTomb[];      // 常用语的删除墓碑（云端同步用，服务端 30 天后清）
+  // 常用语标签清单（批次 012：触发词 → 受管标签，一条常用语一个标签；标签名就是 Phrase.keyword）。
+  // 数组顺序即分组顺序；整份按 phraseTagsUpdatedAt 跨端 last-write-wins（清单小，不逐条合并）。
+  // 旧配置没有这两个字段：读取时用 phrases 里出现过的 keyword 兜底补全（见 launcher 的 getPhraseTags）。
+  phraseTags?: string[];
+  phraseTagsUpdatedAt?: number;
   launcherWorkflows: Workflow[];     // 工作流编排（类 Alfred Workflow）
   launcherPrefabs: WorkflowPrefab[]; // 预制件：存起来的节点组，可在任意工作流里一键落地（E3）
   launcherMaxResults: number;        // 结果列表最多显示几条（同时也是 Script Filter 单次取用上限）

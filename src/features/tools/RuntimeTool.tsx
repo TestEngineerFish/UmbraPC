@@ -299,7 +299,7 @@ function PathModal({ scan, shellOnly, onClose }: { scan: RuntimeScan; shellOnly:
   dirs.forEach((d, i) => { const k = d.replace(/\/+$/, ""); if (!firstAt.has(k)) firstAt.set(k, i); });
   const pad = String(dirs.length).length;
   return (
-    <Modal width={620} title={`Umbra 看到的 PATH`} sub={`${dirs.length} 个目录`} onClose={onClose}
+    <Modal width={680} title={`Umbra 看到的 PATH`} sub={`${dirs.length} 个目录`} onClose={onClose}
       footer={<>
         <span className="flex-1" />
         <button className={btn("ghost", "sm")}
