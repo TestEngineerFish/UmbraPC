@@ -1374,6 +1374,23 @@ function blockHtml(b: Block, i: number, sel = false): string {
 // 上传中：盖 rgba(12,10,8,.5) + 白色**确定型**进度环 + 百分比（有真百分比就不用旋转弧），
 // 下一行「正在上传 · 1.8 MB / 2.9 MB」+「取消上传」。
 // 失败：气泡压到 55% + 描边转红 + 左侧实心红「!」，错误三段式 + [重新发送]。
+// 第 j 张图自己传到哪儿了（0–100）。批次 016：进度环按格画，就需要按格算。
+//
+// 上传是**顺序**的（runImageSend 一张一张 await），所以三档：已进 atts 的 = 100、
+// 正在传的那张 = (整条已传字节 − 它前面那些的字节和) / 它自己的大小、还没轮到的 = 0。
+// 不另存一份 per-file 进度：b.loaded 是整条的已传字节，前缀和一减就是当前这张的，
+// 多一份状态就多一处会不同步。
+function cellPct(b: Extract<Block, { kind: "image" }>, j: number): number {
+  const files = b.files || [];
+  const done = b.atts.length;
+  if (j < done) return 100;
+  if (j > done) return 0;
+  const before = files.slice(0, done).reduce((n, f) => n + f.size, 0);
+  const size = files[j]?.size || 0;
+  if (!size) return 0;
+  return Math.max(0, Math.min(100, Math.round((((b.loaded || 0) - before) / size) * 100)));
+}
+
 function imageBlockHtml(b: Extract<Block, { kind: "image" }>, i: number, sel: boolean): string {
   const halo = sel ? "box-shadow:0 0 0 2px var(--orange-soft);" : "";
   const haloAttr = sel ? ` data-halo="1"` : "";
@@ -1382,20 +1399,31 @@ function imageBlockHtml(b: Extract<Block, { kind: "image" }>, i: number, sel: bo
   const uploading = b.state === "uploading";
   const one = n === 1;
   // 主体：单图=图片自己就是气泡；多图=气泡底上的 3 列格子。
+  // ⚠️ 进度环**画在每一格上**，不是整条一个总环（`imageMessage.uploading`，批次 016 两端同制）。
+  // 理由是上传是 N 个独立请求，「一张失败八张成功」是真会发生的状态 —— 总环表达不了它，
+  // 会逼出「整条 89% 但其中一张已经失败」这种自相矛盾的画面。
+  // **环说个体，字节行说总量**，两句话各管一件事（字节行仍是整条，见下面的 foot）。
+  // 单图时一格 = 整条，两种画法重合，所以单图那支看上去没变。
+  const cellOverlay = (j: number, radius: string, ring: number, pctFont: number): string => {
+    if (!uploading) return "";
+    const cp = cellPct(b, j);
+    return `<span style="position:absolute;inset:0;border-radius:${radius};background:rgba(12,10,8,.5);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:#fff;pointer-events:none;">
+        <svg width="${ring}" height="${ring}" viewBox="0 0 40 40" style="transform:rotate(-90deg);"><circle cx="20" cy="20" r="15.9155" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="3"></circle><circle data-upring="${i}-${j}" cx="20" cy="20" r="15.9155" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-dasharray="100" stroke-dashoffset="${100 - cp}"></circle></svg>
+        <span data-uppct="${i}-${j}" style="font:600 ${pctFont}px ui-monospace,Menlo,monospace;">${cp}%</span>
+      </span>`;
+  };
   const body = one
     ? `<img data-imgat="0" src="${esc(b.srcs[0])}" alt="${esc(t("chat.imageAlt"))}" draggable="false" style="display:block;max-width:240px;max-height:240px;border-radius:12px 12px 4px 12px;${b.state === "sent" ? "cursor:zoom-in;" : ""}">`
     : `<div style="display:grid;grid-template-columns:repeat(${Math.min(3, n)}, 78px);gap:4px;">${b.srcs
-        .map((u, j) => `<img data-imgat="${j}" src="${esc(u)}" alt="${esc(t("chat.imageAlt"))}" draggable="false" style="width:78px;height:78px;object-fit:cover;border-radius:6px;display:block;${b.state === "sent" ? "cursor:zoom-in;" : ""}">`)
+        .map((u, j) => `<span style="position:relative;display:block;width:78px;height:78px;">`
+          + `<img data-imgat="${j}" src="${esc(u)}" alt="${esc(t("chat.imageAlt"))}" draggable="false" style="width:78px;height:78px;object-fit:cover;border-radius:6px;display:block;${b.state === "sent" ? "cursor:zoom-in;" : ""}">`
+          // 78 的格里 34 环 + 10.5 字 ≈ 51，塞得下；单图那支仍用 40 环 + 11.5 字。
+          + cellOverlay(j, "6px", 34, 10.5)
+          + `</span>`)
         .join("")}</div>`;
   const shellPad = one ? "" : "padding:6px;background:var(--user-bubble);";
-  // 上传遮罩：确定型进度环（r=15.9155 → 周长 100，dashoffset 直接用百分数）。
-  const pct = b.total ? Math.max(0, Math.min(100, Math.round(((b.loaded || 0) / b.total) * 100))) : 0;
-  const overlay = uploading
-    ? `<span style="position:absolute;inset:0;border-radius:${one ? "12px 12px 4px 12px" : "10px"};background:rgba(12,10,8,.5);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;color:#fff;">
-        <svg width="40" height="40" viewBox="0 0 40 40" style="transform:rotate(-90deg);"><circle cx="20" cy="20" r="15.9155" fill="none" stroke="rgba(255,255,255,.28)" stroke-width="3"></circle><circle data-upring="${i}" cx="20" cy="20" r="15.9155" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-dasharray="100" stroke-dashoffset="${100 - pct}"></circle></svg>
-        <span data-uppct="${i}" style="font:600 11.5px ui-monospace,Menlo,monospace;">${pct}%</span>
-      </span>`
-    : "";
+  // 单图：遮罩仍然盖整个气泡 —— 那一格就是整条。
+  const overlay = one ? cellOverlay(0, "12px 12px 4px 12px", 40, 11.5) : "";
   const shell = `<div${haloAttr} data-imgmsg="${i}" style="position:relative;display:inline-block;${shellPad}border-radius:${one ? "12px 12px 4px 12px" : "10px"};border:1px solid ${failed ? "var(--danger)" : "var(--border)"};overflow:hidden;${failed ? "opacity:.55;" : ""}${halo}">${body}${overlay}</div>`;
   const failMark = failed
     ? `<span title="${esc(t("chat.sendFailed"))}" style="flex:none;width:17px;height:17px;border-radius:999px;background:var(--danger);color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;">!</span>`
@@ -2636,11 +2664,17 @@ function paintUploadProgress(conv: string, b: Extract<Block, { kind: "image" }>)
   if (conv !== activeConv || !container) return;
   const idx = cs(conv).blocks.indexOf(b);
   if (idx < 0) return;
-  const pct = b.total ? Math.max(0, Math.min(100, Math.round(((b.loaded || 0) / b.total) * 100))) : 0;
-  const ring = container.querySelector(`[data-upring="${idx}"]`) as SVGCircleElement | null;
-  if (ring) ring.setAttribute("stroke-dashoffset", String(100 - pct));
-  const pctEl = container.querySelector(`[data-uppct="${idx}"]`) as HTMLElement | null;
-  if (pctEl) pctEl.textContent = `${pct}%`;
+  // 环按格刷（批次 016）：一条里有几张就刷几颗，各说各的那一张。
+  // 只刷当前正在传的那张其实就够，但整条刷一遍更省心 —— 续传 / 重发时前面几张要一次性补到 100，
+  // 而九个 setAttribute 的代价可以忽略。
+  for (let j = 0; j < b.srcs.length; j++) {
+    const cp = cellPct(b, j);
+    const ring = container.querySelector(`[data-upring="${idx}-${j}"]`) as SVGCircleElement | null;
+    if (ring) ring.setAttribute("stroke-dashoffset", String(100 - cp));
+    const pctEl = container.querySelector(`[data-uppct="${idx}-${j}"]`) as HTMLElement | null;
+    if (pctEl) pctEl.textContent = `${cp}%`;
+  }
+  // 字节行仍然说**整条**（`imageMessage.uploading`：环说个体、字节行说总量）。
   const line = container.querySelector(`[data-upline="${idx}"]`) as HTMLElement | null;
   if (line) line.textContent = `${t("chat.uploading")} · ${fmtMB(b.loaded || 0)} / ${fmtMB(b.total || 0)}`;
 }
