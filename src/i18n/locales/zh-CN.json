@@ -1080,7 +1080,7 @@
     "noteLabel": "备注（可空）",
     "notePh": "例如 美团外卖 · 午饭",
     "catsSlotUsage": "色槽占用",
-    "catsSlotFull": "7 个彩色槽已满",
+    "catsSlotFull": "9 个彩色槽已满",
     "catsSlotLeft": "还剩 {{n}} 个彩色槽",
     "catsGray": "灰",
     "catsThSlot": "色槽",

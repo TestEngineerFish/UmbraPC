@@ -65,7 +65,9 @@ type Block =
   | { kind: "user"; text: string; ts?: string | number; id?: number; failed?: boolean; quote?: MsgQuote; atts?: string[] }
   // reading（批次 013 ③）：占位阶段收到 vision_reading → 三点换成「正在看图…」+ 旋转弧；
   // 只在 thinking 时有意义，第一个 delta 到了自然退场。
-  | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number; id?: number; meta?: MsgMeta; reading?: boolean }
+  // pureImage（批次 016）：这颗占位是**纯图消息**压出来的。它存在的唯一理由是让
+  // dropPlaceholder 认得出「这一轮一定会有 reply、不会以确认卡收场」—— 见那个函数的注释。
+  | { kind: "assistant"; thinking: boolean; streaming: boolean; text: string; trace: string[]; traceOpen: boolean; ts?: string | number; id?: number; meta?: MsgMeta; reading?: boolean; pureImage?: boolean }
   // 识图确认卡 / 识不出卡（批次 013 ④⑤），形状在 vision.ts。
   | VCardBlock
   | VFailBlock
@@ -493,7 +495,13 @@ function onMessage(msg: any): void {
         const uid = Number(msg.user_message_id);
         // 带附件的那条已经由 message_saved 先认领过（批次 013）→ 别再往前找，不然会把 id 错发给
         // 更早一条还没回执的消息。没认领过才从占位往前找最近一条还没有 id 的用户消息（正常就是紧挨着的上一条）。
-        if (!s.blocks.some((b) => b.kind === "user" && b.id === uid)) {
+        //
+        // ⚠️ 「认领过了没有」要**连图片块一起看**（批次 016）：016 之前纯图不产生 reply，
+        // 这个 id 只可能落在文字气泡上；016 之后纯图也回 reply，而它的 id 是 message_saved
+        // 认在**图片块**上的。只查 kind==="user" 的话这里恒判「还没认领」，
+        // 于是往前把这个 id 又发给更早那条没有 id 的文字气泡（别的端发来的消息广播时不带 id，
+        // 很容易就是它）—— 右键删除就删到别人头上。
+        if (!s.blocks.some((b) => (b.kind === "user" || b.kind === "image") && b.id === uid)) {
           for (let i = s.blocks.length - 1; i >= 0; i--) {
             const b = s.blocks[i];
             if (b.kind === "user" && b.id === undefined && !b.failed) { b.id = uid; break; }
@@ -841,12 +849,21 @@ function assistantOf(conv: string): Extract<Block, { kind: "assistant" }> | null
 // 只认「thinking 且 reading」的占位：vision_reading 只发给发起端，所以 reading 就是「这个占位
 // 是那条带图消息压出来的」的记号 —— 别的占位（比如卡是别的端发的图触发的、本端正好在等另一条
 // 回复）一律不碰。removeBlockAt 顺带把各处下标对齐。
+//
+// ⚠️ **纯图占位要排除掉**（批次 016）：016 之后纯图消息也走识图先行，于是它的占位同样会被
+// vision_reading 打上 reading=true —— 但 vision_confirm 是**广播给所有端**的。
+// 不排除的话：本端发了一条纯图正在等回复，此时别的端发了「记一笔：…」+ 图，
+// 本端会把自己那颗活着的占位删掉，随后自己这一轮的 delta / reply 全部落空。
+// 排除是安全的：纯图消息的正文是空串，detect_action("") 恒为 null，
+// 走不到 build_money_card 那条路，所以纯图这一轮**一定**以 reply 收场，永远不该被这里撤。
 function dropPlaceholder(conv: string): void {
   const s = cs(conv);
   const idx = s.assistantIdx;
   if (idx === null) return;
   const b = s.blocks[idx];
-  if (b && b.kind === "assistant" && b.thinking && b.reading === true) removeBlockAt(conv, idx);
+  if (b && b.kind === "assistant" && b.thinking && b.reading === true && !b.pureImage) {
+    removeBlockAt(conv, idx);
+  }
 }
 
 // 识图确认卡「记入」后等回音的定时器（confirm_id → 句柄）。回音来了（resolved / error）就清掉；
@@ -2592,8 +2609,26 @@ async function runImageSend(conv: string, b: Extract<Block, { kind: "image" }>):
     b.state = "failed";
     b.err = t("chat.notConnected");
     if (conv === activeConv) renderMessages();
+    return;
   }
-  // 成功路径不动状态：message_saved 回执来认领（带正式消息 id）。
+  // 成功路径不动图片块的状态：message_saved 回执来认领（带正式消息 id）。
+  //
+  // 但**要开一轮**（批次 016）：服务端原来收到纯图就 continue、不回复，所以这里
+  // 一直没有占位气泡。现在纯图会走识图先行 + handle()，不画占位的话随后的
+  // delta / reply 找不到 assistantIdx，会被**静默丢掉** —— 秘书答了，屏幕上什么都不出现。
+  // 形状照 sendTextWithAtts：占位展开轨迹，vision_reading 到了会在里面显示「正在看图…」。
+  //
+  // 时机是「文件全传完 + WS 送出去之后」，不是点发送那一刻：传图的那十几秒里
+  // 上传进度环已经在转了，再顶一颗「思考中」是两个进度指示打架。
+  const s = cs(conv);
+  const now = Date.now();
+  if (s.assistantIdx !== null) { const a = assistantOf(conv); if (a) { a.thinking = false; a.streaming = false; } }
+  s.blocks.push({ kind: "assistant", thinking: true, streaming: true, text: "", trace: [], traceOpen: true, ts: now, pureImage: true });
+  s.assistantIdx = s.blocks.length - 1;
+  s.lastText = t("chat.imageMsgPreview");
+  s.lastAt = now;
+  if (conv === activeConv) renderMessages();
+  renderContacts();
 }
 
 // 上传进度**就地**刷（环 + 百分比 + 字节行），不整区重绘 —— 输入焦点和滚动位置都不动。

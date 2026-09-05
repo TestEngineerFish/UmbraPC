@@ -1080,7 +1080,7 @@
     "noteLabel": "Note (optional)",
     "notePh": "e.g. Meituan · lunch",
     "catsSlotUsage": "Color slots",
-    "catsSlotFull": "All 7 color slots taken",
+    "catsSlotFull": "All 9 color slots taken",
     "catsSlotLeft": "{{n}} color slots free",
     "catsGray": "Gray",
     "catsThSlot": "Slot",

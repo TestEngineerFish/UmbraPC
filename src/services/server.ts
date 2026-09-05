@@ -1318,7 +1318,10 @@ class ChatConnection {
   }
 
   // 图片消息（批次 011）：文件已先走 POST /files/upload 拿到 file_id，这里只送 id 列表。
-  // 服务端落库 + 跨端广播，不触发秘书回复（一期不识图）；回执是 message_saved（带消息 id）。
+  // 服务端落库 + 跨端广播（回执是 message_saved，带消息 id），**并且从批次 016 起会回复**：
+  // 这一条里的图全部过一遍视觉模型，秘书据此回话。所以调用方送完之后要压一颗占位气泡
+  // （见 chat.ts 的 runImageSend 尾部）—— 不压的话随后的 delta / reply 找不到 assistantIdx，
+  // 会被静默丢掉。
   sendImageMessage(atts: string[], conversation = "assistant"): boolean {
     return this.rawSend({
       type: "message", kind: "image", atts, client_id: getClientId(), conversation,

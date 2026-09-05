@@ -1,6 +1,12 @@
 // T3 设置分组（批次 012 · tokens.pageTemplate.settings）。
-// 总设置 / 小工具三页 / 各功能自己的设置面套它：二级目录 190 宽 --rail 底，**只在三组以上或
-// 十二行以上时出现**；内容最宽 720，padding 20/24；RowsCard = --card + 1px + 圆角 12；
+// 总设置 / 小工具三页 / 各功能自己的设置面套它：二级目录 190 宽 --rail 底，**只在三组以上
+// 「且」十二行以上时出现**；内容最宽 720，padding 20/24；RowsCard = --card + 1px + 圆角 12；
+//
+// ⚠️ 这里原来抄成了「或」，批次 016 设计侧再次确认是「**且**」，并补了理由 ——
+// 二级栏的职责是「在组之间跳」，两组不需要跳、多长都不需要。所以**组数是必要条件，
+// 行数只是充分性的下限**：三组但只有五行，出栏等于给一个滚一下就到底的页面加导航；
+// 按「或」的话，一个两组四十行的页面会长出一条只有两个目标的栏，那条栏比没有更糟。
+// （记账设置现在两组约 18 行，按「且」不出栏是对的；拆到四组之后两条都过，栏跟着出现。）
 // SettingRow 最小 52 高；破坏性项落分组末尾，红描边 + 二次确认。
 import React from "react";
 
@@ -8,7 +14,7 @@ export interface SubNavItem { key: string; label: string; icon?: React.ReactNode
 export interface SubNavGroup { label?: string; items: SubNavItem[] }
 
 export function SettingsPage({ nav, active, onSelect, children }: {
-  /** 传了才画二级目录（调用方按「三组以上或十二行以上」的规矩决定传不传）。 */
+  /** 传了才画二级目录（调用方按「三组以上**且**十二行以上」的规矩决定传不传）。 */
   nav?: SubNavGroup[];
   active?: string;
   onSelect?: (key: string) => void;
