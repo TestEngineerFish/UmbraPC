@@ -43,7 +43,7 @@ const CSS = `
 /* 这个面板是固定浅色的（毛玻璃小窗，不跟随主题）。显式声明 color-scheme:light
    是为了让浏览器**别**按系统深色去渲染原生件 —— 系统深色时输入框的
    自动填充底色、滚动条、文本选中色都会自动翻深，配上这里的浅色底就成了黑底黑字。 */
-:root{color-scheme:light;--bg:#F6F5F2;--card:#FFFFFF;--border:#E6E3DC;--text:#1F2320;--muted:#6B716B;--orange:#E8590C;--orange-soft:#FFF1E6;--chip:#F0EEEA;--sel:#FFF1E6;}
+:root{color-scheme:light;--bg:#F6F5F2;--card:#FFFFFF;--border:#E6E3DC;--text:#1F2320;--muted:#6B716B;--faint:#9A9992;--orange:#E8590C;--orange-soft:#FFF1E6;--chip:#F0EEEA;--sel:#FFF1E6;}
 *{box-sizing:border-box;}
 html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,"SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased;color:var(--text);}
 #clip-root{height:100vh;}
@@ -58,11 +58,13 @@ html,body{margin:0;height:100%;background:transparent;font-family:-apple-system,
 .row{display:flex;gap:9px;align-items:flex-start;padding:8px 9px;border-radius:9px;cursor:pointer;}
 .row.sel{background:var(--sel);}
 /* 常用语的标签分组头。面板是固定浅色小窗，取值按这里的密度收了一档：
-   11px/600/.06em + --muted，计数紧挨标题（和常用语页同一套语义）。第一条不留上边距。 */
+   11px/600/.06em + --muted，计数紧挨标题（和常用语页同一套语义）。第一条不留上边距。
+   计数用 --faint 一档色，**不在 --muted 上叠 opacity**（批次 014 裁定 pastePanel.noOpacityDim）：
+   层级靠色阶，不靠两套压暗机制叠加 —— 同一处又调色又调透明，以后改色改不动。 */
 .grp{display:flex;align-items:center;gap:7px;padding:9px 9px 4px;}
 .grp:first-child{padding-top:2px;}
 .grp .gt{font-size:11px;font-weight:600;letter-spacing:.06em;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:70%;}
-.grp .gc{font-size:10.5px;color:var(--muted);opacity:.75;white-space:nowrap;font-variant-numeric:tabular-nums;}
+.grp .gc{font-size:10.5px;color:var(--faint);white-space:nowrap;font-variant-numeric:tabular-nums;}
 .row .idx{width:16px;font-size:11px;color:var(--muted);text-align:center;flex:none;padding-top:2px;}
 .row .ic{width:22px;height:22px;border-radius:6px;flex:none;object-fit:cover;background:var(--chip);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted);overflow:hidden;}
 .row .mid{flex:1;min-width:0;}
